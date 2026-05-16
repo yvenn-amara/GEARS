@@ -1,0 +1,129 @@
+# .gitlab-ci.yml — GEARS equivalent of .github/workflows/ci.yml
+#
+# Differences from GitHub Actions:
+#   • Stages replace job-level ordering; needs: mirrors GitHub's needs:
+#   • rules: replaces on:/push:/pull_request:
+#   • Cache keyed on pyproject.toml checksum via ${CI_PIPELINE_ID} fallback
+#   • Coverage HTML pushed to GitLab Pages instead of Codecov
+
+stages:
+  - test
+  - build
+  - pages
+
+# ---------------------------------------------------------------------------
+# Global defaults
+# ---------------------------------------------------------------------------
+
+default:
+  image: python:${PYTHON_VERSION}
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install -e ".[dev]"
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  # Override in GitLab CI/CD → Settings → Variables if needed:
+  #   CODECOV_TOKEN  (if you use Codecov instead of Pages)
+  #   TWINE_USERNAME / TWINE_PASSWORD  (for PyPI publish job)
+
+# ---------------------------------------------------------------------------
+# Pip cache shared across all jobs
+# ---------------------------------------------------------------------------
+
+.pip_cache: &pip_cache
+  cache:
+    key:
+      files:
+        - pyproject.toml          # invalidate when dependencies change
+      prefix: "pip-${PYTHON_VERSION}"
+    paths:
+      - .cache/pip
+    policy: pull-push
+
+# ---------------------------------------------------------------------------
+# test — matrix over Python 3.10 / 3.11 / 3.12
+# (Python 3.9 excluded: pyproject.toml requires-python = ">=3.10")
+# ---------------------------------------------------------------------------
+
+.test_template: &test_template
+  stage: test
+  <<: *pip_cache
+  script:
+    - ruff check gears/ tests/
+    - mypy gears/ --ignore-missing-imports || true
+    - pytest tests/ -v --tb=short
+        --cov=gears --cov-report=xml --cov-report=term-missing
+        --cov-report=html:coverage_html
+  artifacts:
+    when: always
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage.xml
+      - coverage_html/
+    expire_in: 1 week
+  coverage: '/TOTAL.*\s+(\d+%)$/'   # regex to parse coverage % from pytest-cov output
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+test:python3.10:
+  <<: *test_template
+  variables:
+    PYTHON_VERSION: "3.10"
+
+test:python3.11:
+  <<: *test_template
+  variables:
+    PYTHON_VERSION: "3.11"
+
+test:python3.12:
+  <<: *test_template
+  variables:
+    PYTHON_VERSION: "3.12"
+
+# ---------------------------------------------------------------------------
+# build — wheel + twine check (depends on all test variants)
+# ---------------------------------------------------------------------------
+
+build:
+  stage: build
+  image: python:3.11
+  needs:
+    - test:python3.10
+    - test:python3.11
+    - test:python3.12
+  cache: {}   # build does not need the pip cache (only build + twine)
+  script:
+    - pip install build twine
+    - python -m build
+    - twine check dist/*
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# ---------------------------------------------------------------------------
+# pages — publish coverage HTML to GitLab Pages
+# (replaces Codecov; accessible at https://<namespace>.gitlab.io/<project>/)
+# ---------------------------------------------------------------------------
+
+pages:
+  stage: pages
+  needs:
+    - test:python3.11   # only one HTML report is needed for Pages
+  script:
+    - mv coverage_html/ public/
+  artifacts:
+    paths:
+      - public/
+    expire_in: 4 weeks
+  rules:
+    # Only publish Pages from main branch
+    - if: '$CI_COMMIT_BRANCH == "main"'

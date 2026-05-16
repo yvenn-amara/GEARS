@@ -1,0 +1,101 @@
+# =============================================================================
+# gears-ev — .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Données locales
+# -----------------------------------------------------------------------------
+data/
+scripts/simu.csv
+
+# -----------------------------------------------------------------------------
+# Notebooks à usage strictement local (non destinés au repo)
+# -----------------------------------------------------------------------------
+scripts/compare.ipynb
+scripts/compare_external.ipynb
+
+# -----------------------------------------------------------------------------
+# Figures générées
+# -----------------------------------------------------------------------------
+scripts/figures/
+
+# -----------------------------------------------------------------------------
+# Outputs et logs générés par les notebooks
+# -----------------------------------------------------------------------------
+notebooks/outputs/
+notebooks/lightning_logs/
+
+# -----------------------------------------------------------------------------
+# Checkpoints Jupyter (tous dossiers)
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints/
+
+# -----------------------------------------------------------------------------
+# Environnements virtuels Python
+# -----------------------------------------------------------------------------
+.venv/
+venv/
+env/
+.uv/
+
+# -----------------------------------------------------------------------------
+# Lockfile uv
+# uv.lock n'est pas versionné ici car gears-ev est une bibliothèque (pas une
+# application déployée) : imposer des versions épinglées aux consommateurs du
+# package serait contre-productif. Les applications clientes gèrent leur propre
+# lockfile. Retirer cette ligne si le repo devient une application standalone.
+# -----------------------------------------------------------------------------
+uv.lock
+
+# -----------------------------------------------------------------------------
+# Fichiers Python compilés & artefacts de build
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+MANIFEST
+*.whl
+
+# -----------------------------------------------------------------------------
+# Outils de test & qualité de code
+# -----------------------------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# -----------------------------------------------------------------------------
+# IDE
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# -----------------------------------------------------------------------------
+# OS
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# =============================================================================
+# RÈGLE CRITIQUE — Modèles pré-entraînés du package (toujours versionner)
+# Ces fichiers .joblib sont des artefacts indispensables au fonctionnement du
+# package et doivent être inclus dans le repo quelles que soient les règles
+# ci-dessus.
+# =============================================================================
+!gears/data/
+!gears/data/gmm/
+!gears/data/gmm/*.joblib
