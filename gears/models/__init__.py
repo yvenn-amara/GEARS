@@ -8,6 +8,7 @@ from gears.models.forecaster import (
     PersistenceForecaster,
     sessions_to_daily_counts,
 )
+from gears.models.persistence_sampler import PersistenceSessionSampler
 from gears.models.registry import ModelRegistry, NativeGMMRegistry
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "NHiTSForecaster",
     "PersistenceForecaster",
     "sessions_to_daily_counts",
+    "PersistenceSessionSampler",
     "ModelRegistry",
     "NativeGMMRegistry",
 ]

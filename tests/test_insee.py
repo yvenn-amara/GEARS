@@ -3,7 +3,6 @@ import numpy as np
 import pandas as pd
 import pytest
 from gears.data.loader import make_demo_data
-from gears.data.schemas import validate_dataframe
 from gears.data.insee import (
     aggregate_by_department, build_panel, DepartmentForecaster
 )

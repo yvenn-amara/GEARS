@@ -14,9 +14,6 @@ from gears.simulation.medium_term import (
     linear_growth_profile,
     s_curve_growth_profile,
 )
-from gears.models.gmm import EVSessionGMM
-from gears.models.forecaster import SessionForecaster
-from gears.data.loader import make_demo_data
 
 
 # ---------------------------------------------------------------------------

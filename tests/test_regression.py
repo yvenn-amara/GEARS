@@ -51,7 +51,6 @@ from gears.data.schemas import validate_dataframe
 from gears.models.forecaster import (
     NHiTSForecaster,
     PersistenceForecaster,
-    SessionForecaster,
     sessions_to_daily_counts,
 )
 from gears.smart_charging.optimizer import SmartChargingOptimizer

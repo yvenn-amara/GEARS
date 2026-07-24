@@ -1,8 +1,18 @@
 """Tests for gears.data.schemas."""
-import pytest
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from gears.data.schemas import validate_dataframe, _season, summary_stats
+import pytest
+
+from gears.data.loader import load_sessions, make_demo_data
+from gears.data.schemas import (
+    _find_column,
+    _normalize_key,
+    _season,
+    summary_stats,
+    validate_dataframe,
+)
 
 
 def make_generic(n=100):
@@ -108,3 +118,137 @@ def test_summary_stats():
     stats = summary_stats(out)
     assert "mean" in stats.columns
     assert "missing_%" in stats.columns
+
+
+# --------------------------------------------------------------------------
+# Session 1 — EVSE-style raw schema (Start/End/Arrival/Park.Duration/Energy),
+# the case/punctuation-insensitive alias matching that supports it, and the
+# guards it depends on (Arrival never -> arrival_time, noise columns dropped,
+# combined-site acn.csv warning). See gears_persistence_vs_gmm_benchmark_prompt.md §1.7/§2.
+# --------------------------------------------------------------------------
+
+def make_evse(n=20, seed=0):
+    """Mirrors the 11 preprocessed_data/*.csv datasets' raw schema."""
+    rng = np.random.default_rng(seed)
+    starts = pd.Timestamp("2023-01-02") + pd.to_timedelta(rng.uniform(0, 200, n), unit="D")
+    park_duration_min = rng.uniform(10, 600, n)
+    ends = starts + pd.to_timedelta(park_duration_min, unit="m")
+    return pd.DataFrame({
+        "Start": starts,
+        "End": ends,
+        "Day": starts.day_name(),
+        "Weekend": (starts.dayofweek >= 5).astype(int),
+        "Arrival": starts.hour + starts.minute / 60.0,
+        "Charge.Duration": park_duration_min * 0.9,
+        "Idle.Duration": park_duration_min * 0.1,
+        "Park.Duration": park_duration_min,
+        "Energy": rng.uniform(1, 50, n),
+    })
+
+
+def test_evse_style_schema_end_to_end():
+    raw = make_evse()
+    out = validate_dataframe(raw)
+    assert {"arrival_time", "duration", "energy"}.issubset(out.columns)
+    assert len(out) == len(raw)
+    assert out["duration"].max() < 24  # hours, not raw minutes
+
+
+def test_evse_style_via_load_sessions():
+    raw = make_evse()
+    out = load_sessions(raw, verbose=False)
+    assert {"arrival_time", "duration", "energy"}.issubset(out.columns)
+
+
+def test_park_duration_minutes_converted_to_hours():
+    raw = make_evse()
+    out = validate_dataframe(raw)
+    assert np.allclose(out["duration"].to_numpy(), (raw["Park.Duration"] / 60.0).to_numpy())
+
+
+def test_arrival_column_never_resolved_as_arrival_time():
+    """`Arrival` is a float hour-of-day (e.g. 4.13), not a timestamp — must
+    never be aliased to arrival_time, which must come from `Start` instead."""
+    raw = make_evse()
+    out = validate_dataframe(raw)
+    assert (out["arrival_time"].dt.date == raw["Start"].dt.date).all()
+    assert "Arrival" in out.columns
+    assert np.allclose(out["Arrival"], raw["Arrival"])
+
+
+def test_find_column_excludes_arrival_alias_explicitly():
+    df = pd.DataFrame({"Arrival": [4.13, 6.75], "duration": [1.0, 2.0], "energy": [1.0, 2.0]})
+    assert _find_column(df, "arrival_time") is None
+
+
+def test_noise_columns_dropped():
+    raw = make_evse()
+    raw["Unnamed: 0"] = range(len(raw))
+    raw["Start_Date"] = raw["Start"].dt.date.astype(str)
+    out = validate_dataframe(raw)
+    for noisy in ("Day", "Weekend", "Unnamed: 0", "Start_Date"):
+        assert noisy not in out.columns
+
+
+def test_normalize_key():
+    assert _normalize_key("Park.Duration") == "park_duration"
+    assert _normalize_key("Start Time") == "start_time"
+    assert _normalize_key("Unnamed: 0") == "unnamed_0"
+
+
+@pytest.mark.parametrize("cols", [
+    {"START": "arrival_time", "Duration_H": "duration", "ENERGY_KWH": "energy"},
+    {"Start": "arrival_time", "duration": "duration", "Energy": "energy"},
+])
+def test_case_insensitive_generic_aliasing(cols):
+    keys = list(cols)
+    raw = pd.DataFrame({
+        keys[0]: ["2023-01-01 08:00:00", "2023-01-02 09:00:00"],
+        keys[1]: [2.0, 3.0],
+        keys[2]: [10.0, 12.0],
+    })
+    out = validate_dataframe(raw)
+    assert {"arrival_time", "duration", "energy"}.issubset(out.columns)
+
+
+def test_combined_site_dataset_warns():
+    """acn.csv-style data (union of caltech+jpl+office, flagged by a `data`
+    site column) must warn so it isn't silently double/triple-counted
+    alongside the individual site files."""
+    raw = make_evse(n=6)
+    raw["data"] = ["caltech", "caltech", "jpl", "jpl", "office", "office"]
+    with pytest.warns(UserWarning, match="combined multi-site"):
+        validate_dataframe(raw)
+
+
+def test_single_site_dataset_does_not_warn():
+    raw = make_evse(n=6)
+    raw["data"] = "caltech"
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        validate_dataframe(raw)  # must not raise
+
+
+def test_make_demo_data_unaffected():
+    df = make_demo_data(n=50, location_type="work", seed=0)
+    assert len(df) == 50
+    assert {"arrival_time", "duration", "energy", "location_type"}.issubset(df.columns)
+
+
+ALL_11_DATASETS = [
+    "acn", "boulder", "caltech", "domestics", "dundee", "jpl",
+    "office", "palo_alto", "paris", "perth", "sap",
+]
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "preprocessed_data"
+
+
+@pytest.mark.skipif(not _DATA_DIR.exists(), reason="data/preprocessed_data/ not present in this checkout")
+@pytest.mark.parametrize("name", ALL_11_DATASETS)
+def test_all_11_real_csvs_load_without_error(name):
+    path = _DATA_DIR / f"{name}.csv"
+    if not path.exists():
+        pytest.skip(f"{path} not present in this checkout")
+    out = load_sessions(str(path), verbose=False)
+    assert {"arrival_time", "duration", "energy"}.issubset(out.columns)
+    assert len(out) > 0

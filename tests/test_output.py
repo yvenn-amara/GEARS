@@ -9,7 +9,6 @@ import pandas as pd
 import pytest
 
 from gears.output.aggregator import OutputAggregator
-from gears.data.loader import make_demo_data
 
 
 @pytest.fixture
@@ -133,6 +132,5 @@ class TestExport:
         assert path.exists()
 
     def test_export_invalid_format_raises(self, agg, sessions_with_scenario, tmp_path):
-        path = tmp_path / "out.csv"
         with pytest.raises(ValueError, match="Unsupported export format"):
             agg.export(sessions_with_scenario, tmp_path / "out.xyz")

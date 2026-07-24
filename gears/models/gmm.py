@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 import warnings
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 import joblib
 import numpy as np
@@ -51,7 +51,19 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _add_context(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure context columns (day_of_week, season, is_weekend) are present."""
+    """Ensure context columns (day_of_week, season, is_weekend) are present.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Sessions DataFrame; must contain an ``arrival_time`` column.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of *df* with ``day_of_week``, ``season``, and ``is_weekend``
+        columns added when absent.
+    """
     df = df.copy()
     if "day_of_week" not in df.columns:
         df["day_of_week"] = df["arrival_time"].dt.dayofweek
@@ -86,6 +98,17 @@ def _features(df: pd.DataFrame) -> np.ndarray:
 
     Back-transformation at sampling time: duration = expm1(raw[:, 1]),
     energy = expm1(raw[:, 2]).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Sessions DataFrame with ``hour``, ``duration``, and ``energy`` columns.
+
+    Returns
+    -------
+    np.ndarray
+        Array of shape ``(n_samples, 3)`` containing
+        ``[hour, log1p(duration), log1p(energy)]``.
     """
     hour = df["hour"].values
     log_dur = np.log1p(df["duration"].values)
@@ -149,6 +172,16 @@ class EVSessionGMM:
         max_samples_per_context: Optional[int] = None,
         recent_months: Optional[int] = None,
         random_state: int = 42,
+        # VAE-specific parameters (used when model_type="vae")
+        model_type: Literal["gmm", "vae"] = "gmm",
+        vae_latent_dim: int = 16,
+        vae_hidden_dim: int = 256,
+        vae_n_layers: int = 2,
+        vae_epochs: int = 50,
+        vae_batch_size: int = 512,
+        vae_lr: float = 3e-3,
+        vae_beta: float = 1.0,
+        vae_score_n_samples: int = 20,
     ):
         self.n_components = n_components
         self.min_components = min_components
@@ -158,6 +191,15 @@ class EVSessionGMM:
         self.max_samples_per_context = max_samples_per_context
         self.recent_months = recent_months
         self.random_state = random_state
+        self.model_type = model_type
+        self.vae_latent_dim = vae_latent_dim
+        self.vae_hidden_dim = vae_hidden_dim
+        self.vae_n_layers = vae_n_layers
+        self.vae_epochs = vae_epochs
+        self.vae_batch_size = vae_batch_size
+        self.vae_lr = vae_lr
+        self.vae_beta = vae_beta
+        self.vae_score_n_samples = vae_score_n_samples
 
         self.models_: dict[tuple, GaussianMixture] = {}
         self.n_sessions_per_day_: dict[tuple, float] = {}
@@ -190,7 +232,8 @@ class EVSessionGMM:
 
         Returns
         -------
-        self
+        EVSessionGMM
+            The fitted model (``self``), allowing method chaining.
         """
         df = _add_context(df)
         self.is_sample_ = is_sample
@@ -220,6 +263,8 @@ class EVSessionGMM:
 
         groups = df.groupby(self.stratify_by, observed=True)
 
+        retained_groups: list[tuple[tuple, pd.DataFrame]] = []
+
         for ctx_key, group_df in groups:
             ctx_tuple = ctx_key if isinstance(ctx_key, tuple) else (ctx_key,)
             n = len(group_df)
@@ -238,6 +283,15 @@ class EVSessionGMM:
                 group_df = group_df.iloc[idx].reset_index(drop=True)
                 n = self.max_samples_per_context
 
+            if self.model_type == "vae":
+                # Defer fitting; just collect groups
+                retained_groups.append((ctx_tuple, group_df))
+                # Still track counts (needed by aggregator / medium_term)
+                n_days = group_df["date"].nunique() if "date" in group_df.columns else 1
+                self.n_sessions_per_day_[ctx_tuple] = n / max(n_days, 1)
+                self.context_counts_[ctx_tuple] = n
+                continue
+
             X = _features(group_df)
             gmm = self._fit_single(X)
             if gmm is None:
@@ -254,14 +308,128 @@ class EVSessionGMM:
                 gmm.n_components, ctx_tuple, n,
             )
 
+        # VAE path: train a single shared model across all collected groups
+        if self.model_type == "vae":
+            if not retained_groups:
+                raise RuntimeError("No contexts with enough samples for VAE. Check data quality.")
+            self._fit_vae(df, retained_groups)
+
         if not self.models_:
             raise RuntimeError("No GMM was fitted. Check data quality.")
 
         self.is_fitted_ = True
         return self
 
+    # ------------------------------------------------------------------
+    # VAE fitting helpers
+    # ------------------------------------------------------------------
+
+    def _fit_vae(
+        self,
+        df: pd.DataFrame,
+        retained_groups: list[tuple[tuple, pd.DataFrame]],
+    ) -> None:
+        """
+        Train a single shared ConditionalVAE across all retained context groups,
+        then populate self.models_ with one VAEContextSlice per context.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Full (possibly subsampled) sessions data – not used directly here;
+            retained_groups already contains the per-context slices.
+        retained_groups : list of (ctx_tuple, group_df)
+            Pre-filtered groups (n >= 10, subsampled if needed).
+        """
+        from gears.models.vae import (
+            ConditionalVAE, ContextEncoder, VAEContextSlice, train_cvae,
+        )
+        from sklearn.preprocessing import StandardScaler
+
+        logger.info(
+            "Fitting shared CVAE across %d contexts (latent_dim=%d, hidden=%d, epochs=%d).",
+            len(retained_groups), self.vae_latent_dim, self.vae_hidden_dim, self.vae_epochs,
+        )
+
+        # ── Build vocabulary for context dimensions ───────────────────
+        all_ctx_keys = [ctx for ctx, _ in retained_groups]
+        ctx_enc = ContextEncoder(self.stratify_by)
+        ctx_enc.fit(all_ctx_keys)
+        n_ctx_dims = len(self.stratify_by)
+
+        # Embedding dims: sqrt rule, minimum 4
+        emb_dims = [max(4, int(np.ceil(np.sqrt(d)))) for d in ctx_enc.context_dims]
+
+        # ── Assemble combined training dataset ────────────────────────
+        X_parts: list[np.ndarray] = []
+        ctx_parts: list[np.ndarray] = []
+        for ctx_tuple, group_df in retained_groups:
+            X_g = _features(group_df)
+            ctx_idx = ctx_enc.encode_batch([ctx_tuple] * len(group_df))
+            X_parts.append(X_g)
+            ctx_parts.append(ctx_idx)
+
+        X_all = np.vstack(X_parts)
+        ctx_all = np.vstack(ctx_parts)
+
+        # ── Standardise features ──────────────────────────────────────
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_all)
+
+        # ── Build and train CVAE ──────────────────────────────────────
+        cvae = ConditionalVAE(
+            context_dims=ctx_enc.context_dims,
+            emb_dims=emb_dims,
+            feature_dim=3,
+            latent_dim=self.vae_latent_dim,
+            hidden_dim=self.vae_hidden_dim,
+            n_layers=self.vae_n_layers,
+        )
+        train_cvae(
+            cvae,
+            X=X_scaled,
+            ctx_indices=ctx_all,
+            epochs=self.vae_epochs,
+            batch_size=self.vae_batch_size,
+            lr=self.vae_lr,
+            beta=self.vae_beta,
+            seed=self.random_state,
+            verbose=True,
+        )
+
+        # ── Create one VAEContextSlice per context ────────────────────
+        for ctx_tuple, group_df in retained_groups:
+            ctx_index = ctx_enc.encode(ctx_tuple)  # (1, n_dims)
+            slice_ = VAEContextSlice(
+                cvae=cvae,
+                ctx_index=ctx_index,
+                scaler_mean=scaler.mean_,
+                scaler_std=scaler.scale_,
+                score_n_samples=self.vae_score_n_samples,
+            )
+            self.models_[ctx_tuple] = slice_
+
+            n_days = group_df["date"].nunique() if "date" in group_df.columns else 1
+            n = len(group_df)
+            self.n_sessions_per_day_[ctx_tuple] = n / max(n_days, 1)
+            self.context_counts_[ctx_tuple] = n
+
+        logger.info("CVAE fitted; %d context slices created.", len(self.models_))
+
     def _fit_single(self, X: np.ndarray) -> Optional[GaussianMixture]:
-        """Fit one GMM, optionally selecting n_components via BIC."""
+        """Fit one GMM, optionally selecting n_components via BIC.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Feature matrix of shape ``(n_samples, 3)``.
+
+        Returns
+        -------
+        GaussianMixture or None
+            Fitted sklearn GMM, or ``None`` if fitting failed for all
+            candidate component counts.
+        """
         if self.n_components == "auto":
             best_gmm, best_bic = None, np.inf
             k_max = min(self.max_components, len(X) // 5)
@@ -343,7 +511,26 @@ class EVSessionGMM:
         date: Optional[Union[str, pd.Timestamp]] = None,
         seed: Optional[int] = None,
     ) -> pd.DataFrame:
-        """Convert raw GMM samples [hour, log_dur, log_ene] to sessions DataFrame."""
+        """Convert raw GMM samples [hour, log_dur, log_ene] to a sessions DataFrame.
+
+        Applies ``expm1`` back-transformation and clips values to physically
+        plausible bounds (arrival hour in [0, 24), duration in [0.08, 48] h,
+        energy in [0.01, 350] kWh).
+
+        Parameters
+        ----------
+        raw : np.ndarray
+            Array of shape ``(n_samples, 3)`` in GMM feature space.
+        date : str or Timestamp, optional
+            If given, an ``arrival_time`` column is added anchored to this date.
+        seed : int, optional
+            Unused; kept for API symmetry with :meth:`sample`.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: arrival_hour, duration, energy, [arrival_time].
+        """
         hour = np.clip(raw[:, 0], 0, 23.99)
         duration = np.clip(np.expm1(raw[:, 1]), 0.08, 48.0)
         energy = np.clip(np.expm1(raw[:, 2]), 0.01, 350.0)
@@ -364,7 +551,20 @@ class EVSessionGMM:
     # ------------------------------------------------------------------
 
     def score(self, df: pd.DataFrame) -> float:
-        """Return mean log-likelihood per sample on a validated DataFrame."""
+        """Return mean log-likelihood per sample on a validated DataFrame.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Validated sessions DataFrame with the same columns used during
+            ``fit()``.
+
+        Returns
+        -------
+        float
+            Mean per-sample log-likelihood across all contexts present in
+            *df*.  Returns ``-inf`` when no fitted context matches.
+        """
         self._check_fitted()
         df = _add_context(df)
         scores = []
@@ -377,7 +577,14 @@ class EVSessionGMM:
         return float(np.mean(scores)) if scores else float("-inf")
 
     def bic_summary(self) -> pd.DataFrame:
-        """Return BIC and n_components per context group."""
+        """Return BIC and n_components per context group.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per fitted context with columns:
+            ``context``, ``n_components``, ``n_samples``.
+        """
         rows = []
         for ctx, gmm in self.models_.items():
             rows.append({
@@ -411,14 +618,22 @@ class EVSessionGMM:
 
         Returns
         -------
-        sklearn.mixture.GaussianMixture (fitted)
+        sklearn.mixture.GaussianMixture
+            The fitted GaussianMixture for the resolved context.
         """
         self._check_fitted()
         ctx_tuple = self._resolve_context(context, date)
         return self._get_model(ctx_tuple)
 
     def list_contexts(self) -> list[tuple]:
-        """Return all fitted context tuples."""
+        """Return all fitted context tuples.
+
+        Returns
+        -------
+        list[tuple]
+            Each tuple corresponds to one fitted stratum, with values ordered
+            according to ``stratify_by``.
+        """
         return list(self.models_.keys())
 
     # ------------------------------------------------------------------
@@ -426,7 +641,13 @@ class EVSessionGMM:
     # ------------------------------------------------------------------
 
     def save(self, path: Union[str, Path]) -> None:
-        """Serialize model to a joblib file."""
+        """Serialize model to a joblib file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Destination file path. Parent directories are created if missing.
+        """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(self, path)
@@ -434,7 +655,23 @@ class EVSessionGMM:
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "EVSessionGMM":
-        """Load a serialised GMM from disk."""
+        """Load a serialised GMM from disk.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to a ``.joblib`` file previously saved with :meth:`save`.
+
+        Returns
+        -------
+        EVSessionGMM
+            The loaded and fitted model.
+
+        Raises
+        ------
+        TypeError
+            If the file contains an object that is not an ``EVSessionGMM``.
+        """
         obj = joblib.load(path)
         if not isinstance(obj, cls):
             raise TypeError(f"Expected {cls.__name__}, got {type(obj)}")
@@ -457,13 +694,18 @@ class EVSessionGMM:
         Parameters
         ----------
         context : dict, optional
+            Context dict passed to :meth:`_resolve_context`.
         date : str, optional
-        ax : matplotlib Axes, optional
+            Reference date used to infer context when *context* is None.
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on. Created if None.
         figsize : tuple
+            Figure size in inches, used only when creating a new figure.
 
         Returns
         -------
-        matplotlib Axes
+        matplotlib.axes.Axes
+            The axes containing the bar chart.
         """
         import matplotlib.pyplot as plt
 
@@ -511,14 +753,20 @@ class EVSessionGMM:
         df : pd.DataFrame, optional
             Real data to compare against.
         context : dict, optional
+            Context dict for sampling.
         date : str, optional
+            Reference date used to infer context.
         n_samples : int
+            Number of synthetic sessions to generate for comparison.
         bins : int
+            Number of histogram bins.
         figsize : tuple
+            Figure size in inches.
 
         Returns
         -------
-        matplotlib Figure
+        matplotlib.figure.Figure
+            The figure containing the three marginal histograms.
         """
         import matplotlib.pyplot as plt
 
@@ -555,6 +803,7 @@ class EVSessionGMM:
     # ------------------------------------------------------------------
 
     def _check_fitted(self) -> None:
+        """Raise RuntimeError if the model has not been fitted yet."""
         if not self.is_fitted_:
             raise RuntimeError("Call .fit() before using this method.")
 
@@ -563,7 +812,23 @@ class EVSessionGMM:
         context: Optional[dict],
         date: Optional[Union[str, pd.Timestamp]],
     ) -> tuple:
-        """Return a context tuple matching the stratify_by keys."""
+        """Return a context tuple matching the stratify_by keys.
+
+        Resolution order:
+        1. Explicit *context* dict.
+        2. Date-derived context (day_of_week, season, is_weekend).
+        3. Most populous context as fallback.
+
+        Parameters
+        ----------
+        context : dict or None
+        date : str, Timestamp, or None
+
+        Returns
+        -------
+        tuple
+            Values ordered according to ``stratify_by``.
+        """
         if context is not None:
             return tuple(context.get(k) for k in self.stratify_by)
 
@@ -576,8 +841,8 @@ class EVSessionGMM:
                 ctx["is_weekend"] = int(ts.dayofweek >= 5)
             if "season" in self.stratify_by:
                 ctx["season"] = _season(ts.month)
-            # location_type cannot be inferred from a date — leave as None
-            # (the fallback chain in _get_model will handle it)
+            # location_type cannot be inferred from a date alone; it is left
+            # as None so the fallback chain in _get_model can handle it.
             return tuple(ctx.get(k) for k in self.stratify_by)
 
         # Fallback: most populous context
@@ -586,7 +851,22 @@ class EVSessionGMM:
         return next(iter(self.models_))
 
     def _get_model(self, ctx_tuple: tuple) -> GaussianMixture:
-        """Return GMM for context, with smart fallback chain."""
+        """Return GMM for context, with smart fallback chain.
+
+        The fallback tries progressively shorter prefix matches before
+        settling on the globally most-populous model.  This handles rare
+        contexts (e.g. uncommon departments) gracefully without raising.
+
+        Parameters
+        ----------
+        ctx_tuple : tuple
+            Context tuple produced by :meth:`_resolve_context`.
+
+        Returns
+        -------
+        GaussianMixture
+            The best available fitted model for the requested context.
+        """
         if ctx_tuple in self.models_:
             return self.models_[ctx_tuple]
 

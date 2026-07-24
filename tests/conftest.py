@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gears.data.loader import make_demo_data, load_sessions
+from gears.data.loader import make_demo_data
 from gears.models.gmm import EVSessionGMM
 from gears.models.forecaster import SessionForecaster
 from gears.pipeline import GEARSModel

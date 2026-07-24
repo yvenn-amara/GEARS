@@ -27,18 +27,18 @@ Three forecasters with a unified interface:
 
        uv pip install "gears-ev[dl]"
 
-   FIX HISTORY
-   -----------
-   - input_size default changed from ``4 * horizon`` to ``2 * horizon``
-     and hard-capped at ``n_train // 2``.  The old default of 360 days for
-     horizon=90 consumed ≥80 % of a typical training set as context window,
-     causing gradient instability and severe overfitting on small datasets.
-   - scaler_type="standard" added so NeuralForecast normalises y internally
-     regardless of installed version.  Without this, training on raw session
-     counts (range 0–200) produced erratic gradients when batch_size was
-     large relative to the dataset.
-   - The public ``fit()`` method now exposes ``input_size`` as a positional
-     kwarg so callers can override without subclassing.
+   Implementation notes
+   --------------------
+   - input_size default: ``2 * horizon`` (reduced from ``4 * horizon``),
+     additionally hard-capped at ``n_train // 2`` inside ``fit()``.  The
+     old default of 360 days for horizon=90 consumed ≥ 80 % of a typical
+     training set as context window, leaving too few gradient windows and
+     causing instability or memorisation of recent values.
+   - scaler_type="standard": NeuralForecast normalises y internally when
+     this is set.  Without it, raw session counts (0–200) produce erratic
+     gradients whose scale is ~100× larger than normalised targets.
+   - The public ``fit()`` method exposes ``input_size`` as a keyword
+     argument so callers can override without subclassing.
 
 All forecasters share the same ``fit(df)`` / ``predict(horizon, ...)`` interface
 so they can be swapped transparently in notebooks and pipeline code.
@@ -53,7 +53,6 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 
-from gears.data.schemas import _season
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +63,20 @@ logger = logging.getLogger(__name__)
 
 def sessions_to_daily_counts(df: pd.DataFrame) -> pd.Series:
     """
-    Aggregate a sessions DataFrame to a daily count Series (indexed by date).
-    Missing dates between the first and last observation are filled with 0.
+    Aggregate a sessions DataFrame to a daily count Series indexed by date.
+
+    Missing dates between the first and last observation are filled with 0
+    so that the returned Series covers a contiguous date range.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Validated sessions DataFrame containing a ``date`` column.
+
+    Returns
+    -------
+    pd.Series
+        Daily session counts with a ``DatetimeIndex``; name is ``'count'``.
     """
     daily = df.groupby("date").size().rename("count")
     daily.index = pd.to_datetime(daily.index)
@@ -74,7 +85,21 @@ def sessions_to_daily_counts(df: pd.DataFrame) -> pd.Series:
 
 
 def _make_forecast_df(dates: pd.DatetimeIndex, counts_matrix: np.ndarray) -> pd.DataFrame:
-    """Build the standard forecast DataFrame from a (n_scenarios, horizon) matrix."""
+    """Build the standard forecast DataFrame from a (n_scenarios, horizon) matrix.
+
+    Parameters
+    ----------
+    dates : pd.DatetimeIndex
+        Forecast dates, one per column of *counts_matrix*.
+    counts_matrix : np.ndarray
+        Shape ``(n_scenarios, horizon)``; raw (possibly fractional) counts.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-format DataFrame with columns: date, scenario, n_sessions.
+        Each count is clipped to 0 and rounded to the nearest integer.
+    """
     rows = []
     for s, counts in enumerate(counts_matrix):
         for d, c in zip(dates, counts):
@@ -156,7 +181,8 @@ class SessionForecaster:
 
         Returns
         -------
-        self
+        SessionForecaster
+            The fitted model (``self``), allowing method chaining.
         """
         self._daily_counts = sessions_to_daily_counts(df)
         self.mean_daily_ = float(self._daily_counts.mean())
@@ -208,6 +234,16 @@ class SessionForecaster:
 
         Returns None when use_holidays=False or when the holidays package
         is unavailable (falls back gracefully without raising).
+
+        Parameters
+        ----------
+        date_index : pd.DatetimeIndex
+            Dates for which the dummy should be constructed.
+
+        Returns
+        -------
+        np.ndarray of shape (n, 1) or None
+            1.0 on public holidays, 0.0 otherwise.
         """
         if not self.use_holidays:
             return None
@@ -229,6 +265,17 @@ class SessionForecaster:
             return None
 
     def _fit_statsmodels_fallback(self, exog=None) -> None:
+        """Fit a fixed SARIMAX(1,1,1)x(1,1,0,7) when pmdarima is unavailable.
+
+        Used as a fallback so the forecaster remains functional without the
+        pmdarima dependency.  The fixed order is a sensible default for
+        weekly-seasonal daily count data.
+
+        Parameters
+        ----------
+        exog : np.ndarray or None
+            Holiday dummy array of shape ``(n_train, 1)``, or None.
+        """
         from statsmodels.tsa.statespace.sarimax import SARIMAX
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -284,7 +331,18 @@ class SessionForecaster:
         )
         return _make_forecast_df(dates, matrix)
 
-    def _resolve_start(self, start_date):
+    def _resolve_start(self, start_date) -> pd.Timestamp:
+        """Resolve the forecast start date.
+
+        Parameters
+        ----------
+        start_date : str, Timestamp, or None
+
+        Returns
+        -------
+        pd.Timestamp
+            The first date of the forecast window.
+        """
         if start_date is not None:
             return pd.Timestamp(start_date)
         if self._daily_counts is not None:
@@ -295,6 +353,27 @@ class SessionForecaster:
         self, horizon: int, rng: np.random.Generator,
         future_exog: Optional[np.ndarray] = None,
     ) -> np.ndarray:
+        """Generate one stochastic forecast trajectory.
+
+        Draws the deterministic SARIMA point forecast and adds Gaussian noise
+        scaled to the full training standard deviation.  Using the full std
+        (rather than a fractional one) is necessary to achieve empirically
+        realistic 80–90 % confidence interval coverage.
+
+        Parameters
+        ----------
+        horizon : int
+            Number of forecast days.
+        rng : np.random.Generator
+            Seeded random generator for noise draws.
+        future_exog : np.ndarray or None
+            Holiday dummy for the forecast window, shape ``(horizon, 1)``.
+
+        Returns
+        -------
+        np.ndarray
+            Non-negative forecast counts of shape ``(horizon,)``.
+        """
         if self.method == "probabilistic":
             return np.maximum(0, rng.normal(self.mean_daily_, self.std_daily_, horizon))
 
@@ -309,9 +388,10 @@ class SessionForecaster:
         except Exception:
             return np.full(horizon, self.mean_daily_)
 
-        # Scenario noise: use the full training std so the 90% CI achieves ~87%
-        # empirical coverage.  A factor of 0.1 was used historically but produced
-        # only ~33% coverage — a serious underestimate of forecast uncertainty.
+        # Use the full training std as noise scale so that the 90 % CI achieves
+        # ~87 % empirical coverage.  A small fraction (e.g. 0.1 × std) was used
+        # historically and produced only ~33 % coverage — a serious underestimate
+        # of real forecast uncertainty.
         noise_scale = max(self.std_daily_, 1.0)
         fc = fc + rng.normal(0, noise_scale, horizon)
         return np.maximum(0, fc)
@@ -324,7 +404,26 @@ class SessionForecaster:
         ax=None,
         figsize: tuple = (12, 4),
     ):
-        """Plot historical counts + fan-chart forecast."""
+        """Plot historical counts and a fan-chart forecast.
+
+        Parameters
+        ----------
+        horizon : int
+            Number of forecast days to display.
+        n_scenarios : int
+            Number of stochastic scenarios used for the fan chart.
+        seed : int
+            Random seed for scenario generation.
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on. Created if None.
+        figsize : tuple
+            Figure size in inches, used only when creating a new figure.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+            The axes containing the plot.
+        """
         import matplotlib.pyplot as plt
 
         forecast = self.predict(horizon=horizon, n_scenarios=n_scenarios, seed=seed)
@@ -428,7 +527,12 @@ class TransformerForecaster:
 
     @staticmethod
     def is_available() -> bool:
-        """Return True if neuralforecast and torch are installed."""
+        """Return True if neuralforecast and torch are installed.
+
+        Returns
+        -------
+        bool
+        """
         try:
             import neuralforecast  # noqa: F401
             import torch           # noqa: F401
@@ -447,7 +551,8 @@ class TransformerForecaster:
 
         Returns
         -------
-        self
+        TransformerForecaster
+            The fitted model (``self``), allowing method chaining.
 
         Raises
         ------
@@ -529,7 +634,7 @@ class TransformerForecaster:
             )
             self.horizon = horizon
             self._fitted_horizon = horizon
-            # refit with new horizon
+            # Refit with the new horizon so the model head matches the output length
             from neuralforecast import NeuralForecast
             from neuralforecast.models import PatchTST
             n = len(self._daily_counts)
@@ -559,11 +664,11 @@ class TransformerForecaster:
         fc_values = raw_pred["PatchTST"].values
         fc_dates = pd.to_datetime(raw_pred["ds"].values)
 
-        # Align to requested start_date if provided
+        # Align to requested start_date if provided; keep the forecast pattern,
+        # just re-anchor the date axis.
         if start_date is not None:
             req_start = pd.Timestamp(start_date)
             if req_start != fc_dates[0]:
-                # Shift dates — keep the pattern, just re-anchor
                 fc_dates = pd.date_range(req_start, periods=len(fc_dates), freq="D")
 
         fc_dates = fc_dates[:horizon]
@@ -580,7 +685,22 @@ class TransformerForecaster:
 
     def plot_forecast(self, horizon: int = 14, n_scenarios: int = 50,
                       seed: int = 0, ax=None, figsize: tuple = (12, 4)):
-        """Plot historical + fan-chart forecast."""
+        """Plot historical counts and a fan-chart forecast.
+
+        Parameters
+        ----------
+        horizon : int
+            Number of forecast days to display.
+        n_scenarios : int
+            Number of stochastic scenarios used for the fan chart.
+        seed : int
+        ax : matplotlib.axes.Axes, optional
+        figsize : tuple
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+        """
         import matplotlib.pyplot as plt
         forecast = self.predict(horizon=horizon, n_scenarios=n_scenarios, seed=seed)
         pivot = forecast.pivot(index="date", columns="scenario", values="n_sessions")
@@ -641,6 +761,19 @@ class PersistenceForecaster:
         self.is_fitted_: bool = False
 
     def fit(self, df: pd.DataFrame) -> "PersistenceForecaster":
+        """
+        Fit by storing historical daily session counts.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Validated sessions DataFrame (output of load_sessions).
+
+        Returns
+        -------
+        PersistenceForecaster
+            The fitted model (``self``), allowing method chaining.
+        """
         self._daily_counts = sessions_to_daily_counts(df)
         self.mean_daily_ = float(self._daily_counts.mean())
         self.std_daily_ = float(self._daily_counts.std())
@@ -659,11 +792,21 @@ class PersistenceForecaster:
 
         Parameters
         ----------
-        horizon, n_scenarios, start_date, seed : same as SessionForecaster.
+        horizon : int
+            Number of days to forecast.
+        n_scenarios : int
+            Number of scenarios. For n_scenarios > 1, a small jitter is added
+            for multi-scenario compatibility; the forecaster is otherwise
+            deterministic.
+        start_date : str or Timestamp, optional
+            First forecasted date.
+        seed : int, optional
+            Random seed for jitter noise.
 
         Returns
         -------
-        pd.DataFrame — Columns: date, scenario, n_sessions.
+        pd.DataFrame
+            Columns: date, scenario, n_sessions.
         """
         if not self.is_fitted_:
             raise RuntimeError("Call .fit() before predict().")
@@ -700,9 +843,9 @@ class PersistenceForecaster:
                 fc_values.append(self.mean_daily_)
 
         rng = np.random.default_rng(seed)
-        # No scenario noise for persistence (it's a deterministic baseline)
+        # Persistence is deterministic; tile the single trajectory across scenarios
         matrix = np.tile(np.array(fc_values), (n_scenarios, 1))
-        # Add tiny noise for multi-scenario compatibility
+        # Add tiny noise so multi-scenario consumers have distinct columns
         if n_scenarios > 1:
             noise = rng.normal(0, max(self.std_daily_ * 0.03, 0.1), matrix.shape)
             matrix = np.maximum(0, matrix + noise)
@@ -753,7 +896,7 @@ class NHiTSForecaster:
     input_size : int, optional
         Number of past days used as input context.
 
-        **Default: ``2 * horizon``** (changed from ``4 * horizon``).
+        **Default: ``2 * horizon``** (reduced from ``4 * horizon``).
         The old default of ``4 * horizon`` caused ``input_size=360`` for
         horizon=90.  On a 450-day training set this meant 80 % of the data
         was used as a single context window, leaving only 90 points to
@@ -791,14 +934,17 @@ class NHiTSForecaster:
         self,
         horizon: int = 14,
         input_size: Optional[int] = None,
-        max_steps: int = 200,                    # FIX: was 300 — too many for small datasets
+        max_steps: int = 200,           # Reduced from 300: fewer steps prevent overfitting on small datasets
         n_stacks: int = 3,
-        scaler_type: str = "standard",           # FIX: was absent — critical for raw count data
+        scaler_type: str = "standard",  # Explicitly set: normalisation is critical for raw count data (range 0–200)
         random_state: int = 42,
     ):
         self.horizon = horizon
-        # FIX: default is now 2 * horizon (was 4 * horizon).
-        # The additional hard cap at n_train // 2 is applied inside fit().
+        # Default context window is 2 × horizon (down from 4 ×): the larger
+        # value caused input_size=360 for horizon=90, consuming 80 % of a
+        # typical training set as context and leaving too few windows for
+        # gradient descent.  An additional hard cap at n_train // 2 is
+        # applied inside fit().
         self._input_size_arg = input_size         # None means "auto"
         self.input_size = input_size or max(2 * horizon, 14)
         self.max_steps = max_steps
@@ -814,7 +960,12 @@ class NHiTSForecaster:
 
     @staticmethod
     def is_available() -> bool:
-        """Return True if neuralforecast and torch are installed."""
+        """Return True if neuralforecast and torch are installed.
+
+        Returns
+        -------
+        bool
+        """
         try:
             import neuralforecast  # noqa: F401
             import torch           # noqa: F401
@@ -841,7 +992,8 @@ class NHiTSForecaster:
 
         Returns
         -------
-        self
+        NHiTSForecaster
+            The fitted model (``self``), allowing method chaining.
 
         Raises
         ------
@@ -859,12 +1011,11 @@ class NHiTSForecaster:
 
         n = len(self._daily_counts)
 
-        # FIX: hard-cap input_size at n // 2.
-        # This ensures the model has at least n // 2 usable training windows
-        # of width input_size.  Without this cap, a 450-day dataset with
-        # input_size=360 yields only ~90 non-overlapping windows — less than
-        # one full pass of gradient signal, resulting in memorisation of the
-        # last few values (random-walk collapse).
+        # Hard-cap input_size at n // 2: ensures the model has at least n // 2
+        # usable training windows of width input_size.  Without this cap, a
+        # 450-day dataset with input_size=360 yields only ~90 non-overlapping
+        # windows — less than one full pass of gradient signal, causing the
+        # model to memorise the last few values (random-walk collapse).
         effective_input_size = min(self.input_size, max(n // 2, self.horizon + 1))
         logger.info(
             "Fitting NHiTS on %d days of data.  input_size=%d (requested=%d, cap=n//2=%d).",
@@ -896,16 +1047,29 @@ class NHiTSForecaster:
         return self
 
     def _build_nhits_model(self, h: int, input_size: int):
-        """Build an NHITS model, robust to neuralforecast API changes across versions.
+        """Build an NHiTS model, robust to neuralforecast API changes across versions.
 
-        ``n_stacks`` was removed in neuralforecast ≥ 2.0 (replaced by ``stack_types``).
-        We inspect the NHITS constructor at runtime so the code works on both the old
-        and the new API without a hard version pin.
+        ``n_stacks`` was removed in neuralforecast ≥ 2.0 (replaced by
+        ``stack_types``).  We inspect the NHITS constructor at runtime so
+        the code works on both the old and the new API without a hard version pin.
 
-        FIX: ``scaler_type`` is now passed to NeuralForecast to normalise the target
-        series internally before gradient updates.  Raw session counts without
-        normalisation produce erratic gradients because the loss scale is ~100×
-        larger than normalised targets.
+        ``scaler_type`` is forwarded to NeuralForecast when the installed
+        version supports it (≥ 1.7).  Normalising the target series internally
+        before gradient updates is critical: raw session counts (range 0–200)
+        produce gradients ~100× larger than normalised targets, causing erratic
+        training dynamics.
+
+        Parameters
+        ----------
+        h : int
+            Forecast horizon (days).
+        input_size : int
+            Context window length (already capped by the caller).
+
+        Returns
+        -------
+        NHITS
+            Configured model instance, not yet fitted.
         """
         import inspect
         from neuralforecast.models import NHITS
@@ -922,7 +1086,7 @@ class NHiTSForecaster:
         elif "stack_types" in sig.parameters:
             kwargs["stack_types"] = ["identity"] * self.n_stacks  # new API (≥ 2.0)
 
-        # FIX: pass scaler_type when the API supports it (neuralforecast ≥ 1.7)
+        # Pass scaler_type only when the installed version supports it (≥ 1.7)
         if "scaler_type" in sig.parameters:
             kwargs["scaler_type"] = self.scaler_type
 
@@ -942,11 +1106,16 @@ class NHiTSForecaster:
 
         Parameters
         ----------
-        horizon, n_scenarios, start_date, seed : same as SessionForecaster.
+        horizon : int
+        n_scenarios : int
+            Number of stochastic scenarios.
+        start_date : str or Timestamp, optional
+        seed : int, optional
 
         Returns
         -------
-        pd.DataFrame — Columns: date, scenario, n_sessions.
+        pd.DataFrame
+            Columns: date, scenario, n_sessions.
 
         Note
         ----
@@ -1012,7 +1181,21 @@ class NHiTSForecaster:
 
     def plot_forecast(self, horizon: int = 14, n_scenarios: int = 50,
                       seed: int = 0, ax=None, figsize: tuple = (12, 4)):
-        """Plot historical + fan-chart forecast."""
+        """Plot historical counts and a fan-chart forecast.
+
+        Parameters
+        ----------
+        horizon : int
+            Number of forecast days to display.
+        n_scenarios : int
+        seed : int
+        ax : matplotlib.axes.Axes, optional
+        figsize : tuple
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+        """
         import matplotlib.pyplot as plt
         forecast = self.predict(horizon=horizon, n_scenarios=n_scenarios, seed=seed)
         pivot = forecast.pivot(index="date", columns="scenario", values="n_sessions")

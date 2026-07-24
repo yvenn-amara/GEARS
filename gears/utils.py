@@ -23,19 +23,31 @@ def make_price_signal(
 
     Parameters
     ----------
-    start : str or Timestamp
+    start : str or pd.Timestamp
+        First timestamp of the signal.
     periods : int
         Number of time slots.
     resolution_min : int
+        Slot duration in minutes.
     pattern : str
-        'day_night' | 'spot_like' | 'flat'
+        ``'day_night'`` – step function with morning/evening peaks;
+        ``'spot_like'`` – sinusoidal approximation of spot prices;
+        ``'flat'`` – constant 0.15 €/kWh baseline.
     noise_std : float
-        Gaussian noise standard deviation.
+        Standard deviation of additive Gaussian noise.
     seed : int
+        Random seed for reproducibility.
 
     Returns
     -------
-    pd.Series with DatetimeIndex.
+    pd.Series
+        Price values (€/kWh) with a ``DatetimeIndex`` at
+        ``resolution_min``-minute frequency.
+
+    Examples
+    --------
+    >>> sig = make_price_signal("2025-01-01", periods=96, resolution_min=15)
+    >>> sig.between_time("17:00", "20:00").mean()  # peak hours
     """
     rng = np.random.default_rng(seed)
     idx = pd.date_range(start, periods=periods, freq=f"{resolution_min}min")
@@ -69,16 +81,28 @@ def make_res_signal(
 
     Parameters
     ----------
-    start : str or Timestamp
+    start : str or pd.Timestamp
+        First timestamp of the signal.
     periods : int
+        Number of time slots.
     resolution_min : int
+        Slot duration in minutes.
     solar_peak_hour : float
-        Hour of peak solar generation.
+        Hour of the day at which solar generation peaks.
     seed : int
+        Random seed for reproducibility.
 
     Returns
     -------
-    pd.Series with DatetimeIndex (0 = no renewables, 1 = 100% renewable).
+    pd.Series
+        Renewable fraction in [0, 1] with a ``DatetimeIndex`` at
+        ``resolution_min``-minute frequency.
+        0 = no renewables; 1 = 100 % renewable generation.
+
+    Examples
+    --------
+    >>> sig = make_res_signal("2025-06-01", periods=96, resolution_min=15)
+    >>> sig.between_time("12:00", "14:00").mean()  # solar peak
     """
     rng = np.random.default_rng(seed)
     idx = pd.date_range(start, periods=periods, freq=f"{resolution_min}min")
@@ -91,24 +115,87 @@ def make_res_signal(
 
 
 def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Root Mean Squared Error."""
+    """
+    Compute Root Mean Squared Error.
+
+    Parameters
+    ----------
+    y_true : array-like
+        Ground-truth values.
+    y_pred : array-like
+        Predicted values.
+
+    Returns
+    -------
+    float
+        RMSE in the same unit as the input arrays.
+    """
     return float(np.sqrt(np.mean((np.asarray(y_true) - np.asarray(y_pred)) ** 2)))
 
 
 def mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Mean Absolute Error."""
+    """
+    Compute Mean Absolute Error.
+
+    Parameters
+    ----------
+    y_true : array-like
+        Ground-truth values.
+    y_pred : array-like
+        Predicted values.
+
+    Returns
+    -------
+    float
+        MAE in the same unit as the input arrays.
+    """
     return float(np.mean(np.abs(np.asarray(y_true) - np.asarray(y_pred))))
 
 
 def mape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-6) -> float:
-    """Mean Absolute Percentage Error (%)."""
+    """
+    Compute Mean Absolute Percentage Error (%).
+
+    Parameters
+    ----------
+    y_true : array-like
+        Ground-truth values.  Zero values are guarded by ``eps``.
+    y_pred : array-like
+        Predicted values.
+    eps : float
+        Small constant added to the denominator to avoid division by zero.
+
+    Returns
+    -------
+    float
+        MAPE as a percentage (0–100+).
+    """
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
     return float(np.mean(np.abs((y_true - y_pred) / (y_true + eps))) * 100)
 
 
 def smape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-6) -> float:
-    """Symmetric MAPE (%)."""
+    """
+    Compute Symmetric Mean Absolute Percentage Error (%).
+
+    Unlike MAPE, sMAPE is bounded and treats over- and under-prediction
+    symmetrically.
+
+    Parameters
+    ----------
+    y_true : array-like
+        Ground-truth values.
+    y_pred : array-like
+        Predicted values.
+    eps : float
+        Small constant added to the denominator to avoid division by zero.
+
+    Returns
+    -------
+    float
+        sMAPE as a percentage (0–200).
+    """
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
     denom = (np.abs(y_true) + np.abs(y_pred)) / 2 + eps
@@ -117,11 +204,26 @@ def smape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-6) -> float:
 
 def forecast_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     """
-    Compute a full set of forecasting metrics.
+    Compute a full set of point-forecasting metrics.
+
+    Parameters
+    ----------
+    y_true : array-like
+        Ground-truth values.
+    y_pred : array-like
+        Predicted values.
 
     Returns
     -------
-    dict with keys: RMSE, MAE, MAPE, sMAPE, bias.
+    dict
+        Keys: ``RMSE``, ``MAE``, ``MAPE``, ``sMAPE``, ``bias``
+        (all rounded to 4 decimal places).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> forecast_metrics(np.array([1, 2, 3]), np.array([1.1, 1.9, 3.2]))
+    {'RMSE': ..., 'MAE': ..., 'MAPE': ..., 'sMAPE': ..., 'bias': ...}
     """
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
@@ -136,11 +238,20 @@ def forecast_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
 def ks_test(real: np.ndarray, simulated: np.ndarray) -> dict:
     """
-    Two-sample Kolmogorov–Smirnov test.
+    Run a two-sample Kolmogorov–Smirnov test.
+
+    Parameters
+    ----------
+    real : array-like
+        Samples from the reference distribution.
+    simulated : array-like
+        Samples from the distribution under test.
 
     Returns
     -------
-    dict with keys: statistic, p_value.
+    dict
+        Keys: ``statistic`` (float, KS test statistic D in [0, 1]),
+        ``p_value`` (float).
     """
     from scipy import stats
     result = stats.ks_2samp(real, simulated)
@@ -153,19 +264,20 @@ def ks_test(real: np.ndarray, simulated: np.ndarray) -> dict:
 
 def wasserstein_distance(a: np.ndarray, b: np.ndarray) -> float:
     """
-    Earth-mover's distance (1-D Wasserstein) between two sample distributions.
+    Compute the 1-D Wasserstein (earth-mover's) distance between two samples.
 
     Measures how much "work" is needed to transform distribution A into B.
-    Lower is better.  Invariant to sample size differences.
+    Lower is better.  Invariant to sample-size differences.
 
     Parameters
     ----------
     a, b : array-like
-        Univariate samples.
+        Univariate samples from the two distributions.
 
     Returns
     -------
     float
+        Wasserstein-1 distance (in the same unit as the input data).
     """
     from scipy.stats import wasserstein_distance as _wd
     return float(_wd(np.asarray(a), np.asarray(b)))
@@ -173,20 +285,21 @@ def wasserstein_distance(a: np.ndarray, b: np.ndarray) -> float:
 
 def kl_divergence(a: np.ndarray, b: np.ndarray, n_bins: int = 50, eps: float = 1e-9) -> float:
     """
-    KL divergence KL(A ‖ B) estimated from histograms.
+    Estimate KL divergence KL(A ‖ B) from histogram counts.
 
     Parameters
     ----------
     a, b : array-like
-        Univariate samples.
+        Univariate samples from the two distributions.
     n_bins : int
-        Number of histogram bins.
+        Number of histogram bins used for density estimation.
     eps : float
-        Small constant added to avoid log(0).
+        Small constant added to bin probabilities to avoid log(0).
 
     Returns
     -------
-    float — KL divergence (nats).  0 = identical distributions.
+    float
+        KL divergence in nats.  0 = identical distributions.
     """
     from scipy.special import kl_div
     a, b = np.asarray(a, float), np.asarray(b, float)
@@ -213,18 +326,28 @@ def distribution_comparison(
     Parameters
     ----------
     real : pd.DataFrame
-        Validated real sessions.
+        Validated real sessions (output of ``load_sessions``).
     simulated : pd.DataFrame
-        Simulated sessions (from EVSessionGMM.sample or ShortTermSimulator).
-    features : list[str], optional
-        Columns to compare. Defaults to ['hour', 'duration', 'energy'].
+        Simulated sessions (from ``EVSessionGMM.sample`` or
+        ``ShortTermSimulator``).
+    features : list of str, optional
+        Columns to compare.  Defaults to ``['hour', 'duration', 'energy']``.
 
     Returns
     -------
     pd.DataFrame
-        Columns: feature, wasserstein, kl_divergence, ks_statistic, ks_pvalue.
+        Columns: ``feature``, ``wasserstein``, ``kl_divergence``,
+        ``ks_statistic``, ``ks_pvalue``.
+
+    Examples
+    --------
+    >>> from gears import make_demo_data, EVSessionGMM
+    >>> real = make_demo_data(n=500)
+    >>> gmm = EVSessionGMM().fit(real)
+    >>> sim = gmm.sample(500)
+    >>> distribution_comparison(real, sim)
     """
-    from typing import Optional as _Opt
+    # Column name mapping between real sessions and simulated sessions
     real_cols = {"hour": "hour", "duration": "duration", "energy": "energy"}
     sim_cols  = {"hour": "arrival_hour", "duration": "duration", "energy": "energy"}
 
@@ -248,4 +371,3 @@ def distribution_comparison(
             "ks_pvalue": ks["p_value"],
         })
     return pd.DataFrame(rows)
-

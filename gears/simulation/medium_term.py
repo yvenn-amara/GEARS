@@ -70,15 +70,18 @@ def linear_growth_profile(
     Parameters
     ----------
     base_sessions_per_day : float
+        Sessions per day at the start of the simulation (t = 0).
     years : float
         Simulation horizon (any positive value).
     annual_growth_rate : float
         Fractional annual growth (0.15 = +15%/yr).
     start_date : str or Timestamp, optional
+        Start of the date index. Defaults to today.
 
     Returns
     -------
-    pd.Series indexed by date.
+    pd.Series
+        Daily expected session counts indexed by date.
     """
     start = pd.Timestamp(start_date) if start_date else pd.Timestamp.today().normalize()
     n_days = max(1, int(round(365.25 * years)))
@@ -102,7 +105,9 @@ def s_curve_growth_profile(
     Parameters
     ----------
     base_sessions_per_day : float
+        Sessions per day at t = 0.
     years : float
+        Simulation horizon.
     saturation_factor : float
         Max sessions as multiple of base (asymptote).
     midpoint_year : float
@@ -113,7 +118,8 @@ def s_curve_growth_profile(
 
     Returns
     -------
-    pd.Series indexed by date.
+    pd.Series
+        Daily expected session counts indexed by date.
     """
     start = pd.Timestamp(start_date) if start_date else pd.Timestamp.today().normalize()
     n_days = max(1, int(round(365.25 * years)))
@@ -155,7 +161,8 @@ def s_curve_linear_tail_profile(
 
     Returns
     -------
-    pd.Series indexed by date.
+    pd.Series
+        Daily expected session counts indexed by date.
     """
     s_curve = s_curve_growth_profile(
         base_sessions_per_day, years,
@@ -202,7 +209,8 @@ def bass_diffusion_profile(
 
     Returns
     -------
-    pd.Series indexed by date.
+    pd.Series
+        Daily expected session counts indexed by date.
     """
     start = pd.Timestamp(start_date) if start_date else pd.Timestamp.today().normalize()
     n_days = max(1, int(round(365.25 * years)))
@@ -210,7 +218,7 @@ def bass_diffusion_profile(
     t = np.arange(n_days) / 365.25
 
     M = base_sessions_per_day * market_potential_factor
-    # Cumulative adoption F(t)
+    # Cumulative adoption fraction F(t) from the closed-form Bass solution
     exponent = np.exp(-(p + q) * t)
     F = (1 - exponent) / (1 + (q / p) * exponent)
     N = M * F  # cumulative sessions
@@ -249,7 +257,8 @@ def double_s_curve_profile(
 
     Returns
     -------
-    pd.Series indexed by date.
+    pd.Series
+        Daily expected session counts indexed by date (sum of both waves).
     """
     wave1 = s_curve_growth_profile(
         base_sessions_per_day, years,
@@ -258,8 +267,10 @@ def double_s_curve_profile(
         steepness=steepness_1,
         start_date=start_date,
     )
+    # The second wave starts from a smaller base (30 % of base_sessions_per_day)
+    # because it represents a secondary cohort that overlaps with the first.
     wave2 = s_curve_growth_profile(
-        base_sessions_per_day * 0.3,   # second wave starts from a smaller base
+        base_sessions_per_day * 0.3,
         years,
         saturation_factor=saturation_factor_2,
         midpoint_year=midpoint_year_2,
@@ -378,6 +389,7 @@ class MediumTermSimulator:
         annual_growth_rate : float
             Annual growth rate for 'linear' and 's_curve*' models.
         start_date : str or Timestamp, optional
+            Start of the simulation. Defaults to today.
         output : str
             ``'daily_energy'`` — one row per (date, scenario) with kWh total.
             ``'hourly_energy'`` — one row per (date, hour, scenario).
@@ -393,6 +405,12 @@ class MediumTermSimulator:
         Returns
         -------
         pd.DataFrame
+            Structure depends on *output*; see parameter description above.
+
+        Raises
+        ------
+        ValueError
+            If *output* or *growth_model* is not recognised.
         """
         if output not in ("daily_energy", "hourly_energy", "sessions"):
             raise ValueError("output must be 'daily_energy', 'hourly_energy', or 'sessions'.")
@@ -465,6 +483,25 @@ class MediumTermSimulator:
         4. Split the batch back to individual dates
 
         This is ~20× faster than looping over days individually.
+
+        Parameters
+        ----------
+        growth : pd.Series
+            Daily expected session counts from a growth profile function.
+        seasonal_weights : dict
+            Multiplicative seasonal adjustments keyed by season name.
+        output : str
+            One of ``'sessions'``, ``'daily_energy'``, ``'hourly_energy'``.
+        scenario_id : int
+            Scenario index written into every output row.
+        seed : int
+            Random seed for this scenario's draws.
+
+        Returns
+        -------
+        list
+            List of dicts (for ``'daily_energy'``) or DataFrames (for
+            ``'sessions'`` and ``'hourly_energy'``).
         """
         rng = np.random.default_rng(seed)
         rows = []
@@ -479,7 +516,7 @@ class MediumTermSimulator:
         plan["season"] = plan["month"].apply(_season)
         plan["w"] = plan["season"].map(seasonal_weights).fillna(1.0)
         plan["adjusted_n"] = plan["expected_n"] * plan["w"]
-        # Poisson draw per day
+        # Poisson draw per day to introduce realistic day-to-day count variability
         plan["n_sessions"] = rng.poisson(np.maximum(0, plan["adjusted_n"].values))
 
         # Group by context and batch-sample
@@ -495,6 +532,7 @@ class MediumTermSimulator:
                 seed=int(rng.integers(0, 2**31)),
             )
             sessions_batch["power_kw"] = self._assign_power(total_n, rng)
+            # Cap energy by power × duration (physical charger constraint)
             sessions_batch["energy"] = np.minimum(
                 sessions_batch["energy"],
                 sessions_batch["power_kw"] * sessions_batch["duration"],
@@ -535,6 +573,21 @@ class MediumTermSimulator:
         return rows
 
     def _assign_power(self, n: int, rng: np.random.Generator) -> np.ndarray:
+        """Sample a charger power level for each session from the charger mix.
+
+        Parameters
+        ----------
+        n : int
+            Number of sessions to assign power levels to.
+        rng : np.random.Generator
+            Seeded random generator for reproducibility.
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape ``(n,)`` with power values in kW drawn according
+            to the proportions defined in ``self.charger_mix``.
+        """
         powers = list(self.charger_mix.keys())
         weights = np.array(list(self.charger_mix.values()), dtype=float)
         return rng.choice(powers, size=n, p=weights)
@@ -553,12 +606,29 @@ class MediumTermSimulator:
         color: str = "#2E86AB",
     ):
         """
-        Monthly energy trajectory with 50% and 80% CI fan chart.
+        Monthly energy trajectory with 50 % and 80 % CI fan chart.
 
         Parameters
         ----------
         result : pd.DataFrame
-            Output of simulate(output='daily_energy').
+            Output of :meth:`simulate` with ``output='daily_energy'``.
+            Must contain columns: date, scenario, total_energy_kwh.
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on. Created if None.
+        resample : str
+            Pandas offset alias for temporal aggregation.
+            ``'ME'`` = month-end (default); ``'QE'`` = quarter-end.
+        figsize : tuple
+            Figure size in inches, used only when creating a new figure.
+        title : str
+            Plot title.
+        color : str
+            Hex colour for the median line and CI shading.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
+            The axes containing the fan chart.
         """
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates

@@ -14,6 +14,7 @@ __all__ = [
     "make_demo_data",
     "validate_dataframe",
     "summary_stats",
+    "_season",
     "aggregate_by_department",
     "build_panel",
     "department_daily_energy",

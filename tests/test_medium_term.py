@@ -1,5 +1,4 @@
 """Tests for medium_term simulator — growth profiles and vectorisation."""
-import numpy as np
 import pandas as pd
 import pytest
 from gears.data.loader import make_demo_data

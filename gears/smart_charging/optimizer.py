@@ -5,8 +5,10 @@ Implements a time-shiftable greedy scheduler: given a price (or RES)
 signal, each session is scheduled to charge at the cheapest available
 time slots within its connection window, subject to power constraints.
 
-This is a V1G (unidirectional smart charging) strategy — the charger
-can shift load in time but cannot feed energy back to the grid.
+This is a **V1G** (Vehicle-to-Grid, unidirectional) strategy — the
+charger can shift load in time but **cannot** feed energy back to the
+grid (no V2G).  The optimiser therefore only moves charging demand
+forward or backward within each vehicle's connection window.
 """
 
 from __future__ import annotations
@@ -25,9 +27,13 @@ class SmartChargingOptimizer:
     Greedy V1G smart charging scheduler.
 
     For each session the algorithm:
-    1. Identifies the feasible charging window [arrival, departure].
+
+    1. Identifies the feasible charging window ``[arrival, departure]``.
     2. Sorts slots by signal (ascending for price, descending for RES).
-    3. Greedily fills cheapest slots until energy demand is met.
+    3. Greedily fills cheapest slots until the energy demand is met.
+
+    This is a **V1G** strategy: load can only be *shifted*, not injected
+    back to the grid.
 
     Parameters
     ----------
@@ -38,7 +44,8 @@ class SmartChargingOptimizer:
     efficiency : float
         Charging efficiency (0–1). Default 0.9.
     default_power_kw : float
-        Fallback charger power if ``power_kw`` column is absent. Default 7.4 kW.
+        Fallback charger power if ``power_kw`` column is absent in the
+        sessions DataFrame. Default 7.4 kW.
 
     Examples
     --------
@@ -76,22 +83,38 @@ class SmartChargingOptimizer:
         Parameters
         ----------
         sessions : pd.DataFrame
-            Sessions with columns: ``arrival_time`` or ``(date, arrival_hour)``,
-            ``duration``, ``energy``, ``power_kw`` (optional).
-            Note: ``date`` can be a Python date object, string, or Timestamp.
+            Sessions with columns:
+
+            - ``arrival_time`` (``datetime.date``, ``str``, or
+              ``pd.Timestamp``) **or** ``date`` + ``arrival_hour`` (float).
+            - ``duration`` (hours, float).
+            - ``energy`` (kWh, float).
+            - ``power_kw`` (kW, float, optional – defaults to
+              ``self.default_power_kw``).
+
+            The ``date`` column (when present) may be a ``datetime.date``
+            object, a date string, or a ``pd.Timestamp``; all are coerced
+            to ``datetime.date`` internally.
         signal : pd.Series
-            Indexed by datetime at ``resolution_min`` intervals.
-            Values: €/kWh (price) or fraction 0–1 (RES).
+            Indexed by datetime at ``resolution_min``-minute intervals.
+            Values: €/kWh (for ``signal_type='price'``) or fraction 0–1
+            (for ``signal_type='res'``).
 
         Returns
         -------
         pd.DataFrame
-            Original sessions with additional columns:
-            ``cost_smart`` (€), ``cost_plug`` (€), ``savings_pct``,
-            ``scheduled_start``, ``scheduled_end``.
+            Original sessions with four additional columns:
+
+            - ``cost_smart`` (€): cost when charging at optimal slots.
+            - ``cost_plug`` (€): cost under plug-and-charge (first slots).
+            - ``savings_pct`` (%): relative saving vs. plug-and-charge.
+            - ``scheduled_start`` (``pd.Timestamp``): start of optimised
+              charging window.
+            - ``scheduled_end`` (``pd.Timestamp``): end of optimised
+              charging window.
         """
         sessions = sessions.copy().reset_index(drop=True)
-        # Drop any output columns from a prior optimise() call to avoid duplicates
+        # Remove any output columns left over from a prior optimise() call.
         _output_cols = ["cost_smart", "cost_plug", "savings_pct",
                         "scheduled_start", "scheduled_end"]
         sessions.drop(columns=[c for c in _output_cols if c in sessions.columns],
@@ -100,11 +123,10 @@ class SmartChargingOptimizer:
 
         res_h = self.resolution_min / 60.0
 
-        # Ensure consistent date type in sessions
         if "date" in sessions.columns:
             sessions["date"] = pd.to_datetime(sessions["date"]).dt.date
 
-        # Build arrival_time if absent
+        # Build arrival_time from (date, arrival_hour) if not already present.
         if "arrival_time" not in sessions.columns and "arrival_hour" in sessions.columns:
             sessions["arrival_time"] = (
                 pd.to_datetime(sessions["date"].astype(str))
@@ -136,11 +158,11 @@ class SmartChargingOptimizer:
             slots_needed = int(np.ceil(energy_needed / (power_kw * res_h)))
             slots_needed = min(slots_needed, len(window_sig))
 
-            # Plug-and-charge: charge from arrival, first slots
+            # Plug-and-charge baseline: charge at arrival, first available slots.
             plug_slots = window_sig.iloc[:slots_needed]
             cost_plug = float((plug_slots * power_kw * res_h).sum())
 
-            # Smart charging: cheapest slots first
+            # Smart charging: choose the cheapest (or greenest) slots first.
             if self.signal_type == "price":
                 ordered = window_sig.nsmallest(slots_needed)
             else:
@@ -172,7 +194,22 @@ class SmartChargingOptimizer:
         return sessions
 
     def _get_window(self, row: pd.Series):
-        """Return (arrival_datetime, departure_datetime) from a session row."""
+        """
+        Extract the connection window from a session row.
+
+        Parameters
+        ----------
+        row : pd.Series
+            A single session row, either with ``arrival_time`` or with
+            ``date`` + ``arrival_hour`` columns.
+
+        Returns
+        -------
+        tuple[pd.Timestamp, pd.Timestamp] or tuple[None, None]
+            ``(arrival_datetime, departure_datetime)``.  Returns
+            ``(None, None)`` if the row does not contain enough
+            information to determine the window.
+        """
         if "arrival_time" in row.index and pd.notna(row.get("arrival_time")):
             arrival_dt = pd.Timestamp(row["arrival_time"])
         elif "date" in row.index and "arrival_hour" in row.index:
@@ -192,12 +229,31 @@ class SmartChargingOptimizer:
 
     def savings_summary(self, result: pd.DataFrame) -> dict:
         """
-        Compute aggregate cost / savings statistics.
+        Compute aggregate cost and savings statistics.
+
+        Parameters
+        ----------
+        result : pd.DataFrame
+            Output of :meth:`optimise`.
 
         Returns
         -------
-        dict — keys: total_cost_smart_eur, total_cost_plug_eur,
-        total_savings_eur, mean_savings_pct, n_sessions_optimised.
+        dict
+            Keys:
+
+            - ``total_cost_smart_eur`` (float): total charging cost with V1G.
+            - ``total_cost_plug_eur`` (float): total cost under plug-and-charge.
+            - ``total_savings_eur`` (float): absolute saving.
+            - ``mean_savings_pct`` (float): average percentage saving per session.
+            - ``n_sessions_optimised`` (int): sessions for which optimisation
+              was possible (i.e. at least one feasible slot existed).
+
+        Examples
+        --------
+        >>> opt = SmartChargingOptimizer()
+        >>> result = opt.optimise(sessions, signal)
+        >>> opt.savings_summary(result)
+        {'total_cost_smart_eur': ..., 'total_savings_eur': ..., ...}
         """
         valid = result[result["cost_plug"].notna()].copy()
         if valid.empty:
@@ -224,14 +280,14 @@ class SmartChargingOptimizer:
         persistence_sessions: Optional[pd.DataFrame] = None,
     ) -> dict:
         """
-        Four-way regret analysis.
+        Compute a four-way regret analysis across charging strategies.
 
         Computes costs for:
 
-        - **Oracle**: real sessions + smart charging (best achievable)
-        - **Predicted + Smart**: GEARS sessions + V1G optimisation
-        - **Predicted + Plug**: GEARS sessions + plug-and-charge (no V1G)
-        - **Persistence + Smart** (optional): naive baseline sessions + V1G
+        - **Oracle**: real sessions + smart charging (best achievable).
+        - **Predicted + Smart**: GEARS sessions + V1G optimisation.
+        - **Predicted + Plug**: GEARS sessions + plug-and-charge (no V1G).
+        - **Persistence + Smart** (optional): naive baseline sessions + V1G.
 
         Parameters
         ----------
@@ -246,7 +302,13 @@ class SmartChargingOptimizer:
 
         Returns
         -------
-        dict — cost breakdown and regret values.
+        dict
+            Keys: ``cost_oracle_smart``, ``cost_predicted_smart``,
+            ``cost_predicted_plug``, ``regret_smart_vs_oracle``,
+            ``regret_plug_vs_oracle``, ``value_of_smart_charging``,
+            and optionally ``cost_persistence_smart`` and
+            ``value_of_forecast_vs_persistence`` (all in €, rounded to
+            2 decimal places).
         """
         oracle_opt = self.optimise(oracle_sessions, signal)
         pred_opt = self.optimise(predicted_sessions, signal)
@@ -288,6 +350,25 @@ class SmartChargingOptimizer:
     ):
         """
         Plot plug-and-charge vs. smart-charging load curves for a single day.
+
+        Parameters
+        ----------
+        sessions : pd.DataFrame
+            Output of :meth:`optimise` (must include ``scheduled_start``).
+        signal : pd.Series, optional
+            Price or RES signal. When provided, plotted on a secondary
+            y-axis for visual correlation.
+        date : str, optional
+            Filter sessions to this date (``'YYYY-MM-DD'``). If None,
+            all sessions are used (they should cover only one day).
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on. A new figure is created if None.
+        figsize : tuple
+            Figure size (width, height) in inches.
+
+        Returns
+        -------
+        matplotlib.axes.Axes
         """
         import matplotlib.pyplot as plt
 
@@ -300,7 +381,7 @@ class SmartChargingOptimizer:
         if sessions.empty:
             raise ValueError("No sessions found for the given date.")
 
-        # Ensure arrival_time exists
+        # Ensure arrival_time exists for index arithmetic.
         if "arrival_time" not in sessions.columns and "arrival_hour" in sessions.columns:
             sessions["arrival_time"] = (
                 pd.to_datetime(sessions["date"].astype(str))

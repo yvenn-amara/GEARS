@@ -26,6 +26,15 @@ from gears.models.forecaster import (
     PersistenceForecaster,
     sessions_to_daily_counts,
 )
+from gears.models.persistence_sampler import PersistenceSessionSampler
+from gears.evaluation.windowing import sessions_in_last_n_occurrences
+from gears.evaluation.benchmark import (
+    run_rolling_origin_benchmark,
+    run_benchmark_for_datasets,
+    run_sarima_sanity_check,
+    summarize_sarima_sanity_check,
+    crps_ensemble,
+)
 from gears.models.registry import ModelRegistry, NativeGMMRegistry, get_gmm
 from gears.simulation.short_term import ShortTermSimulator
 from gears.simulation.medium_term import (
@@ -57,6 +66,13 @@ __all__ = [
     "NHiTSForecaster",
     "PersistenceForecaster",
     "sessions_to_daily_counts",
+    "PersistenceSessionSampler",
+    "sessions_in_last_n_occurrences",
+    "run_rolling_origin_benchmark",
+    "run_benchmark_for_datasets",
+    "run_sarima_sanity_check",
+    "summarize_sarima_sanity_check",
+    "crps_ensemble",
     "ModelRegistry",
     "NativeGMMRegistry",
     "get_gmm",

@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from gears.utils import (
     make_price_signal, make_res_signal,
-    rmse, mae, mape, smape, forecast_metrics, ks_test,
+    rmse, mae, mape, forecast_metrics, ks_test,
     wasserstein_distance, kl_divergence, distribution_comparison,
 )
 from gears.data.loader import make_demo_data

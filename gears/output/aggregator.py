@@ -124,26 +124,26 @@ def _overlap_profile_24h(
     calendar-day slots are touched.
     """
     hourly = np.zeros(24, dtype=float)
-    # Normalisation factor: N sessions represent n_days_mc days, so dividing
-    # by (N / n_sessions_per_day) yields the average for one typical day.
+    # N sessions represent n_days_mc days, so dividing by (N / n_sessions_per_day)
+    # yields the expected profile for one representative day.
     norm = n_total / n_sessions_per_day
 
     for h in range(24):
         h_f = float(h)
-        # Overlap with day-0 window [h, h+1]
+        # Overlap with the day-0 window [h, h+1].
         o0 = np.clip(
             np.minimum(arrivals + active_durations, h_f + 1.0)
             - np.maximum(arrivals, h_f),
             0.0, 1.0,
         )
-        # Overlap with day-1 window [h+24, h+25]
+        # Overlap with the day-1 window [h+24, h+25] for sessions crossing midnight.
         o1 = np.clip(
             np.minimum(arrivals + active_durations, h_f + 25.0)
             - np.maximum(arrivals, h_f + 24.0),
             0.0, 1.0,
         )
-        # Overlap with day-2 window [h+48, h+49]
-        # Required when duration > 48 - arrival_hour (up to 48 h GMM clip)
+        # Overlap with the day-2 window [h+48, h+49] for sessions crossing two midnights
+        # (possible when duration > 48 - arrival_hour, up to the 48 h GMM clip).
         o2 = np.clip(
             np.minimum(arrivals + active_durations, h_f + 49.0)
             - np.maximum(arrivals, h_f + 48.0),
@@ -165,7 +165,8 @@ def _draw_power_levels(
     Parameters
     ----------
     power_dist : dict[float, float]
-        Mapping ``{power_kw: proportion}``.  Proportions are auto-normalised.
+        Mapping ``{power_kw: proportion}``.  Proportions are auto-normalised
+        so they need not sum to exactly 1.
     n : int
         Number of samples to draw.
     rng : np.random.Generator
@@ -194,24 +195,32 @@ def _build_smart_ts(
     """
     Assemble an annual hourly smart-charging time series (MW).
 
-    Uses the same daily-noise draw as the baseline ts so that day-to-day
-    variability is consistent between ``ts`` and ``ts_smart``.
+    Uses the same daily-noise draw as the baseline ``ts`` so that
+    day-to-day variability is consistent between ``ts`` and ``ts_smart``.
+    For (day_of_week, season) keys without a smart-charging profile,
+    falls back to the corresponding baseline profile.
 
     Parameters
     ----------
     gmm : EVSessionGMM
+        Fitted GMM (used for its ``stratify_by`` metadata).
     profiles_mw : dict
-        Baseline (plug-and-charge) profiles {(dow, season): ndarray(24)}.
+        Baseline (plug-and-charge) profiles
+        ``{(dow, season): np.ndarray(24)}``.
     smart_profiles_mw : dict
-        Smart-charging profiles {(dow, season): ndarray(24)}.
+        Smart-charging profiles ``{(dow, season): np.ndarray(24)}``.
     year : int
+        Calendar year for the annual time series.
     noise_std : float
+        Standard deviation of the multiplicative daily noise term.
     seed : int
+        Master random seed (must match the seed used for ``ts``).
 
     Returns
     -------
     pd.Series
-        Hourly MW time series with DatetimeIndex for the full calendar year.
+        Hourly MW time series with ``DatetimeIndex`` for the full
+        calendar year (8 760 or 8 784 values).
     """
     from gears.data.schemas import _season
 
@@ -241,24 +250,28 @@ def _reconstruct_smart_profile_hourly(
     """
     Reconstruct a 24-hour smart-charging power profile (kW) from optimizer output.
 
-    The optimizer marks each session with a ``scheduled_start`` Timestamp;
-    the active charging window is taken as
+    The optimizer marks each session with a ``scheduled_start`` Timestamp.
+    The active charging window is taken as
     ``[scheduled_start, scheduled_start + charge_duration]``
     where ``charge_duration = energy / power_kw``.  This is consistent with
     the contiguous-slots approximation used in
-    ``SmartChargingOptimizer.plot_load_curve()``.
+    :meth:`~gears.smart_charging.optimizer.SmartChargingOptimizer.plot_load_curve`.
 
     Parameters
     ----------
     result : pd.DataFrame
-        Output of ``SmartChargingOptimizer.optimise()``.
+        Output of
+        :meth:`~gears.smart_charging.optimizer.SmartChargingOptimizer.optimise`.
     date : pd.Timestamp
-        Reference date (midnight) used to convert Timestamps to fractional hours.
+        Reference date (midnight) used to convert Timestamps to fractional
+        hours.
     resolution_min : int
         Optimizer resolution (minutes); used to derive ``power_kw`` from
         ``slots_needed`` if the column is absent.
     n_sessions_per_day : float
+        Expected number of sessions per day for this context.
     n_total : int
+        Total number of simulated sessions.
 
     Returns
     -------
@@ -292,10 +305,11 @@ class OutputAggregator:
     resolution_min : int
         Time resolution for smart-charging operations (minutes).
         Does not affect the hourly load profiles returned by
-        ``build_load_profiles()``, which are always at 1-hour resolution.
+        :meth:`build_load_profiles`, which are always at 1-hour resolution.
 
     Examples
     --------
+    >>> import gears
     >>> agg = OutputAggregator(resolution_min=60)
     >>> gmm = gears.get_gmm()
     >>> result = agg.build_load_profiles(gmm, year=2025, n_days_mc=10)
@@ -321,8 +335,9 @@ class OutputAggregator:
         ----------
         sessions : pd.DataFrame
             Sessions output from any GEARS simulator.
-        groupby : list[str], optional
-            Extra grouping columns (e.g. ``['scenario', 'location_type']``).
+        groupby : list of str, optional
+            Extra grouping columns
+            (e.g. ``['scenario', 'location_type']``).
 
         Returns
         -------
@@ -356,19 +371,23 @@ class OutputAggregator:
         Parameters
         ----------
         sessions : pd.DataFrame
-        groupby : list[str], optional
+            Sessions output from any GEARS simulator.
+        groupby : list of str, optional
+            Extra grouping columns.
 
         Returns
         -------
         pd.DataFrame
             Columns: ``date``, ``hour``, ``[groupby…]``, ``power_kw``
-            (sum of active power across all sessions in that hour),
-            ``energy_kwh``, ``n_sessions``.
+            (the **sum** of the active charger powers across all sessions
+            whose arrival hour falls in that slot — not a per-session
+            value), ``energy_kwh``, ``n_sessions``.
 
         Notes
         -----
-        ``power_kw`` is the **sum** of the charger powers of all active
-        sessions in that hour slot, not a per-session value.
+        ``power_kw`` represents the **aggregated** instantaneous power
+        (sum of all active charger powers) for that hour bucket, not the
+        power of an individual session.
         """
         df = sessions.copy()
         df["date"] = pd.to_datetime(df["date"])
@@ -409,6 +428,7 @@ class OutputAggregator:
         -------
         pd.DataFrame
             Columns: ``date``, ``mean``, ``p10``, ``p25``, ``p75``, ``p90``.
+            Returns ``daily`` unchanged if no ``scenario`` column is present.
         """
         if "scenario" not in daily.columns:
             return daily
@@ -438,15 +458,23 @@ class OutputAggregator:
         Parameters
         ----------
         df : pd.DataFrame
+            Data to export.
         path : str or Path
+            Destination file path.  The extension determines the format.
         index : bool
+            Whether to include the DataFrame index in the output.
         **kwargs
-            Forwarded to the pandas writer.
+            Forwarded to the underlying pandas writer method.
 
         Returns
         -------
         Path
             Resolved output path.
+
+        Raises
+        ------
+        ValueError
+            If the file extension is not supported.
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -511,8 +539,8 @@ class OutputAggregator:
             ``"mean_power"``
                 Each session charges at its average power
                 ``energy / duration`` throughout its connection window.
-                Original behaviour from ``compare.ipynb``, corrected for
-                multi-day overflow.
+                Sessions crossing midnight are handled correctly via
+                modulo-24 folding in :func:`_overlap_profile_24h`.
 
             ``"fixed_power"``
                 Every charger delivers a constant ``charger_power_kw`` kW.
@@ -573,7 +601,7 @@ class OutputAggregator:
                 departments).
             ``"charging_mode"`` : str
                 The mode used, for traceability.
-            ``"ts_smart"`` : pd.Series (only if smart_charging_signal given)
+            ``"ts_smart"`` : pd.Series (only when smart_charging_signal given)
                 Same shape as ``"ts"`` but with V1G-optimised scheduling.
 
         Raises
@@ -596,7 +624,8 @@ class OutputAggregator:
 
         Examples
         --------
-        >>> agg = OutputAggregator()
+        >>> import gears
+        >>> agg = gears.OutputAggregator()
         >>> gmm = gears.get_gmm()
         >>> out = agg.build_load_profiles(gmm, year=2025, charging_mode="mean_power")
         >>> out["ts"].resample("W").mean().plot(title="Weekly avg load (MW)")
@@ -630,7 +659,7 @@ class OutputAggregator:
 
         gmm._check_fitted()
 
-        # Locate context-key positions in stratify_by
+        # Locate context-key positions within stratify_by.
         stratify    = gmm.stratify_by
         loc_idx     = stratify.index("location_type") if "location_type" in stratify else None
         dow_idx     = stratify.index("day_of_week")   if "day_of_week"   in stratify else None
@@ -656,9 +685,8 @@ class OutputAggregator:
         for ctx_idx, (ctx, sk_gmm) in enumerate(gmm.models_.items()):
             ctx = ctx if isinstance(ctx, tuple) else (ctx,)
 
-            # Extract context fields
-            loc    = ctx[loc_idx]   if loc_idx    is not None else None
-            dow    = ctx[dow_idx]   if dow_idx    is not None else None
+            loc    = ctx[loc_idx]    if loc_idx    is not None else None
+            dow    = ctx[dow_idx]    if dow_idx    is not None else None
             season = ctx[season_idx] if season_idx is not None else None
 
             n_per_day = gmm.n_sessions_per_day_.get(ctx, 0.0)
@@ -668,11 +696,12 @@ class OutputAggregator:
 
             N = max(int(n_per_day * n_days_mc), 100)
 
-            # Deterministic per-context seed derived from the master seed
+            # Derive a deterministic per-context seed from the master seed so
+            # different contexts are independent but results are reproducible.
             ctx_seed = int(seed + ctx_idx * 1_000_003 % (2**31))
             rng = np.random.default_rng(ctx_seed)
 
-            # Sample raw GMM features [hour, log1p(duration), log1p(energy)]
+            # Sample raw GMM features: [hour, log1p(duration), log1p(energy)].
             sk_gmm.random_state = int(rng.integers(0, 2**31))
             raw, _ = sk_gmm.sample(N)
 
@@ -688,7 +717,7 @@ class OutputAggregator:
             elif charging_mode == "fixed_power":
                 assert charger_power_kw is not None  # validated above
                 powers           = np.full(N, charger_power_kw)
-                # The vehicle stops drawing power as soon as energy need is met.
+                # The vehicle stops drawing power as soon as its energy need is met.
                 charge_times     = energies / charger_power_kw
                 active_durations = np.minimum(charge_times, durations)
 
@@ -699,7 +728,7 @@ class OutputAggregator:
                     charge_times = energies / powers
                     active_durations = np.minimum(charge_times, durations)
                 else:
-                    # Fallback: location type unknown → mean_power
+                    # Location type unknown or not in map: fall back to mean_power.
                     logger.debug(
                         "Location type '%s' not in location_power_map; "
                         "falling back to mean_power for context %s.",
@@ -711,7 +740,6 @@ class OutputAggregator:
             # --- Build 24-hour profile with multi-day overflow -----------
             hp = _overlap_profile_24h(arrivals, active_durations, powers, n_per_day, N)
 
-            # Accumulate into context-level groupings
             profile_key = (dow, season)
             profiles_kw[profile_key]  += hp
             if loc is not None:
@@ -726,7 +754,7 @@ class OutputAggregator:
             k: v / 1_000.0 for k, v in loc_profiles_kw.items()
         }
 
-        # --- Build annual hourly time series (with multiplicative noise) -
+        # --- Build annual hourly time series with multiplicative noise ---
         dates_daily = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
         rng_noise   = np.random.default_rng(seed)
         daily_noise = rng_noise.normal(1.0, noise_std, size=len(dates_daily))
@@ -805,14 +833,18 @@ class OutputAggregator:
         For each (day_of_week, season) context that appears in the signal's
         date range, this method:
 
-        1. Picks one representative date from the signal that matches the context.
-        2. Generates ``n_sessions_per_day_mean`` sessions with explicit timestamps.
+        1. Picks one representative date from the signal that matches
+           the context.
+        2. Generates ``n_sessions_per_day_mean`` sessions with explicit
+           timestamps.
         3. Assigns charger power according to ``charging_mode``.
-        4. Runs :class:`~gears.smart_charging.optimizer.SmartChargingOptimizer`
+        4. Runs
+           :class:`~gears.smart_charging.optimizer.SmartChargingOptimizer`
            on those sessions.
         5. Reconstructs a 24-hour smart-charging profile from the
            scheduled windows.
-        6. Uses that profile (with daily noise) to assemble the full annual series.
+        6. Uses that profile (with daily noise) to assemble the full
+           annual series.
 
         Parameters
         ----------
@@ -835,7 +867,7 @@ class OutputAggregator:
         Returns
         -------
         pd.Series
-            Hourly MW time series with DatetimeIndex.
+            Hourly MW time series with ``DatetimeIndex`` for the full year.
         """
         from gears.data.schemas import _season as _seas
         from gears.smart_charging.optimizer import SmartChargingOptimizer
@@ -845,7 +877,7 @@ class OutputAggregator:
             signal_type="price",
         )
 
-        # Build a lookup: (dow, season) → one representative date in signal
+        # Build a lookup: (dow, season) → one representative date in signal.
         signal_dates = signal.index.normalize().unique()
         representative_dates: dict[tuple, pd.Timestamp] = {}
         for sig_dt in signal_dates:
@@ -853,10 +885,8 @@ class OutputAggregator:
             if key not in representative_dates:
                 representative_dates[key] = sig_dt
 
-        # Per-context smart-charging 24h profiles (kW)
+        # Per-context smart-charging 24 h profiles (kW).
         smart_profiles_kw: dict[tuple, np.ndarray] = defaultdict(lambda: np.zeros(24))
-        # Track cumulative session count per (dow, season) for normalisation
-        n_per_dow_season: dict[tuple, float] = defaultdict(float)
 
         for ctx_idx, (ctx, sk_gmm) in enumerate(sk_models.items()):
             ctx = ctx if isinstance(ctx, tuple) else (ctx,)
@@ -868,7 +898,7 @@ class OutputAggregator:
             profile_key = (dow, season)
             rep_date    = representative_dates.get(profile_key)
             if rep_date is None:
-                # No matching date in signal — skip this context
+                # No matching date in signal — skip this context.
                 continue
 
             n_per_day = gmm.n_sessions_per_day_.get(ctx, 0.0)
@@ -877,8 +907,10 @@ class OutputAggregator:
 
             N = max(int(n_per_day * n_days_mc), 100)
 
+            # Use a seed offset so the smart-charging samples differ from the
+            # baseline profile samples while remaining deterministic.
             ctx_seed = int(seed + ctx_idx * 1_000_003 % (2**31))
-            rng      = np.random.default_rng(ctx_seed + 7)  # offset to differ from profile seed
+            rng      = np.random.default_rng(ctx_seed + 7)
 
             sk_gmm.random_state = int(rng.integers(0, 2**31))
             raw, _ = sk_gmm.sample(N)
@@ -887,12 +919,11 @@ class OutputAggregator:
             durations = np.clip(np.expm1(raw[:, 1]), 0.08, 48.0)
             energies  = np.clip(np.expm1(raw[:, 2]), 0.01, 350.0)
 
-            # Assign power_kw and charging window per session
             if charging_mode == "mean_power":
-                powers     = energies / durations
+                powers = energies / durations
             elif charging_mode == "fixed_power":
                 assert charger_power_kw is not None
-                powers     = np.full(N, charger_power_kw)
+                powers = np.full(N, charger_power_kw)
             else:  # by_location
                 assert location_power_map is not None
                 if loc is not None and loc in location_power_map:
@@ -900,8 +931,8 @@ class OutputAggregator:
                 else:
                     powers = energies / durations
 
-            # Build sessions DataFrame for the optimizer
-            # arrival_time is anchored to rep_date for this representative day
+            # Build a sessions DataFrame compatible with the optimizer API.
+            # Arrival times are anchored to the representative date for this context.
             arrival_times = rep_date + pd.to_timedelta(arrivals, unit="h")
             sessions_df   = pd.DataFrame({
                 "arrival_time": arrival_times,
@@ -910,7 +941,6 @@ class OutputAggregator:
                 "power_kw":     powers,
             })
 
-            # Run smart-charging optimiser
             try:
                 optimised = opt.optimise(sessions_df, signal)
             except Exception as exc:
@@ -921,7 +951,6 @@ class OutputAggregator:
                 )
                 continue
 
-            # Reconstruct 24h load profile from scheduled starts
             hp = _reconstruct_smart_profile_hourly(
                 result=optimised,
                 date=rep_date,
@@ -930,15 +959,13 @@ class OutputAggregator:
                 n_total=N,
             )
 
-            smart_profiles_kw[profile_key]  += hp
-            n_per_dow_season[profile_key]   += n_per_day
+            smart_profiles_kw[profile_key] += hp
 
-        # Convert to MW; use baseline profile for (dow, season) without smart data
-        smart_profiles_mw: dict[tuple, np.ndarray] = {}
-        for key, arr_kw in smart_profiles_kw.items():
-            smart_profiles_mw[key] = arr_kw / 1_000.0
+        # Convert to MW; baseline profiles cover (dow, season) without smart data.
+        smart_profiles_mw: dict[tuple, np.ndarray] = {
+            key: arr_kw / 1_000.0 for key, arr_kw in smart_profiles_kw.items()
+        }
 
-        # Assemble annual time series
         ts_smart = _build_smart_ts(
             gmm=gmm,
             profiles_mw=profiles_mw,

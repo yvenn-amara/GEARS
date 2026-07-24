@@ -7,7 +7,7 @@ figures.  Return values are always matplotlib Axes (or Figure for multi-panel).
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -36,18 +36,27 @@ def plot_arrival_distribution(
     title: str = "Arrival hour distribution",
 ):
     """
-    Histogram of session arrival hours, optionally split by a grouping variable.
+    Plot a histogram of session arrival hours, optionally split by a group.
 
     Parameters
     ----------
     df : pd.DataFrame
-        Validated sessions DataFrame (must have 'hour' column).
+        Validated sessions DataFrame (must have ``'hour'`` column).
     group_by : str, optional
-        Column to facet on (e.g. 'day_of_week', 'season', 'location_type').
+        Column to facet on (e.g. ``'day_of_week'``, ``'season'``,
+        ``'location_type'``).
     bins : int
-    ax : matplotlib Axes, optional
+        Number of histogram bins.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on. A new figure is created if None.
     figsize : tuple
+        Figure size (width, height) in inches.
     title : str
+        Axes title.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
     """
     import matplotlib.pyplot as plt
 
@@ -84,19 +93,27 @@ def plot_session_heatmap(
     title: str = "Session heatmap",
 ):
     """
-    Heatmap of session intensity by hour and day-of-week.
+    Plot a heatmap of session intensity by hour and day-of-week.
 
     Parameters
     ----------
     df : pd.DataFrame
         Validated sessions DataFrame.
     value : str
-        Metric: 'n_sessions' or 'energy'.
-    x, y : str
-        Axes columns.
+        Metric: ``'n_sessions'`` (count) or ``'energy'`` (kWh sum).
+    x : str
+        Column for the x-axis (hourly bins).
+    y : str
+        Column for the y-axis (day of week).
+    ax : matplotlib.axes.Axes, optional
+    figsize : tuple
+    title : str
+
+    Returns
+    -------
+    matplotlib.axes.Axes
     """
     import matplotlib.pyplot as plt
-    import matplotlib.colors as mcolors
 
     dfp = df.copy()
     col = "hour" if "hour" in dfp.columns else "arrival_hour"
@@ -134,7 +151,26 @@ def plot_energy_distribution(
     ax=None,
     figsize: tuple = (10, 4),
 ):
-    """Histogram of session energy (kWh)."""
+    """
+    Plot a histogram of session energy (kWh), optionally split by a group.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Validated sessions DataFrame (must have ``'energy'`` column).
+    group_by : str, optional
+        Column to facet on.
+    bins : int
+        Number of histogram bins.
+    log_scale : bool
+        If True, apply a log scale to the y-axis.
+    ax : matplotlib.axes.Axes, optional
+    figsize : tuple
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+    """
     import matplotlib.pyplot as plt
 
     fig, ax_ = (None, ax) if ax is not None else plt.subplots(figsize=figsize)
@@ -175,14 +211,22 @@ def plot_daily_energy(
     color: str = BLUE,
 ):
     """
-    Plot daily energy time series with optional uncertainty band.
+    Plot a daily energy time series with an optional uncertainty band.
 
     Parameters
     ----------
     daily : pd.DataFrame
-        Output of OutputAggregator.daily_energy().
+        Output of :meth:`~gears.output.aggregator.OutputAggregator.daily_energy`.
     ci : bool
-        If True and 'scenario' column exists, draw 80% CI band.
+        If True and a ``'scenario'`` column is present, draw an 80 % CI band.
+    ax : matplotlib.axes.Axes, optional
+    figsize : tuple
+    title : str
+    color : str
+
+    Returns
+    -------
+    matplotlib.axes.Axes
     """
     import matplotlib.pyplot as plt
 
@@ -228,14 +272,24 @@ def plot_gmm_means(
     figsize: tuple = (10, 4),
 ):
     """
-    Bar chart of GMM component means for a given feature, per context.
+    Plot a bar chart of GMM component means for a given feature per context.
 
     Parameters
     ----------
     gmm : EVSessionGMM
+        Fitted GMM instance.
     feature_idx : int
-        Index in [hour, log1p(duration), log1p(energy)].
+        Index in the raw feature vector:
+        0 = arrival hour, 1 = log1p(duration), 2 = log1p(energy).
+        For indices > 0 the values are back-transformed via ``expm1``.
     feature_name : str
+        Display label for the y-axis and title.
+    ax : matplotlib.axes.Axes, optional
+    figsize : tuple
+
+    Returns
+    -------
+    matplotlib.axes.Axes
     """
     import matplotlib.pyplot as plt
 
@@ -280,12 +334,19 @@ def plot_regret_comparison(
     figsize: tuple = (8, 5),
 ):
     """
-    Bar chart comparing costs: oracle, smart, plug-and-charge.
+    Plot a bar chart comparing costs: oracle, smart, and plug-and-charge.
 
     Parameters
     ----------
     regret_dict : dict
-        Output of SmartChargingOptimizer.compute_regret().
+        Output of
+        :meth:`~gears.smart_charging.optimizer.SmartChargingOptimizer.compute_regret`.
+    ax : matplotlib.axes.Axes, optional
+    figsize : tuple
+
+    Returns
+    -------
+    matplotlib.axes.Axes
     """
     import matplotlib.pyplot as plt
 
@@ -324,14 +385,23 @@ def plot_forecast_vs_actual(
     title: str = "Forecast vs. actual",
 ):
     """
-    Overlay actual sessions with forecasted count +/- uncertainty bands.
+    Overlay actual session counts with a forecast and its uncertainty bands.
 
     Parameters
     ----------
     actual : pd.Series
-        Actual daily session counts (DatetimeIndex).
+        Actual daily session counts with a ``DatetimeIndex``.
     forecast : pd.DataFrame
-        Output of SessionForecaster.predict() with scenario column.
+        Output of
+        :meth:`~gears.models.forecaster.SessionForecaster.predict` with a
+        ``scenario`` column.
+    ax : matplotlib.axes.Axes, optional
+    figsize : tuple
+    title : str
+
+    Returns
+    -------
+    matplotlib.axes.Axes
     """
     import matplotlib.pyplot as plt
 
@@ -364,13 +434,8 @@ def plot_forecast_vs_actual(
 
 
 # ===========================================================================
-# NEW PUBLICATION-READY VISUALISATION FUNCTIONS
-# Added: plot_mt_fan_charts, plot_mt_national_aggregate, plot_lt_trajectories
+# Publication-ready visualisation functions
 # ===========================================================================
-
-# ---------------------------------------------------------------------------
-# Colour constants (publication additions)
-# ---------------------------------------------------------------------------
 
 # Historical / observed series colour (publication standard)
 HIST_COLOR = "#444444"
@@ -389,7 +454,7 @@ CB_PALETTE = [
 
 
 # ---------------------------------------------------------------------------
-# Internal helper — anchor injection
+# Internal helpers
 # ---------------------------------------------------------------------------
 
 def _prepend_anchor(
@@ -416,7 +481,8 @@ def _prepend_anchor(
 
     Returns
     -------
-    pd.DataFrame sorted ascending by date.
+    pd.DataFrame
+        Pivot with the anchor row inserted, sorted ascending by date.
     """
     import pandas as _pd
 
@@ -436,7 +502,24 @@ def _prepend_anchor(
 
 
 def _apply_pub_style(ax, ylabel: str, title: str, rotate_x: int = 25) -> None:
-    """Shared publication style: grid, spines, tick labels, date format."""
+    """
+    Apply a shared publication style to an Axes object.
+
+    Sets grid, spine visibility, tick label sizes, and a monthly date
+    formatter on the x-axis.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+    ylabel : str
+    title : str
+    rotate_x : int
+        Rotation angle for x-axis tick labels (degrees).
+
+    Returns
+    -------
+    None
+    """
     import matplotlib.dates as _mdates
 
     ax.set_ylabel(ylabel, fontsize=9)
@@ -465,7 +548,7 @@ def plot_mt_fan_charts(
     savepath=None,
 ):
     """
-    Publication-ready per-département fan charts with guaranteed visual continuity.
+    Plot publication-ready per-département fan charts with visual continuity.
 
     The last ``hist_tail_days`` of observed daily energy are plotted in dark
     grey.  Each forecast fan is anchored to the **exact last observed value**
@@ -475,7 +558,8 @@ def plot_mt_fan_charts(
     ----------
     panel : pd.DataFrame
         DatetimeIndex × département-code columns, values in kWh/day.
-        Typically the output of ``build_panel(df, freq='D', metric='energy_kwh')``.
+        Typically the output of
+        ``build_panel(df, freq='D', metric='energy_kwh')``.
     forecast_df : pd.DataFrame
         Output of ``DepartmentForecaster.predict()``.
         Required columns: ``date``, ``department``, ``scenario``,
@@ -485,11 +569,16 @@ def plot_mt_fan_charts(
     hist_tail_days : int
         Number of historical days displayed before the fan.
     metrics_df : pd.DataFrame, optional
-        Evaluation metrics.  Required columns: ``Department``,
+        Evaluation metrics.  Required columns: ``Département``,
         ``MAPE (%)``, ``RMSE (kWh)``.  Each subplot gets a text annotation.
     n_cols : int
         Subplot columns (default 3).
-    figsize, title, savepath : standard.
+    figsize : tuple
+        Figure size (width, height) in inches.
+    title : str
+        Figure super-title.
+    savepath : str or Path, optional
+        If provided, the figure is saved at 150 dpi.
 
     Returns
     -------
@@ -510,7 +599,6 @@ def plot_mt_fan_charts(
     sarima_color = CB_PALETTE[4]   # Okabe-Ito blue — consistent across all depts
 
     for ax, dept in zip(axes_flat, departments):
-        # ── Guard ──────────────────────────────────────────────────────────
         if dept not in panel.columns:
             ax.set_visible(False)
             continue
@@ -519,32 +607,28 @@ def plot_mt_fan_charts(
             ax.set_visible(False)
             continue
 
-        # ── Historical tail ────────────────────────────────────────────────
         hist_series = panel[dept].dropna()
         hist_tail   = hist_series.tail(hist_tail_days)
         anchor_date = _pd.Timestamp(hist_tail.index[-1])
         anchor_val  = float(hist_tail.iloc[-1])
 
-        # ── Scenario pivot — drop overlap, prepend anchor ──────────────────
+        # Build scenario pivot; prepend anchor for visual continuity.
         pivot = pred_dept.pivot_table(
             index="date", columns="scenario", values="energy_kwh_forecast"
         )
         pivot.index = _pd.to_datetime(pivot.index)
-        pivot = pivot[pivot.index > anchor_date]          # strict: no overlap
+        pivot = pivot[pivot.index > anchor_date]
         pivot = _prepend_anchor(pivot, anchor_date, anchor_val)
 
         med = pivot.median(axis=1)
         lo  = pivot.quantile(0.10, axis=1)
         hi  = pivot.quantile(0.90, axis=1)
 
-        # ── Historical line ────────────────────────────────────────────────
         ax.plot(
             hist_tail.index, hist_tail.values,
             color=HIST_COLOR, linewidth=1.8, zorder=4,
             label="Données observées",
         )
-
-        # ── Forecast fan ───────────────────────────────────────────────────
         ax.fill_between(
             pivot.index, lo, hi,
             alpha=0.15, color=sarima_color, linewidth=0,
@@ -556,9 +640,8 @@ def plot_mt_fan_charts(
             label="Prévision médiane",
         )
 
-        # ── Metrics annotation (upper-left) ────────────────────────────────
         if metrics_df is not None:
-            row = metrics_df[metrics_df["Department"] == dept]
+            row = metrics_df[metrics_df["Département"] == dept]
             if not row.empty:
                 mape_val = row["MAPE (%)"].iloc[0]
                 rmse_val = row["RMSE (kWh)"].iloc[0]
@@ -571,7 +654,6 @@ def plot_mt_fan_charts(
                               ec="#cccccc", alpha=0.9),
                 )
 
-        # ── Styling ────────────────────────────────────────────────────────
         _apply_pub_style(
             ax,
             ylabel="Énergie (kWh/jour)",
@@ -579,7 +661,6 @@ def plot_mt_fan_charts(
         )
         ax.legend(fontsize=7, loc="lower right")
 
-    # Hide surplus axes
     for ax in axes_flat[n_depts:]:
         ax.set_visible(False)
 
@@ -608,7 +689,7 @@ def plot_mt_national_aggregate(
     savepath=None,
 ):
     """
-    National aggregate fan chart with guaranteed history-to-forecast continuity.
+    Plot a national aggregate fan chart with history-to-forecast continuity.
 
     Sums ``focus_depts`` columns from ``panel`` for the historical tail, then
     aggregates the same departments in ``forward_fc`` for the forecast fan.
@@ -625,7 +706,8 @@ def plot_mt_national_aggregate(
         DatetimeIndex × département columns (kWh/day).
     forward_fc : pd.DataFrame
         Output of ``DepartmentForecaster.predict()`` for the forward window.
-        Columns: ``date``, ``department``, ``scenario``, ``energy_kwh_forecast``.
+        Columns: ``date``, ``department``, ``scenario``,
+        ``energy_kwh_forecast``.
     focus_depts : list of str
         Département codes to aggregate.
     hist_tail_days : int
@@ -636,27 +718,28 @@ def plot_mt_national_aggregate(
     nhits_mean_kwh : float, optional
         Mean energy per session (kWh) to convert ``n_sessions`` → kWh.
         Required when ``nhits_forecast`` is provided.
-    figsize, title, savepath : standard.
+    figsize : tuple
+    title : str, optional
+    savepath : str or Path, optional
 
     Returns
     -------
     matplotlib.figure.Figure
     """
-    import numpy as _np
     import pandas as _pd
     import matplotlib.pyplot as _plt
 
     forward_fc = forward_fc.copy()
     forward_fc["date"] = _pd.to_datetime(forward_fc["date"])
 
-    # ── National historical tail ──────────────────────────────────────────────
+    # National historical tail: sum of available departments.
     avail = [d for d in focus_depts if d in panel.columns]
     hist_nat  = panel[avail].sum(axis=1).dropna()
     hist_tail = hist_nat.tail(hist_tail_days)
     anchor_date = _pd.Timestamp(hist_tail.index[-1])
     anchor_val  = float(hist_tail.iloc[-1])
 
-    # ── National forecast pivot ───────────────────────────────────────────────
+    # Aggregate forecasts across departments and build scenario pivot.
     national = (
         forward_fc[forward_fc["department"].isin(avail)]
         .groupby(["date", "scenario"])["energy_kwh_forecast"]
@@ -673,9 +756,8 @@ def plot_mt_national_aggregate(
     lo  = pivot.quantile(0.10, axis=1)
     hi  = pivot.quantile(0.90, axis=1)
 
-    # ── Figure ────────────────────────────────────────────────────────────────
     fig, ax = _plt.subplots(figsize=figsize)
-    sarima_color = CB_PALETTE[4]   # Okabe-Ito blue
+    sarima_color = CB_PALETTE[4]
 
     ax.plot(
         hist_tail.index, hist_tail.values / 1e3,
@@ -693,7 +775,6 @@ def plot_mt_national_aggregate(
         label="SARIMA — médiane",
     )
 
-    # ── Optional NHiTS overlay ────────────────────────────────────────────────
     if nhits_forecast is not None:
         if nhits_mean_kwh is None:
             raise ValueError(
@@ -708,14 +789,13 @@ def plot_mt_national_aggregate(
         nhits_kwh    = nhits_pivot * nhits_mean_kwh
         nhits_median = nhits_kwh.median(axis=1)
 
-        nhits_color = CB_PALETTE[5]   # vermillion — visually distinct from blue
+        nhits_color = CB_PALETTE[5]   # vermillion — visually distinct from SARIMA blue
         ax.plot(
             nhits_median.index, nhits_median.values / 1e3,
             color=nhits_color, linewidth=1.8, linestyle=":",
             zorder=3, label="NHiTS — médiane (prévision centrale)",
         )
 
-    # ── Style ─────────────────────────────────────────────────────────────────
     _apply_pub_style(
         ax,
         ylabel="Énergie (MWh/jour)",
@@ -747,18 +827,18 @@ def plot_lt_trajectories(
     savepath=None,
 ):
     """
-    Publication-ready long-term energy trajectories with a zoom panel.
+    Plot publication-ready long-term energy trajectories with a zoom panel.
 
     Layout
     ------
     Left panel (width ratio 3)
         Full timeline: historical monthly average → scenario medians + 80 % CI.
-        A vertical dashed line marks ``sim_start_date`` ("Aujourd'hui"),
-        separating the observed past from the simulated future.
+        A vertical dashed line marks ``sim_start_date`` separating the
+        observed past from the simulated future.
 
     Right panel (width ratio 1)
         Zoom on ``[sim_start_date − zoom_days, sim_start_date + zoom_days]``
-        at **daily** resolution, so the historical↔simulated handoff can be
+        at **daily** resolution so the historical↔simulated handoff can be
         verified visually at full granularity.
 
     Continuity guarantees
@@ -776,12 +856,10 @@ def plot_lt_trajectories(
         DatetimeIndex × département columns (kWh/day).
         ``panel.sum(axis=1)`` is used as the national historical reference.
     trajectory_results : dict
-        Mapping ``scenario_name → {"result": pd.DataFrame,
-        "color": str, "ls": str}``.
-        ``result`` is the output of
-        ``MediumTermSimulator.simulate(output='daily_energy')``;
-        columns required: ``date``, ``scenario``, ``total_energy_kwh``
-        (or whichever column is named by ``energy_col``).
+        Mapping ``scenario_name → {'result': pd.DataFrame, 'color': str,
+        'ls': str}``.  ``result`` is the output of
+        ``MediumTermSimulator.simulate(output='daily_energy')``; required
+        columns: ``date``, ``scenario``, and ``energy_col``.
     sim_start_date : str or pd.Timestamp
         First date of the simulation (= ``panel.index.max() + 1 day``).
     hist_tail_months : int
@@ -790,49 +868,48 @@ def plot_lt_trajectories(
         Half-width of the zoom window in days (default 30, so ±30 days).
     energy_col : str
         Column in each result DataFrame holding daily energy in kWh.
-    figsize, title, savepath : standard.
+    figsize : tuple
+    title : str, optional
+    savepath : str or Path, optional
 
     Returns
     -------
     matplotlib.figure.Figure
     """
-    import numpy as _np
     import pandas as _pd
     import matplotlib.pyplot as _plt
     import matplotlib.dates as _mdates
     import matplotlib.gridspec as _gs
+    import matplotlib.transforms as _mtransforms
     from matplotlib.lines import Line2D as _Line2D
     from matplotlib.patches import Patch as _Patch
 
     sim_start = _pd.Timestamp(sim_start_date).normalize()
     last_obs  = sim_start - _pd.Timedelta(days=1)
 
-    # ── Historical national series ────────────────────────────────────────────
+    # National historical series from all departments in panel.
     hist_nat_daily   = panel.sum(axis=1).sort_index()
     hist_nat_monthly = hist_nat_daily.resample("ME").mean().tail(hist_tail_months)
     anchor_monthly_date = hist_nat_monthly.index[-1]
     anchor_monthly_val  = float(hist_nat_monthly.iloc[-1])
 
-    # Daily anchor for the zoom panel
+    # Daily anchor for the zoom panel.
     if last_obs in hist_nat_daily.index:
         anchor_daily_val = float(hist_nat_daily[last_obs])
     else:
         last_obs         = hist_nat_daily.index[-1]
         anchor_daily_val = float(hist_nat_daily.iloc[-1])
 
-    # ── Figure layout ─────────────────────────────────────────────────────────
     fig = _plt.figure(figsize=figsize)
     gspec = _gs.GridSpec(1, 2, figure=fig, width_ratios=[3, 1], wspace=0.06)
     ax_main = fig.add_subplot(gspec[0])
     ax_zoom = fig.add_subplot(gspec[1])
 
-    # Legend handles accumulated manually (placed outside main panel)
     legend_handles = [
         _Line2D([0], [0], color=HIST_COLOR, linewidth=1.8,
                 label="Données observées (moy. mensuelle)"),
     ]
 
-    # ── Main panel — monthly trajectories ────────────────────────────────────
     ax_main.plot(
         hist_nat_monthly.index, hist_nat_monthly.values / 1e3,
         color=HIST_COLOR, linewidth=1.8, zorder=5,
@@ -844,7 +921,7 @@ def plot_lt_trajectories(
         color = info.get("color", CB_PALETTE[0])
         ls    = info.get("ls", "-")
 
-        # Monthly resample
+        # Resample to monthly averages and clip extreme outliers.
         m_pivot = res.pivot_table(index="date", columns="scenario", values=energy_col)
         m_pivot.index = _pd.DatetimeIndex(_pd.to_datetime(m_pivot.index)).normalize()
         m_pivot = m_pivot.resample("ME").mean()
@@ -872,12 +949,11 @@ def plot_lt_trajectories(
             _Patch(color=color, alpha=0.25, label=f"{name} — P10/P90")
         )
 
-    # "Aujourd'hui" separator
     ax_main.axvline(sim_start, color="#888888", linewidth=1.2,
                     linestyle="--", zorder=6)
-    # blended_transform_factory avoids the affine_transform incompatibility
-    # that occurs when a pd.Timestamp is passed to annotate(xycoords=get_xaxis_transform()).
-    import matplotlib.transforms as _mtransforms
+
+    # blended_transform_factory avoids coordinate-type incompatibilities
+    # when mixing data coordinates (x) with axes coordinates (y) for text.
     import matplotlib.dates as _mdates2
     _blend = _mtransforms.blended_transform_factory(
         ax_main.transData, ax_main.transAxes
@@ -894,7 +970,6 @@ def plot_lt_trajectories(
         ylabel="Énergie (MWh/jour)",
         title=title or "Trajectoires long terme — scénarios adoption VE (moy. mensuelle)",
     )
-    # Legend placed just outside the right edge of the main panel
     ax_main.legend(
         handles=legend_handles,
         fontsize=8,
@@ -904,11 +979,10 @@ def plot_lt_trajectories(
         borderaxespad=0.0,
     )
 
-    # ── Zoom panel — daily resolution around t₀ ───────────────────────────────
+    # Zoom panel — daily resolution around t₀.
     zoom_start = sim_start - _pd.Timedelta(days=zoom_days)
     zoom_end   = sim_start + _pd.Timedelta(days=zoom_days)
 
-    # Historical side of zoom
     hist_zoom = hist_nat_daily.loc[
         (hist_nat_daily.index >= zoom_start) & (hist_nat_daily.index <= last_obs)
     ]

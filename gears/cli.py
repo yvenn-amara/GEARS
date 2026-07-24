@@ -76,7 +76,6 @@ def fit(data_path, output, n_components, forecaster, scenarios, verbose):
 @click.option("--seed", default=None, type=int)
 def simulate(model, pretrained, start, horizon, scenarios, n_sessions, output, seed):
     """Run short-term session simulation."""
-    from gears.pipeline import GEARSModel
 
     m = _load_model(model, pretrained)
     sessions = m.simulate_short_term(
@@ -108,7 +107,6 @@ def simulate(model, pretrained, start, horizon, scenarios, n_sessions, output, s
 @click.option("--output", "-o", default="medium_term.csv", show_default=True)
 def medium_term(model, pretrained, years, growth, growth_model, output_type, scenarios, output):
     """Run medium-term energy simulation."""
-    from gears.pipeline import GEARSModel
 
     m = _load_model(model, pretrained)
     result = m.simulate_medium_term(
@@ -139,7 +137,6 @@ def medium_term(model, pretrained, years, growth, growth_model, output_type, sce
 @click.option("--output", "-o", default="optimised.csv", show_default=True)
 def smart_charge(model, pretrained, sessions_path, signal_path, signal_type, output):
     """Apply smart charging optimisation."""
-    from gears.pipeline import GEARSModel
 
     m = _load_model(model, pretrained)
 

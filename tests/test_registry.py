@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 import gears
-from gears import NativeGMMRegistry, get_gmm
+from gears import NativeGMMRegistry
 from gears.models.gmm import EVSessionGMM
 from gears.data.schemas import validate_dataframe
 
@@ -44,13 +44,26 @@ def make_unified_gmm(n=400, seed=0):
 # ── catalogue ────────────────────────────────────────────────────────────────
 
 class TestCatalogue:
-    def test_single_entry(self):
-        """Registry must expose exactly one bundle: 'french'."""
+    def test_french_entry_present(self):
+        """Registry must expose at least the 'french' bundle."""
         reg = NativeGMMRegistry()
         cat = reg._CATALOGUE
-        assert list(cat.keys()) == ["french"], (
-            f"Expected only ['french'], got {list(cat.keys())}"
+        assert "french" in cat, f"'french' missing from catalogue: {list(cat.keys())}"
+
+    def test_vae_sample_entry_present(self):
+        """Registry must expose the 'french_vae_sample' bundle."""
+        reg = NativeGMMRegistry()
+        cat = reg._CATALOGUE
+        assert "french_vae_sample" in cat, (
+            f"'french_vae_sample' missing from catalogue: {list(cat.keys())}"
         )
+
+    def test_vae_sample_meta(self):
+        reg = NativeGMMRegistry()
+        meta = reg._CATALOGUE["french_vae_sample"]
+        assert meta["model_type"] == "vae"
+        assert meta["is_sample"] is True
+        assert "location_type" in meta["stratify_by"]
 
     def test_stratify_by_has_location_type(self):
         reg = NativeGMMRegistry()
@@ -60,11 +73,12 @@ class TestCatalogue:
         assert "season" in strat
         assert "day_of_week" in strat
 
-    def test_list_returns_one_row(self):
+    def test_list_returns_at_least_two_rows(self):
         reg = NativeGMMRegistry()
         listing = reg.list()
-        assert len(listing) == 1
-        assert listing.iloc[0]["gmm_id"] == "french"
+        assert len(listing) >= 2
+        assert "french" in listing["gmm_id"].values
+        assert "french_vae_sample" in listing["gmm_id"].values
 
     def test_repr(self):
         reg = NativeGMMRegistry()
@@ -93,11 +107,20 @@ class TestSaveLoad:
         notebooks work out of the box before the user runs fit_gmm.py."""
         with tempfile.TemporaryDirectory() as tmpdir:
             reg = NativeGMMRegistry(gmm_dir=tmpdir)
-            # Should not raise — returns a synthetic (sample) GMM
             loaded = reg.load("french")
             assert isinstance(loaded, EVSessionGMM)
             assert loaded.is_fitted_
-            assert loaded.is_sample_   # synthetic fallback is always is_sample=True
+            assert loaded.is_sample_
+
+    def test_vae_sample_load_missing_falls_back(self):
+        """When gmm_vae_french_sample.joblib is absent, a VAE fallback is generated."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reg = NativeGMMRegistry(gmm_dir=tmpdir)
+            loaded = reg.load("french_vae_sample")
+            assert isinstance(loaded, EVSessionGMM)
+            assert loaded.is_fitted_
+            assert loaded.model_type == "vae"
+            assert loaded.is_sample_
 
     def test_stratify_by_preserved(self):
         gmm = make_unified_gmm()
@@ -119,7 +142,7 @@ class TestGetSklearnGmm:
             reg.save("french", gmm)
 
             ctx0 = gmm.list_contexts()[0]
-            loc_type, dept = ctx0[0], ctx0[1]
+            _loc_type, _dept = ctx0[0], ctx0[1]  # noqa: F841
             # find matching season and dow
             ctx_d = dict(zip(gmm.stratify_by, ctx0))
             sk = reg.get_sklearn_gmm(

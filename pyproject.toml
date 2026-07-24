@@ -35,6 +35,9 @@ dependencies = [
 # Deep-learning forecasters: PatchTST (Transformer) + NHiTS via neuralforecast
 # Requires PyTorch — install separately if needed: uv pip install torch
 dl = ["neuralforecast>=2.0", "torch>=2.0"]
+# Conditional VAE for session generation (alternative to GMM)
+# CPU-only torch is sufficient: pip install torch --index-url https://download.pytorch.org/whl/cpu
+vae = ["torch>=2.0"]
 # HF Hub model registry
 hub = ["huggingface-hub>=0.20"]
 # Full development environment
@@ -48,7 +51,7 @@ dev = [
     "folium>=0.16",
     "pyarrow>=15.0",
 ]
-all = ["gears-ev[dl,hub,dev]"]
+all = ["gears-ev[dl,vae,hub,dev]"]
 
 [project.scripts]
 gears-fit-gmm = "scripts.fit_gmm:main"

@@ -8,16 +8,14 @@ import logging
 from pathlib import Path
 from typing import Optional, Union
 
-import numpy as np
 import pandas as pd
 
-from gears.data.loader import load_sessions, make_demo_data
-from gears.data.insee import DepartmentForecaster
+from gears.data.loader import load_sessions
 from gears.models.gmm import EVSessionGMM
 from gears.models.forecaster import SessionForecaster
 from gears.models.registry import ModelRegistry, NativeGMMRegistry
 from gears.simulation.short_term import ShortTermSimulator
-from gears.simulation.medium_term import MediumTermSimulator, CHARGER_PRESETS
+from gears.simulation.medium_term import MediumTermSimulator
 from gears.smart_charging.optimizer import SmartChargingOptimizer
 from gears.output.aggregator import OutputAggregator
 
@@ -28,25 +26,44 @@ class GEARSModel:
     """
     Unified GEARS pipeline object.
 
+    Combines GMM fitting, session-count forecasting, short- and medium-term
+    simulation, V1G smart charging, and output aggregation behind a single
+    facade.
+
     Parameters
     ----------
-    n_components : int or 'auto'
-        GMM components (passed to EVSessionGMM).
-    stratify_by : list[str], optional
+    n_components : int or str
+        GMM components passed to :class:`~gears.models.gmm.EVSessionGMM`.
+        Use ``'auto'`` for BIC-based selection.
+    stratify_by : list of str, optional
         Context columns for GMM stratification.
-        Default: ['day_of_week', 'season'].
+        Default: ``['day_of_week', 'season']``.
     forecaster_method : str
-        'sarima' (recommended, requires pmdarima) or 'probabilistic' (fast, no deps).
+        ``'sarima'`` (recommended, requires pmdarima) or
+        ``'probabilistic'`` (fast, no extra deps).
     charger_mix : dict, optional
-        e.g. {7.4: 0.3, 22.0: 0.7}. Use gears.simulation.medium_term.CHARGER_PRESETS
-        for predefined mixes.
+        Charger power distribution, e.g. ``{7.4: 0.3, 22.0: 0.7}``.
+        Use :data:`~gears.simulation.medium_term.CHARGER_PRESETS` for
+        predefined mixes.
     n_scenarios : int
         Default number of stochastic scenarios.
     resolution_min : int
         Time resolution for load curves (minutes).
     max_samples_per_context : int or None
-        Max GMM training samples per context (for tractability).
+        Max GMM training samples per context (for tractability on large
+        datasets).
+    forecaster_use_holidays : bool
+        Passed through to :class:`~gears.models.forecaster.SessionForecaster`.
+        Default ``True``, matching that class's own default.
+    forecaster_country : str
+        ISO 3166-1 alpha-2 country code for the SARIMA holiday exogenous
+        regressor, passed through to
+        :class:`~gears.models.forecaster.SessionForecaster`. Default ``'FR'``
+        for backward compatibility — override this for non-French datasets
+        (e.g. ``'US'``, ``'GB'``) so the holiday calendar actually matches
+        the data.
     random_state : int
+        Master random seed.
 
     Examples
     --------
@@ -64,11 +81,13 @@ class GEARSModel:
         self,
         n_components: Union[int, str] = "auto",
         stratify_by: Optional[list[str]] = None,
-        forecaster_method: str = "sarima",   # sarima > probabilistic for real data
+        forecaster_method: str = "sarima",
         charger_mix: Optional[dict[float, float]] = None,
         n_scenarios: int = 10,
         resolution_min: int = 30,
         max_samples_per_context: Optional[int] = None,
+        forecaster_use_holidays: bool = True,
+        forecaster_country: str = "FR",
         random_state: int = 42,
     ):
         self.n_components = n_components
@@ -78,6 +97,8 @@ class GEARSModel:
         self.n_scenarios = n_scenarios
         self.resolution_min = resolution_min
         self.max_samples_per_context = max_samples_per_context
+        self.forecaster_use_holidays = forecaster_use_holidays
+        self.forecaster_country = forecaster_country
         self.random_state = random_state
 
         self.gmm_: Optional[EVSessionGMM] = None
@@ -106,17 +127,18 @@ class GEARSModel:
         Parameters
         ----------
         model_id : str
-            Registry model identifier (e.g. 'work_fr_demo').
+            Registry model identifier (e.g. ``'work_fr_demo'``).
         hf_repo_id : str, optional
-            Override the default HF Hub repository.
+            Override the default Hugging Face Hub repository.
         cache_dir : str or Path, optional
-            Local cache directory.
+            Local cache directory for downloaded artefacts.
         **kwargs
-            Forwarded to GEARSModel constructor.
+            Forwarded to the :class:`GEARSModel` constructor.
 
         Returns
         -------
-        GEARSModel (fitted)
+        GEARSModel
+            Fitted instance loaded from the registry.
         """
         registry_kwargs = {}
         if hf_repo_id:
@@ -154,15 +176,16 @@ class GEARSModel:
         gmm_id : str
             Registry bundle ID.  Currently only ``'french'`` is available —
             it contains all location types stratified by
-            location_type × département × season × day_of_week.
+            ``location_type × département × season × day_of_week``.
         gmm_dir : Path, optional
             Override the default GMM directory.
         **kwargs
-            Forwarded to GEARSModel constructor.
+            Forwarded to the :class:`GEARSModel` constructor.
 
         Returns
         -------
-        GEARSModel (fitted, using native GMM)
+        GEARSModel
+            Fitted instance using the native GMM bundle.
         """
         reg = NativeGMMRegistry(gmm_dir=gmm_dir)
         gmm = reg.load(gmm_id)
@@ -193,22 +216,24 @@ class GEARSModel:
 
         Parameters
         ----------
-        data : str, Path, or DataFrame
-            Raw sessions data (any supported format, incl. French pkl).
+        data : str, Path, or pd.DataFrame
+            Raw sessions data (any supported format, including French pkl).
         strict : bool
             Raise on data quality issues instead of dropping rows.
         filter_failed : bool
-            French data: drop failed sessions (succes_session != 't').
+            French data: drop failed sessions (``succes_session != 't'``).
         verbose : bool
             Print loading and fitting progress.
         recent_months : int, optional
             Only use the most recent N months for GMM fitting.
         **loader_kwargs
-            Passed to load_sessions (e.g. sep=';').
+            Passed to :func:`~gears.data.loader.load_sessions`
+            (e.g. ``sep=';'``).
 
         Returns
         -------
-        self
+        GEARSModel
+            The fitted instance (``self``).
         """
         df = load_sessions(
             data, strict=strict, filter_failed=filter_failed,
@@ -229,6 +254,8 @@ class GEARSModel:
             print(f"[GEARS] Fitting session-count forecaster ({self.forecaster_method}) …")
         self.forecaster_ = SessionForecaster(
             method=self.forecaster_method,
+            use_holidays=self.forecaster_use_holidays,
+            country=self.forecaster_country,
             random_state=self.random_state,
         ).fit(df)
 
@@ -241,6 +268,7 @@ class GEARSModel:
         return self
 
     def _build_simulators(self) -> None:
+        """Instantiate short- and medium-term simulators from fitted components."""
         self._short_sim = ShortTermSimulator(
             gmm=self.gmm_,
             forecaster=self.forecaster_,
@@ -270,19 +298,21 @@ class GEARSModel:
 
         Parameters
         ----------
-        start_date : str or Timestamp
+        start_date : str or pd.Timestamp
             First day of the simulation.
         horizon : int
             Number of days.
         n_scenarios : int, optional
-            Override default.
+            Override the default number of scenarios.
         n_sessions : int, optional
-            Fixed session count per day (bypasses forecaster).
+            Fixed session count per day (bypasses the forecaster).
         seed : int, optional
+            Random seed override.
 
         Returns
         -------
-        pd.DataFrame with one row per session.
+        pd.DataFrame
+            One row per session with canonical GEARS columns.
         """
         self._check_fitted()
         n_sc = n_scenarios or self.n_scenarios
@@ -325,25 +355,28 @@ class GEARSModel:
         years : float
             Horizon in years. No upper limit.
         annual_growth_rate : float
-            Annual EV penetration growth (e.g. 0.15 = +15%/yr).
-        start_date : str or Timestamp, optional
+            Annual EV penetration growth (e.g. 0.15 = +15 %/yr).
+        start_date : str or pd.Timestamp, optional
             Defaults to today.
         output : str
-            'daily_energy', 'hourly_energy', or 'sessions'.
+            ``'daily_energy'``, ``'hourly_energy'``, or ``'sessions'``.
         weather_factor : dict, optional
-            Seasonal modifiers e.g. {'winter': 1.1, 'summer': 0.9}.
+            Seasonal modifiers, e.g. ``{'winter': 1.1, 'summer': 0.9}``.
         growth_model : str
-            'linear' or 's_curve'.
+            ``'linear'`` or ``'s_curve'``.
         n_scenarios : int, optional
-            Override default.
+            Override the default number of scenarios.
         charger_mix : dict, optional
-            Override default charger mix for this simulation.
+            Override the default charger mix for this simulation.
         saturation_factor : float
-            s_curve only: max sessions as multiple of base.
+            S-curve only: maximum sessions as a multiple of the base.
 
         Returns
         -------
         pd.DataFrame
+            Simulation output with columns depending on ``output``:
+            ``date``, ``scenario``, and ``total_energy_kwh`` (or
+            ``total_sessions`` for ``output='sessions'``).
         """
         self._check_fitted()
         sim = MediumTermSimulator(
@@ -373,20 +406,23 @@ class GEARSModel:
         signal_type: str = "price",
     ) -> pd.DataFrame:
         """
-        Apply smart charging optimisation to a sessions DataFrame.
+        Apply V1G smart charging optimisation to a sessions DataFrame.
 
         Parameters
         ----------
         sessions : pd.DataFrame
-            Output of simulate_short_term().
+            Output of :meth:`simulate_short_term`.
         signal : pd.Series
-            Price (€/kWh) or RES fraction signal with DatetimeIndex.
+            Price (€/kWh) or RES fraction signal with a ``DatetimeIndex``.
         signal_type : str
-            'price' or 'res'.
+            ``'price'`` or ``'res'``.
 
         Returns
         -------
-        pd.DataFrame – sessions with scheduling columns appended.
+        pd.DataFrame
+            Sessions DataFrame with scheduling columns appended
+            (``cost_smart``, ``cost_plug``, ``savings_pct``,
+            ``scheduled_start``, ``scheduled_end``).
         """
         self._check_fitted()
         opt = SmartChargingOptimizer(
@@ -403,15 +439,61 @@ class GEARSModel:
     # ------------------------------------------------------------------
 
     def daily_energy(self, sessions: pd.DataFrame, **kwargs) -> pd.DataFrame:
-        """Shortcut for aggregator_.daily_energy()."""
+        """
+        Compute daily energy totals.
+
+        Shortcut for :meth:`aggregator_.daily_energy`.
+
+        Parameters
+        ----------
+        sessions : pd.DataFrame
+        **kwargs
+            Forwarded to
+            :meth:`~gears.output.aggregator.OutputAggregator.daily_energy`.
+
+        Returns
+        -------
+        pd.DataFrame
+        """
         return self.aggregator_.daily_energy(sessions, **kwargs)
 
     def hourly_profile(self, sessions: pd.DataFrame, **kwargs) -> pd.DataFrame:
-        """Shortcut for aggregator_.hourly_profile()."""
+        """
+        Compute hourly load profiles.
+
+        Shortcut for :meth:`aggregator_.hourly_profile`.
+
+        Parameters
+        ----------
+        sessions : pd.DataFrame
+        **kwargs
+            Forwarded to
+            :meth:`~gears.output.aggregator.OutputAggregator.hourly_profile`.
+
+        Returns
+        -------
+        pd.DataFrame
+        """
         return self.aggregator_.hourly_profile(sessions, **kwargs)
 
     def export(self, df: pd.DataFrame, path: Union[str, Path], **kwargs) -> None:
-        """Shortcut for aggregator_.export()."""
+        """
+        Export a DataFrame to file.
+
+        Shortcut for :meth:`aggregator_.export`.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+        path : str or Path
+        **kwargs
+            Forwarded to
+            :meth:`~gears.output.aggregator.OutputAggregator.export`.
+
+        Returns
+        -------
+        None
+        """
         self.aggregator_.export(df, path, **kwargs)
 
     # ------------------------------------------------------------------
@@ -419,7 +501,18 @@ class GEARSModel:
     # ------------------------------------------------------------------
 
     def save(self, path: Union[str, Path]) -> None:
-        """Save the full GEARSModel to disk (joblib)."""
+        """
+        Save the full GEARSModel to disk using joblib.
+
+        Parameters
+        ----------
+        path : str or Path
+            Destination file path (e.g. ``'models/my_model.joblib'``).
+
+        Returns
+        -------
+        None
+        """
         import joblib
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -428,7 +521,23 @@ class GEARSModel:
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "GEARSModel":
-        """Load a GEARSModel from disk."""
+        """
+        Load a GEARSModel from disk.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to a joblib-serialised GEARSModel.
+
+        Returns
+        -------
+        GEARSModel
+
+        Raises
+        ------
+        TypeError
+            If the loaded object is not a GEARSModel instance.
+        """
         import joblib
         obj = joblib.load(path)
         if not isinstance(obj, cls):
@@ -440,6 +549,7 @@ class GEARSModel:
     # ------------------------------------------------------------------
 
     def _check_fitted(self) -> None:
+        """Raise RuntimeError if the model has not been fitted yet."""
         if not self.is_fitted_:
             raise RuntimeError(
                 "This GEARSModel instance is not fitted yet. "
@@ -447,12 +557,18 @@ class GEARSModel:
             )
 
     def summary(self) -> str:
-        """Return a human-readable summary of the fitted model."""
+        """
+        Return a human-readable summary of the fitted model.
+
+        Returns
+        -------
+        str
+        """
         lines = ["=" * 55, "GEARS Model Summary", "=" * 55]
         if not self.is_fitted_:
             lines.append("Status: NOT FITTED")
         else:
-            lines.append(f"Status     : fitted ✓")
+            lines.append("Status     : fitted ✓")
             lines.append(f"GMM        : {self.gmm_}")
             lines.append(f"Forecaster : {self.forecaster_}")
             lines.append(f"Charger mix: {self.charger_mix}")

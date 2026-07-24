@@ -37,18 +37,26 @@ def aggregate_by_department(
     Parameters
     ----------
     df : pd.DataFrame
-        Validated sessions DataFrame (output of load_sessions).
-        Must have columns: arrival_time, energy, department.
+        Validated sessions DataFrame (output of ``load_sessions``).
+        Must have columns: ``arrival_time``, ``energy``, ``department``.
     freq : str
-        Pandas offset alias: 'D' (daily), 'W' (weekly), 'ME' (month-end).
+        Pandas offset alias: ``'D'`` (daily), ``'W'`` (weekly),
+        ``'ME'`` (month-end).
     metric : str
         Which metric to aggregate:
-        'energy_kwh' | 'n_sessions' | 'mean_energy_kwh' | 'mean_duration_h'
+        ``'energy_kwh'`` | ``'n_sessions'`` | ``'mean_energy_kwh'`` |
+        ``'mean_duration_h'``.
 
     Returns
     -------
     pd.DataFrame
-        Columns: date, department, <metric>.
+        Long-format table with columns: ``date``, ``department``,
+        ``<metric>``.
+
+    Raises
+    ------
+    ValueError
+        If ``df`` has no ``department`` column, or ``metric`` is unknown.
     """
     if "department" not in df.columns:
         raise ValueError("DataFrame must have a 'department' column.")
@@ -85,7 +93,7 @@ def build_panel(
     """
     Build a wide-format panel: rows = dates, columns = departments.
 
-    Missing (date, department) pairs are filled with fill_value.
+    Missing (date, department) pairs are filled with ``fill_value``.
 
     Parameters
     ----------
@@ -101,13 +109,13 @@ def build_panel(
     Returns
     -------
     pd.DataFrame
-        Wide panel with DatetimeIndex and department columns.
+        Wide panel with ``DatetimeIndex`` and one column per department.
     """
     long = aggregate_by_department(df, freq=freq, metric=metric)
     panel = long.pivot(index="date", columns="department", values=metric)
     panel.index = pd.to_datetime(panel.index)
 
-    # Fill missing dates for each department
+    # Fill in all dates for every department, including those with no sessions.
     full_range = pd.date_range(panel.index.min(), panel.index.max(), freq=freq)
     panel = panel.reindex(full_range, fill_value=fill_value)
 
@@ -131,7 +139,8 @@ def department_daily_energy(
     Returns
     -------
     pd.DataFrame
-        Long-format DataFrame with columns: date, department, energy_kwh.
+        Long-format DataFrame with columns: ``date``, ``department``,
+        ``energy_kwh``.
     """
     long = aggregate_by_department(df, freq="D", metric="energy_kwh")
     if departments is not None:
@@ -162,6 +171,8 @@ class DepartmentForecaster:
     use_log : bool
         If True, log-transform the target before fitting (recommended for
         count/energy data with positive skew).
+    random_state : int
+        Random seed for pmdarima's stepwise search.
 
     Examples
     --------
@@ -208,7 +219,7 @@ class DepartmentForecaster:
         Parameters
         ----------
         df : pd.DataFrame
-            Validated sessions DataFrame (from load_sessions).
+            Validated sessions DataFrame (from ``load_sessions``).
         departments : list, optional
             Subset of departments to fit. Defaults to all.
         verbose : bool
@@ -216,7 +227,8 @@ class DepartmentForecaster:
 
         Returns
         -------
-        self
+        DepartmentForecaster
+            The fitted instance (``self``).
         """
         panel = build_panel(df, freq="D", metric="energy_kwh")
         self._panel = panel
@@ -260,7 +272,22 @@ class DepartmentForecaster:
         return self
 
     def _fit_sarima(self, series: pd.Series) -> object:
-        """Fit SARIMA via pmdarima or statsmodels fallback."""
+        """
+        Fit SARIMA to a daily energy series via pmdarima or statsmodels.
+
+        Tries ``pmdarima.auto_arima`` first; falls back to a fixed
+        SARIMAX(1,1,1)(1,1,0,s) via statsmodels if pmdarima is unavailable.
+
+        Parameters
+        ----------
+        series : pd.Series
+            Daily energy values (positive reals).
+
+        Returns
+        -------
+        object
+            A fitted pmdarima or statsmodels SARIMAX model.
+        """
         y = np.log1p(series.values) if self.use_log else series.values
 
         try:
@@ -316,7 +343,8 @@ class DepartmentForecaster:
         departments : list, optional
             Subset of departments. Defaults to all fitted departments.
         start_date : str, optional
-            First forecasted date. Defaults to the day after the last training date.
+            First forecasted date. Defaults to the day after the last
+            training date.
         n_scenarios : int
             Number of stochastic scenarios (for uncertainty quantification).
         seed : int
@@ -325,7 +353,8 @@ class DepartmentForecaster:
         Returns
         -------
         pd.DataFrame
-            Columns: date, department, scenario, energy_kwh_forecast.
+            Long-format table with columns: ``date`` (DatetimeIndex),
+            ``department``, ``scenario`` (int), ``energy_kwh_forecast``.
         """
         if not self.is_fitted_:
             raise RuntimeError("Call .fit() before predict().")
@@ -361,7 +390,25 @@ class DepartmentForecaster:
     def _forecast_dept(
         self, dept: str, horizon: int, rng: np.random.Generator
     ) -> np.ndarray:
-        """Generate forecast for one department."""
+        """
+        Generate a stochastic forecast for one department.
+
+        Uses the fitted SARIMA if available; otherwise falls back to a
+        mean-plus-noise baseline drawn from historical statistics.
+
+        Parameters
+        ----------
+        dept : str
+            Department code.
+        horizon : int
+            Number of forecast days.
+        rng : np.random.Generator
+
+        Returns
+        -------
+        np.ndarray, shape (horizon,)
+            Non-negative daily energy forecasts (kWh).
+        """
         stats = self._dept_stats.get(dept, {"mean": 0.0, "std": 1.0})
         model = self._models.get(dept)
 
@@ -393,7 +440,7 @@ class DepartmentForecaster:
         figsize: tuple = (12, 4),
     ):
         """
-        Plot historical energy + forecast fan chart for one department.
+        Plot historical energy and forecast fan chart for one department.
 
         Parameters
         ----------
@@ -402,14 +449,17 @@ class DepartmentForecaster:
         horizon : int
             Number of days to forecast.
         n_scenarios : int
-            Number of scenarios for uncertainty band.
+            Number of scenarios for the uncertainty band.
         seed : int
             Random seed.
-        ax : matplotlib Axes, optional
+        ax : matplotlib.axes.Axes, optional
+            Axes to draw on. A new figure is created if None.
+        figsize : tuple
+            Figure size (width, height) in inches.
 
         Returns
         -------
-        matplotlib Axes
+        matplotlib.axes.Axes
         """
         import matplotlib.pyplot as plt
 

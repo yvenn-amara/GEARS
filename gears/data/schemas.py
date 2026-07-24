@@ -24,15 +24,36 @@ Derived columns added automatically:
 
 from __future__ import annotations
 
+import re
 import warnings
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 
 
 def _season(month: int) -> str:
-    """Northern-hemisphere meteorological season."""
+    """
+    Return the northern-hemisphere meteorological season for a given month.
+
+    Parameters
+    ----------
+    month : int
+        Calendar month (1 = January … 12 = December).
+
+    Returns
+    -------
+    str
+        One of ``'winter'``, ``'spring'``, ``'summer'``, ``'autumn'``.
+
+    Examples
+    --------
+    >>> _season(1)
+    'winter'
+    >>> _season(7)
+    'summer'
+    >>> _season(10)
+    'autumn'
+    """
     if month in (12, 1, 2):
         return "winter"
     if month in (3, 4, 5):
@@ -96,7 +117,74 @@ COLUMN_ALIASES: dict[str, list[str]] = {
     ],
 }
 
+# Raw column names that must NEVER resolve to a given canonical column, even
+# though a case/punctuation-normalized comparison would otherwise make them
+# look like a match. This is a *meaning* problem, not a normalization
+# problem — e.g. the EVSE-style datasets' ``Arrival`` column is a float
+# hour-of-day (e.g. 4.13), not a timestamp, even though its name looks like
+# a near-miss alias for ``arrival_time``. No amount of fuzzy matching should
+# paper over this; it is handled as an explicit, permanent exclusion.
+EXCLUDED_RAW_ALIASES: dict[str, set[str]] = {
+    "arrival_time": {"arrival"},
+}
+
+# Raw columns known to carry a *duration in minutes* rather than the
+# canonical hours, matched by normalized name. Handled as an explicit unit
+# conversion (see ``_convert_minute_duration_columns``) rather than a plain
+# alias rename, mirroring the existing French ``duree_min`` -> ``duration``
+# (/ 60) conversion in ``_preprocess_french`` — the same kind of fix, just
+# triggered generically instead of by a France-specific literal.
+MINUTE_DURATION_COLUMNS: set[str] = {"park_duration", "duree_min"}
+
+# Raw columns that are redundant with a value GEARS derives itself (e.g.
+# ``Day``/``Weekend`` duplicate the ``day_of_week``/``is_weekend`` computed
+# from ``arrival_time``) or are pandas/export artefacts (an unnamed index
+# column, a date-only column duplicating a full timestamp). None of these
+# are required or consumed downstream, so they are dropped as noise rather
+# than left to accumulate as confusing passthrough columns.
+NOISE_COLUMNS: set[str] = {"day", "weekend", "unnamed_0", "start_date"}
+
 REQUIRED_COLS = {"arrival_time", "duration", "energy"}
+
+# Data-quality note: acn.csv (from the 11-dataset EVSE benchmark) is the
+# row-wise union of caltech.csv + jpl.csv + office.csv, distinguishable via
+# its extra ``data`` site-indicator column. Loading acn.csv alongside any of
+# those three individually and combining them will triple-count the
+# overlapping sessions — treat acn as a deliberate "combined-site" scenario,
+# not as a fourth independent dataset, unless that duplication is intended.
+# See ``_warn_if_combined_site_dataset`` for the runtime version of this note.
+_KNOWN_COMBINED_SITE_VALUES = {"caltech", "jpl", "office"}
+
+
+def _warn_if_combined_site_dataset(df: pd.DataFrame) -> None:
+    """
+    Emit a ``UserWarning`` if ``df`` looks like a combined multi-site export
+    (e.g. ``acn.csv`` = ``caltech.csv`` + ``jpl.csv`` + ``office.csv``
+    concatenated, distinguished by a ``data`` site-indicator column), so
+    nobody accidentally loads it alongside the individual site files and
+    double/triple-counts the overlapping sessions.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+
+    Returns
+    -------
+    None
+    """
+    normalized = {_normalize_key(c): c for c in df.columns}
+    site_col = normalized.get("data")
+    if site_col is None:
+        return
+    sites = set(df[site_col].dropna().astype(str).str.lower().unique())
+    if sites and sites.issubset(_KNOWN_COMBINED_SITE_VALUES) and len(sites) > 1:
+        warnings.warn(
+            f"This dataset looks like a combined multi-site export (site values: "
+            f"{sorted(sites)}) — e.g. acn.csv = caltech.csv + jpl.csv + office.csv "
+            "concatenated. Loading it alongside those individual site files in the "
+            "same analysis will double/triple-count overlapping sessions.",
+            UserWarning, stacklevel=3,
+        )
 
 LOCATION_NORMALISATION: dict[str, str] = {
     "work": "work", "workplace": "work", "bureau": "work", "office": "work",
@@ -110,10 +198,42 @@ LOCATION_NORMALISATION: dict[str, str] = {
 
 
 def _is_french_format(df: pd.DataFrame) -> bool:
+    """
+    Return True if ``df`` looks like the French national IRVE dataset.
+
+    Detection relies on the presence of ``debut_session_timestamp`` or
+    ``energie_delivree_wh`` — columns unique to that format.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+
+    Returns
+    -------
+    bool
+    """
     return "debut_session_timestamp" in df.columns or "energie_delivree_wh" in df.columns
 
 
 def _preprocess_french(df: pd.DataFrame, *, filter_failed: bool = True) -> pd.DataFrame:
+    """
+    Preprocess a French national IRVE dataset into canonical GEARS columns.
+
+    Renames columns, converts units (Wh → kWh, minutes → hours), maps
+    domaine codes to location types, and optionally drops failed sessions.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Raw French national dataset.
+    filter_failed : bool
+        If True, drop rows where ``succes_session != 't'``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Partially normalised DataFrame ready for ``validate_dataframe``.
+    """
     df = df.copy()
     rename = {k: v for k, v in FRENCH_COLUMN_MAP.items() if k in df.columns}
     df.rename(columns=rename, inplace=True)
@@ -153,20 +273,142 @@ def _preprocess_french(df: pd.DataFrame, *, filter_failed: bool = True) -> pd.Da
     return df
 
 
+def _normalize_key(s: str) -> str:
+    """
+    Normalize a column name for case/punctuation-insensitive alias matching.
+
+    Lower-cases the string and collapses any run of non-alphanumeric
+    characters into a single underscore, so ``'Park.Duration'``,
+    ``'park duration'``, and ``'park_duration'`` all normalize identically.
+
+    Parameters
+    ----------
+    s : str
+
+    Returns
+    -------
+    str
+
+    Examples
+    --------
+    >>> _normalize_key("Park.Duration")
+    'park_duration'
+    >>> _normalize_key("Start Time")
+    'start_time'
+    """
+    return re.sub(r"[^a-z0-9]+", "_", s.strip().lower()).strip("_")
+
+
 def _find_column(df: pd.DataFrame, canonical: str) -> Optional[str]:
+    """
+    Return the first alias of ``canonical`` present in ``df``, matched in a
+    case/punctuation-insensitive way (e.g. ``'Start'`` matches the
+    ``'start'`` alias, ``'Park.Duration'`` matches ``'park_duration'``).
+
+    Aliases listed in :data:`EXCLUDED_RAW_ALIASES` for ``canonical`` are
+    never matched, even if their normalized form would otherwise line up —
+    this is a semantic exclusion (e.g. ``Arrival`` vs. ``arrival_time``),
+    not something normalization should ever paper over.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+    canonical : str
+        Canonical column name (key in :data:`COLUMN_ALIASES`).
+
+    Returns
+    -------
+    str or None
+        Matching (raw, un-normalized) column name, or ``None`` if none is
+        found.
+    """
+    normalized = {_normalize_key(c): c for c in df.columns}
+    excluded = EXCLUDED_RAW_ALIASES.get(canonical, set())
     for alias in COLUMN_ALIASES.get(canonical, [canonical]):
-        if alias in df.columns:
-            return alias
+        key = _normalize_key(alias)
+        if key in excluded:
+            continue
+        hit = normalized.get(key)
+        if hit is not None:
+            return hit
     return None
 
 
 def _resolve_aliases(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rename aliased columns to their canonical GEARS names.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns renamed in-place.
+    """
     rename_map: dict[str, str] = {}
     for canonical in COLUMN_ALIASES:
         col = _find_column(df, canonical)
         if col and col != canonical:
             rename_map[col] = canonical
     df.rename(columns=rename_map, inplace=True)
+    return df
+
+
+def _convert_minute_duration_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Detect a raw duration column expressed in **minutes** (matched by
+    normalized name against :data:`MINUTE_DURATION_COLUMNS`, e.g. the
+    EVSE-style ``Park.Duration`` column) and convert it into the canonical
+    ``duration`` column in hours.
+
+    This mirrors the unit conversion ``_preprocess_french`` already applies
+    to its own French-specific ``_duration_min`` column, but is triggered
+    generically by normalized column name rather than a France-only
+    literal, so it also covers non-French minute-based datasets.
+
+    No-ops if ``duration`` is already present (already resolved by a
+    direct/hour-based alias) or no known minute-duration column is found.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+
+    Returns
+    -------
+    pd.DataFrame
+    """
+    if "duration" in df.columns:
+        return df
+    normalized = {_normalize_key(c): c for c in df.columns}
+    for key in MINUTE_DURATION_COLUMNS:
+        raw_col = normalized.get(key)
+        if raw_col is not None:
+            df = df.copy()
+            df["duration"] = pd.to_numeric(df[raw_col], errors="coerce") / 60.0
+            return df
+    return df
+
+
+def _drop_noise_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop raw columns matched (by normalized name) against
+    :data:`NOISE_COLUMNS` — values GEARS derives itself (``Day``,
+    ``Weekend``) or pandas/export artefacts (an unnamed index column, a
+    redundant date-only column). Safe no-op if none are present.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+
+    Returns
+    -------
+    pd.DataFrame
+    """
+    to_drop = [c for c in df.columns if _normalize_key(c) in NOISE_COLUMNS]
+    if to_drop:
+        df = df.drop(columns=to_drop)
     return df
 
 
@@ -189,19 +431,44 @@ def validate_dataframe(
     strict : bool
         If True, raise on any anomaly instead of dropping/warning.
     filter_failed : bool
-        French data only: if True, drop sessions with succes_session != 't'.
+        French data only: if True, drop sessions with ``succes_session != 't'``.
 
     Returns
     -------
     pd.DataFrame
-        Cleaned DataFrame with canonical columns and derived calendar features.
+        Cleaned DataFrame with canonical columns and derived calendar
+        features: ``hour``, ``day_of_week``, ``month``, ``season``,
+        ``is_weekend``, ``date``.
+
+    Raises
+    ------
+    ValueError
+        If required columns (``arrival_time``, ``duration``, ``energy``) are
+        still missing after alias resolution, or if ``strict=True`` and any
+        rows fail quality filters.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> raw = pd.DataFrame({
+    ...     "start_time": ["2025-01-15 08:30", "2025-06-01 18:00"],
+    ...     "duration_h": [7.5, 2.0],
+    ...     "energy_kwh": [15.0, 8.0],
+    ... })
+    >>> df = validate_dataframe(raw)
+    >>> df.columns.tolist()  # doctest: +NORMALIZE_WHITESPACE
+    ['arrival_time', 'duration', 'energy', 'hour', 'day_of_week', ...]
     """
     df = df.copy()
 
     if _is_french_format(df):
         df = _preprocess_french(df, filter_failed=filter_failed)
 
+    _warn_if_combined_site_dataset(df)
+
+    df = _drop_noise_columns(df)
     df = _resolve_aliases(df)
+    df = _convert_minute_duration_columns(df)
 
     if "duration" not in df.columns and "end_time" in df.columns:
         at = pd.to_datetime(df["arrival_time"], format="mixed", dayfirst=False)
@@ -256,7 +523,21 @@ def validate_dataframe(
 
 
 def summary_stats(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a quick descriptive summary of a validated sessions DataFrame."""
+    """
+    Return a quick descriptive summary of a validated sessions DataFrame.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Validated sessions DataFrame (output of :func:`validate_dataframe`).
+
+    Returns
+    -------
+    pd.DataFrame
+        Descriptive statistics (count, mean, std, min, quartiles, max) for
+        ``duration``, ``energy``, and ``power`` (if present), with an extra
+        ``missing_%`` column.
+    """
     cols = [c for c in ["duration", "energy", "power"] if c in df.columns]
     stats = df[cols].describe().T
     stats["missing_%"] = df[cols].isna().mean() * 100

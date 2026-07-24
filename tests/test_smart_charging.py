@@ -1,6 +1,4 @@
 """Tests for smart charging optimizer — including Section 7 regression tests."""
-import numpy as np
-import pandas as pd
 import pytest
 from gears.smart_charging.optimizer import SmartChargingOptimizer
 from gears.utils import make_price_signal, make_res_signal

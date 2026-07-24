@@ -13,7 +13,6 @@ from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
 
 from gears.models.gmm import EVSessionGMM
 from gears.models.forecaster import SessionForecaster
@@ -29,10 +28,12 @@ class ShortTermSimulator:
     ----------
     gmm : EVSessionGMM
         Fitted GMM for sampling session properties.
-    forecaster : SessionForecaster
-        Fitted count forecaster.
+    forecaster : SessionForecaster, optional
+        Fitted count forecaster.  When None, each day falls back to a
+        hard-coded default of 20 sessions.
     charger_mix : dict, optional
-        Power distribution {power_kw: proportion}.
+        Power distribution ``{power_kw: proportion}``.  Proportions are
+        normalised automatically.  Default: ``{7.4: 0.5, 22.0: 0.5}``.
     resolution_min : int
         Time resolution in minutes for load-curve output.
 
@@ -102,8 +103,8 @@ class ShortTermSimulator:
                 seed=int(rng.integers(0, 2**31)),
             )
             counts_pivot = fc_df.pivot(index="date", columns="scenario", values="n_sessions")
-            # Normalise index to pd.Timestamp so that `date in counts_pivot.index`
-            # works regardless of whether the forecaster returned datetime.date,
+            # Normalise the index to pd.Timestamp so that date membership checks
+            # work regardless of whether the forecaster returned datetime.date,
             # datetime64[s], or datetime64[ns] objects.
             counts_pivot.index = pd.to_datetime(counts_pivot.index).normalize()
         else:
@@ -115,12 +116,14 @@ class ShortTermSimulator:
             sc_rng = np.random.default_rng(sc_seed)
 
             for date in dates:
-                # Compare Timestamp to Timestamp (both normalised to midnight)
+                # Compare normalised Timestamps to ensure consistent matching
                 date_key = date.normalize()
                 if counts_pivot is not None and date_key in counts_pivot.index:
                     n_today = max(0, int(counts_pivot.loc[date_key, sc]))
                 else:
-                    n_today = 20  # hard fallback — should not trigger after the Timestamp fix
+                    # Forecaster absent or date outside the forecast window;
+                    # use a conservative default so the simulation can proceed.
+                    n_today = 20
 
                 if n_today == 0:
                     continue
@@ -152,15 +155,19 @@ class ShortTermSimulator:
         Parameters
         ----------
         date : str or Timestamp
+            Target date; used to infer the GMM context and to anchor
+            ``arrival_time`` values.
         n_sessions : int
             Number of sessions to generate.
         seed : int, optional
+            Random seed passed to the GMM sampler.
         context : dict, optional
             Explicit GMM context (overrides date-derived context).
 
         Returns
         -------
         pd.DataFrame
+            Columns: arrival_hour, duration, energy, arrival_time, date, power_kw.
         """
         rng = np.random.default_rng(seed)
         sessions = self.gmm.sample(
@@ -172,7 +179,9 @@ class ShortTermSimulator:
         sessions["date"] = pd.Timestamp(date).date()
         sessions["power_kw"] = self._assign_power(n_sessions, rng)
 
-        # Cap energy by power × duration
+        # Cap energy by power × duration to enforce the physical constraint
+        # that a charger cannot deliver more energy than its rated power allows
+        # over the session duration.
         sessions["energy"] = np.minimum(
             sessions["energy"],
             sessions["power_kw"] * sessions["duration"],
@@ -180,6 +189,21 @@ class ShortTermSimulator:
         return sessions
 
     def _assign_power(self, n: int, rng: np.random.Generator) -> np.ndarray:
+        """Sample a charger power level for each session from the charger mix.
+
+        Parameters
+        ----------
+        n : int
+            Number of sessions to assign power levels to.
+        rng : np.random.Generator
+            Seeded random generator for reproducibility.
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape ``(n,)`` with power values in kW drawn according
+            to the proportions defined in ``self.charger_mix``.
+        """
         powers = list(self.charger_mix.keys())
         weights = np.array(list(self.charger_mix.values()), dtype=float)
         return rng.choice(powers, size=n, p=weights)
@@ -200,15 +224,18 @@ class ShortTermSimulator:
         Parameters
         ----------
         sessions : pd.DataFrame
-            Output of simulate() or simulate_single_day().
+            Output of :meth:`simulate` or :meth:`simulate_single_day`.
         date : str or Timestamp, optional
             Filter to a specific date.
         scenario : int
-            Scenario index.
+            Scenario index to select when *sessions* contains multiple scenarios.
 
         Returns
         -------
-        pd.Series with DatetimeIndex at resolution_min intervals.
+        pd.Series
+            Instantaneous aggregate load in kW, indexed by a
+            ``DatetimeIndex`` at ``resolution_min`` intervals.
+            Returns an empty Series when no sessions match the filters.
         """
         df = sessions.copy()
         if "scenario" in df.columns:

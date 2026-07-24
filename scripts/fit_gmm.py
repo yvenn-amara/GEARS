@@ -70,7 +70,7 @@ _SUPPORTED_EXTENSIONS = {
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Fit GEARS native GMMs on raw EV session data.",
+        description="Fit GEARS native GMMs or VAE on raw EV session data.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--output-dir", default="gears/data/gmm",
-        help="Directory where the fitted GMM is saved.",
+        help="Directory where the fitted model is saved.",
     )
     p.add_argument(
         "--year", type=int, default=None,
@@ -94,16 +94,29 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--n-components", default="auto",
-        help="GMM components: 'auto' (BIC) or a fixed integer.",
+        help="[GMM only] Components: 'auto' (BIC) or a fixed integer.",
     )
     p.add_argument(
         "--max-components", type=int, default=10,
-        help="Upper bound on BIC search when --n-components=auto.",
+        help="[GMM only] Upper bound on BIC search when --n-components=auto.",
     )
     p.add_argument(
         "--min-components", type=int, default=2,
-        help="Lower bound on BIC search when --n-components=auto.",
+        help="[GMM only] Lower bound on BIC search when --n-components=auto.",
     )
+    p.add_argument(
+        "--model-type", default="gmm", choices=["gmm", "vae"],
+        help="Model type to fit: 'gmm' (default) or 'vae' (conditional VAE).",
+    )
+    # VAE hyperparameters
+    p.add_argument("--vae-latent-dim", type=int, default=16, help="[VAE] Latent space dimension.")
+    p.add_argument("--vae-hidden-dim", type=int, default=256, help="[VAE] MLP hidden layer width.")
+    p.add_argument("--vae-n-layers", type=int, default=2, help="[VAE] Number of hidden layers.")
+    p.add_argument("--vae-epochs", type=int, default=50, help="[VAE] Training epochs.")
+    p.add_argument("--vae-batch-size", type=int, default=512, help="[VAE] Mini-batch size.")
+    p.add_argument("--vae-lr", type=float, default=3e-3, help="[VAE] Adam learning rate.")
+    p.add_argument("--vae-beta", type=float, default=1.0, help="[VAE] Beta coefficient for KL term.")
+    p.add_argument("--vae-score-n-samples", type=int, default=20, help="[VAE] IWAE K samples for scoring.")
     p.add_argument(
         "--no-filter-failed", dest="filter_failed", action="store_false",
         help=(
@@ -117,21 +130,18 @@ def parse_args() -> argparse.Namespace:
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
-    # ------------------------------------------------------------------
-    # New options
-    # ------------------------------------------------------------------
     p.add_argument(
         "--list", dest="list_gmms", action="store_true",
         help=(
-            "List all GMMs currently available in the registry "
-            "(uses --output-dir as the GMM directory) and exit. "
+            "List all models currently available in the registry "
+            "(uses --output-dir as the model directory) and exit. "
             "Does not require --input."
         ),
     )
     p.add_argument(
         "--overwrite", action="store_true",
         help=(
-            "Overwrite an existing GMM file without interactive confirmation. "
+            "Overwrite an existing model file without interactive confirmation. "
             "Without this flag, the script aborts if the target file already exists."
         ),
     )
@@ -267,7 +277,175 @@ def fit_and_save(
     max_components: int,
     max_samples: int,
     seed: int,
+    model_type: str = "gmm",
+    vae_latent_dim: int = 16,
+    vae_hidden_dim: int = 256,
+    vae_n_layers: int = 2,
+    vae_epochs: int = 50,
+    vae_batch_size: int = 512,
+    vae_lr: float = 3e-3,
+    vae_beta: float = 1.0,
+    vae_score_n_samples: int = 20,
 ) -> "EVSessionGMM":
+    from gears.models.gmm import EVSessionGMM
+    from gears.models.registry import NativeGMMRegistry
+
+    n_comp_arg = "auto" if n_components == "auto" else int(n_components)
+
+    logger.info(
+        "Fitting %s '%s' | sessions=%d | stratify_by=%s | max_samples_per_ctx=%d",
+        model_type.upper(), gmm_id, len(df), stratify_by, max_samples,
+    )
+    t0 = time.time()
+
+    if model_type == "vae":
+        model = EVSessionGMM(
+            model_type="vae",
+            stratify_by=stratify_by,
+            max_samples_per_context=max_samples,
+            random_state=seed,
+            vae_latent_dim=vae_latent_dim,
+            vae_hidden_dim=vae_hidden_dim,
+            vae_n_layers=vae_n_layers,
+            vae_epochs=vae_epochs,
+            vae_batch_size=vae_batch_size,
+            vae_lr=vae_lr,
+            vae_beta=vae_beta,
+            vae_score_n_samples=vae_score_n_samples,
+        )
+    else:
+        model = EVSessionGMM(
+            n_components=n_comp_arg,
+            min_components=min_components,
+            max_components=max_components,
+            covariance_type="full",
+            stratify_by=stratify_by,
+            max_samples_per_context=max_samples,
+            random_state=seed,
+        )
+
+    year_val = int(df["arrival_time"].dt.year.mode()[0]) if len(df) > 0 else None
+    model.fit(
+        df,
+        is_sample=False,
+        metadata={
+            "gmm_id": gmm_id,
+            "model_type": model_type,
+            "n_training_sessions": len(df),
+            "stratify_by": stratify_by,
+            "year": year_val,
+        },
+    )
+    elapsed = time.time() - t0
+    logger.info("Fitted '%s': %d contexts | %.1fs.", gmm_id, len(model.models_), elapsed)
+
+    bic_df = model.bic_summary()
+    logger.info(
+        "  n_components — mean=%.1f | min=%d | max=%d",
+        bic_df["n_components"].mean(),
+        bic_df["n_components"].min(),
+        bic_df["n_components"].max(),
+    )
+
+    registry   = NativeGMMRegistry(gmm_dir=output_dir)
+    saved_path = registry.save(gmm_id, model)
+    logger.info("  Saved → %s", saved_path)
+    return model
+
+
+# ── Entry point ---------------------------------------------------------------
+
+def main() -> None:
+    args = parse_args()
+    logging.getLogger().setLevel(getattr(logging, args.log_level))
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # --list: display registry and exit immediately
+    if args.list_gmms:
+        list_gmms(output_dir)
+        sys.exit(0)
+
+    # --input is required for all other operations
+    if args.input is None:
+        logger.error(
+            "--input is required unless --list is used.\n"
+            "  Example: python scripts/fit_gmm.py --input /path/to/sessions.csv\n"
+            "  Run with --list to see existing models."
+        )
+        sys.exit(1)
+
+    try:
+        input_path = _validate_input_path(args.input)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
+
+    n_components = "auto" if args.n_components == "auto" else int(args.n_components)
+
+    # Determine gmm_id from model_type
+    gmm_id = "french_vae_sample" if args.model_type == "vae" else "french"
+
+    # Overwrite guard — abort early before spending time on fitting
+    _check_overwrite(output_dir, gmm_id, args.overwrite)
+
+    try:
+        df = load_data(input_path, year=args.year, filter_failed=args.filter_failed)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
+
+    if len(df) == 0:
+        logger.error("No sessions found after loading/filtering. Exiting.")
+        sys.exit(1)
+
+    # Omit 'department' from stratification when only one is present
+    has_dept = "department" in df.columns and df["department"].nunique() > 1
+    if not has_dept:
+        logger.warning(
+            "Column 'department' is missing or has a single unique value. "
+            "Stratifying by ['location_type', 'day_of_week', 'season'] only."
+        )
+        stratify = ["location_type", "day_of_week", "season"]
+    else:
+        stratify = ["location_type", "department", "day_of_week", "season"]
+
+    try:
+        model = fit_and_save(
+            df=df,
+            gmm_id=gmm_id,
+            stratify_by=stratify,
+            output_dir=output_dir,
+            n_components=n_components,
+            min_components=args.min_components,
+            max_components=args.max_components,
+            max_samples=args.max_samples,
+            seed=args.seed,
+            model_type=args.model_type,
+            vae_latent_dim=args.vae_latent_dim,
+            vae_hidden_dim=args.vae_hidden_dim,
+            vae_n_layers=args.vae_n_layers,
+            vae_epochs=args.vae_epochs,
+            vae_batch_size=args.vae_batch_size,
+            vae_lr=args.vae_lr,
+            vae_beta=args.vae_beta,
+            vae_score_n_samples=args.vae_score_n_samples,
+        )
+    except Exception as exc:
+        logger.error("Fitting failed: %s", exc, exc_info=True)
+        sys.exit(1)
+
+    logger.info("=" * 60)
+    logger.info("Done — %d contexts fitted.", len(model.models_))
+    logger.info(
+        "Verify: python -c \"import gears; print(gears.NativeGMMRegistry().list())\""
+    )
+
+
+if __name__ == "__main__":
+    main()
+
     from gears.models.gmm import EVSessionGMM
     from gears.models.registry import NativeGMMRegistry
 

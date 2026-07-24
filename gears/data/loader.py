@@ -41,26 +41,35 @@ def load_sessions(
     Load and validate EV charging sessions from various sources.
 
     Automatically detects the French national dataset format and applies
-    the appropriate preprocessing, including unit conversions (Wh -> kWh,
-    min -> hours) and filtering of failed sessions.
+    the appropriate preprocessing, including unit conversions (Wh → kWh,
+    minutes → hours) and filtering of failed sessions.
 
     Parameters
     ----------
-    source : str | Path | pd.DataFrame
-        Path to file (CSV / Excel / Parquet / JSON / Pickle) or a DataFrame.
+    source : str, Path, or pd.DataFrame
+        Path to file (CSV / Excel / Parquet / JSON / Pickle) or an
+        already-loaded DataFrame.
     strict : bool
         If True, raise on data quality issues instead of dropping rows.
     filter_failed : bool
-        French data only: drop sessions with succes_session != 't'.
+        French data only: drop sessions with ``succes_session != 't'``.
     verbose : bool
         Print a short summary after loading.
     **kwargs
-        Extra keyword arguments forwarded to the underlying reader.
+        Extra keyword arguments forwarded to the underlying reader
+        (e.g. ``sep=';'`` for CSV files).
 
     Returns
     -------
     pd.DataFrame
-        Validated DataFrame with canonical columns and derived features.
+        Validated DataFrame with canonical columns and derived calendar
+        features (``hour``, ``day_of_week``, ``season``, ``date``, …).
+
+    Examples
+    --------
+    >>> df = load_sessions("data/sessions.parquet")
+    >>> df = load_sessions("data/french_irve.csv", sep=";", verbose=False)
+    >>> df = load_sessions(raw_df, strict=True, verbose=False)
     """
     if isinstance(source, pd.DataFrame):
         raw = source.copy()
@@ -82,6 +91,24 @@ def load_sessions(
 
 
 def _dispatch_file(path: Path, **kwargs) -> pd.DataFrame:
+    """
+    Dispatch a file path to the correct reader based on its extension.
+
+    Parameters
+    ----------
+    path : Path
+    **kwargs
+        Forwarded to the reader.
+
+    Returns
+    -------
+    pd.DataFrame
+
+    Raises
+    ------
+    ValueError
+        If the file extension is not in :data:`_SUPPORTED_EXTENSIONS`.
+    """
     ext = path.suffix.lower()
     method_name = _SUPPORTED_EXTENSIONS.get(ext)
     if method_name is None:
@@ -93,8 +120,10 @@ def _dispatch_file(path: Path, **kwargs) -> pd.DataFrame:
 
 
 def _load_csv(path: Path, **kwargs) -> pd.DataFrame:
+    """Read a CSV or TSV file, auto-detecting the delimiter."""
     sep = kwargs.pop("sep", None)
     if sep is None:
+        # Sniff the delimiter from the first 2 KB of the file.
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             sample = f.read(2048)
         sep = ";" if sample.count(";") > sample.count(",") else ","
@@ -102,22 +131,27 @@ def _load_csv(path: Path, **kwargs) -> pd.DataFrame:
 
 
 def _load_excel(path: Path, **kwargs) -> pd.DataFrame:
+    """Read an Excel file (.xlsx or .xls)."""
     return pd.read_excel(path, **kwargs)
 
 
 def _load_parquet(path: Path, **kwargs) -> pd.DataFrame:
+    """Read a Parquet file."""
     return pd.read_parquet(path, **kwargs)
 
 
 def _load_json(path: Path, **kwargs) -> pd.DataFrame:
+    """Read a JSON file (records or split orientation)."""
     return pd.read_json(path, **kwargs)
 
 
 def _load_jsonl(path: Path, **kwargs) -> pd.DataFrame:
+    """Read a JSON-Lines file (one record per line)."""
     return pd.read_json(path, lines=True, **kwargs)
 
 
 def _load_pickle(path: Path, **kwargs) -> pd.DataFrame:
+    """Read a pickle file (.pkl or .pickle)."""
     return pd.read_pickle(path, **kwargs)
 
 
@@ -131,21 +165,34 @@ def make_demo_data(
     """
     Generate a realistic synthetic EV sessions dataset for testing and demos.
 
+    Session parameters (arrival hour, duration, energy) are drawn from a
+    Gaussian mixture parameterised per ``location_type``, mimicking the
+    empirical distributions observed in real datasets.
+
     Parameters
     ----------
     n : int
         Number of sessions to generate.
     location_type : str
-        'work', 'home', or 'public'.
+        Charging context: ``'work'``, ``'home'``, or ``'public'``.
     seed : int
         Random seed for reproducibility.
     start_date, end_date : str
-        Date range for arrival times.
+        Date range from which arrival dates are sampled uniformly.
 
     Returns
     -------
     pd.DataFrame
-        Validated sessions DataFrame.
+        Validated sessions DataFrame (same schema as :func:`load_sessions`
+        output), with ``n`` rows and canonical columns.
+
+    Examples
+    --------
+    >>> df = make_demo_data(n=500, location_type="home", seed=0)
+    >>> df.shape[0]
+    500
+    >>> df["location_type"].unique()
+    array(['home'], dtype=object)
     """
     rng = np.random.default_rng(seed)
 

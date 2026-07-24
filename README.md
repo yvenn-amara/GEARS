@@ -1,6 +1,6 @@
-# GEARS — EV Smart Charging Simulator
+# GEARS — EV Charging Simulator
 
-**GEARS** (Gaussian EV Arrival & Recharge Simulator) is an open-source Python package for
+**GEARS** (Generating Electric Vehicle Recharging Sessions) is an open-source Python package for
 simulating, forecasting, and optimising electric-vehicle charging demand at any scale —
 from a single site to a national fleet.
 

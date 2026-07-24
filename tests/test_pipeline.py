@@ -1,8 +1,7 @@
 """Integration tests for GEARSModel pipeline."""
-import numpy as np
 import pandas as pd
 import pytest
-from gears import GEARSModel, load_sessions
+from gears import GEARSModel
 from gears.data.loader import make_demo_data
 
 

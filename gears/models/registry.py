@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import joblib
 import pandas as pd
+
+if TYPE_CHECKING:
+    from gears.models.gmm import EVSessionGMM
 
 logger = logging.getLogger(__name__)
 
@@ -91,20 +94,46 @@ class NativeGMMRegistry:
             ),
             "stratify_by": ["location_type", "department", "day_of_week", "season"],
             "is_sample": False,
+            "model_type": "gmm",
+        },
+        "french_vae_sample": {
+            "filename": "gmm_vae_french_sample.joblib",
+            "description": (
+                "French EV sample dataset — shared conditional VAE stratified by "
+                "location_type × département × season × day_of_week "
+                "(top-5 departments, is_sample=True, model_type='vae')."
+            ),
+            "stratify_by": ["location_type", "department", "day_of_week", "season"],
+            "is_sample": True,
+            "model_type": "vae",
         },
     }
 
     def __init__(self, gmm_dir: Optional[Path] = None):
+        """
+        Parameters
+        ----------
+        gmm_dir : Path, optional
+            Override the default GMM storage directory
+            (``gears/data/gmm/``).  The directory is created if missing.
+        """
         self.gmm_dir = Path(gmm_dir) if gmm_dir else _GMM_DIR
         self.gmm_dir.mkdir(parents=True, exist_ok=True)
 
     def list(self) -> pd.DataFrame:
-        """Return a DataFrame listing all available native GMMs."""
+        """Return a DataFrame listing all available native models.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: gmm_id, model_type, description, available, is_sample, stratify_by.
+        """
         rows = []
         for gmm_id, meta in self._CATALOGUE.items():
             path = self.gmm_dir / meta["filename"]
             rows.append({
                 "gmm_id": gmm_id,
+                "model_type": meta.get("model_type", "gmm"),
                 "description": meta["description"],
                 "available": path.exists(),
                 "is_sample": meta.get("is_sample", False),
@@ -125,7 +154,16 @@ class NativeGMMRegistry:
 
         Returns
         -------
-        EVSessionGMM (fitted)
+        EVSessionGMM
+            Fitted GMM instance.  Falls back to a synthetic model when the
+            joblib file is absent (e.g. in CI without large artefacts).
+
+        Raises
+        ------
+        ValueError
+            If *gmm_id* is not in the catalogue.
+        TypeError
+            If the file contains an object that is not an ``EVSessionGMM``.
         """
         from gears.models.gmm import EVSessionGMM
 
@@ -154,21 +192,33 @@ class NativeGMMRegistry:
         return gmm
 
     def _generate_fallback(self, gmm_id: str) -> "EVSessionGMM":
-        """Generate a lightweight synthetic GMM when native data is absent.
+        """Generate a lightweight synthetic model when the native file is absent.
 
-        The fallback covers all four location types so the context structure
-        of the real ``gmm_french.joblib`` is replicated at a small scale.
+        For ``model_type="gmm"`` (default), fits a small sklearn GMM.
+        For ``model_type="vae"``, fits a tiny CVAE (CPU, very small dataset).
+
+        Parameters
+        ----------
+        gmm_id : str
+            Registry ID used to tag the fallback metadata.
+
+        Returns
+        -------
+        EVSessionGMM
+            Fitted synthetic model with ``is_sample=True``.
         """
         from gears.data.loader import make_demo_data
         from gears.models.gmm import EVSessionGMM
 
+        meta = self._CATALOGUE.get(gmm_id, {})
+        model_type = meta.get("model_type", "gmm")
+
         logger.info(
-            "Native GMM '%s' not found — generating synthetic fallback. "
-            "Run `python scripts/fit_gmm.py --input <data>` to fit on real data.",
-            gmm_id,
+            "Native model '%s' not found — generating synthetic fallback (model_type=%s). "
+            "Run `python scripts/fit_gmm.py --model-type %s --input <data>` to fit on real data.",
+            gmm_id, model_type, model_type,
         )
 
-        # Build a small synthetic dataset covering all four location types
         frames = [
             make_demo_data(n=500, location_type=lt, seed=i)
             for i, lt in enumerate(["work", "home", "public", "heavy"])
@@ -176,13 +226,22 @@ class NativeGMMRegistry:
         import pandas as pd
         df = pd.concat(frames, ignore_index=True)
 
-        gmm = EVSessionGMM(
-            n_components="auto",
-            max_components=5,
-            stratify_by=["location_type", "day_of_week", "season"],
-        ).fit(df, is_sample=True, metadata={"synthetic_fallback": True, "gmm_id": gmm_id})
+        if model_type == "vae":
+            model = EVSessionGMM(
+                model_type="vae",
+                stratify_by=["location_type", "day_of_week", "season"],
+                vae_epochs=5,
+                vae_hidden_dim=64,
+                vae_latent_dim=8,
+            ).fit(df, is_sample=True, metadata={"synthetic_fallback": True, "gmm_id": gmm_id})
+        else:
+            model = EVSessionGMM(
+                n_components="auto",
+                max_components=5,
+                stratify_by=["location_type", "day_of_week", "season"],
+            ).fit(df, is_sample=True, metadata={"synthetic_fallback": True, "gmm_id": gmm_id})
 
-        return gmm
+        return model
 
     def save(self, gmm_id: str, gmm) -> Path:
         """
@@ -197,7 +256,13 @@ class NativeGMMRegistry:
 
         Returns
         -------
-        Path to saved file.
+        Path
+            Path of the saved joblib file.
+
+        Raises
+        ------
+        ValueError
+            If *gmm_id* is not in the catalogue.
         """
         if gmm_id not in self._CATALOGUE:
             raise ValueError(f"Unknown GMM ID '{gmm_id}'. Available: {list(self._CATALOGUE)}")
@@ -233,7 +298,8 @@ class NativeGMMRegistry:
 
         Returns
         -------
-        sklearn.mixture.GaussianMixture (fitted)
+        sklearn.mixture.GaussianMixture
+            Fitted GaussianMixture for the requested stratum.
         """
         gmm = self.load(gmm_id)
         return gmm.get_sklearn_gmm(
@@ -294,12 +360,28 @@ class ModelRegistry:
         hf_repo_id: str = HF_REPO_ID,
         cache_dir: Optional[Path] = None,
     ):
+        """
+        Parameters
+        ----------
+        hf_repo_id : str
+            Hugging Face Hub repository identifier.
+        cache_dir : Path, optional
+            Local directory for cached bundles.
+            Defaults to ``~/.cache/gears/models``.
+        """
         self.hf_repo_id = hf_repo_id
         self.cache_dir = Path(cache_dir) if cache_dir else _LOCAL_CACHE
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def list_models(self) -> pd.DataFrame:
-        """Return a DataFrame listing all available pre-trained models."""
+        """Return a DataFrame listing all available pre-trained models.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per catalogue entry with columns mirroring the
+            ``_CATALOGUE`` dict keys.
+        """
         rows = [{"model_id": mid, **meta} for mid, meta in _CATALOGUE.items()]
         return pd.DataFrame(rows)
 
@@ -316,7 +398,13 @@ class ModelRegistry:
 
         Returns
         -------
-        dict with keys 'gmm', 'forecaster' (optional), 'metadata'.
+        dict
+            Keys: ``'gmm'``, ``'forecaster'`` (optional), ``'metadata'``.
+
+        Raises
+        ------
+        ValueError
+            If *model_id* is not in the catalogue.
         """
         if model_id not in _CATALOGUE:
             raise ValueError(
@@ -340,7 +428,24 @@ class ModelRegistry:
         forecaster=None,
         metadata: Optional[dict] = None,
     ) -> Path:
-        """Serialize a model bundle to the local cache."""
+        """Serialize a model bundle to the local cache.
+
+        Parameters
+        ----------
+        model_id : str
+            Identifier used as the filename stem.
+        gmm : EVSessionGMM
+            Fitted GMM to include in the bundle.
+        forecaster : optional
+            Fitted forecaster object, or None.
+        metadata : dict, optional
+            Arbitrary key-value metadata to embed in the bundle.
+
+        Returns
+        -------
+        Path
+            Path of the saved joblib file.
+        """
         bundle = {"gmm": gmm, "forecaster": forecaster, "metadata": metadata or {}}
         path = self.cache_dir / f"{model_id}.joblib"
         joblib.dump(bundle, path)
@@ -348,7 +453,22 @@ class ModelRegistry:
         return path
 
     def upload_to_hub(self, model_id: str, token: Optional[str] = None) -> None:
-        """Upload a locally cached bundle to HF Hub."""
+        """Upload a locally cached bundle to HF Hub.
+
+        Parameters
+        ----------
+        model_id : str
+            Local bundle identifier; the file must exist in ``cache_dir``.
+        token : str, optional
+            Hugging Face authentication token.  Uses the cached token if None.
+
+        Raises
+        ------
+        ImportError
+            If ``huggingface-hub`` is not installed.
+        FileNotFoundError
+            If the local bundle does not exist.
+        """
         try:
             from huggingface_hub import HfApi
         except ImportError:
@@ -368,7 +488,18 @@ class ModelRegistry:
         logger.info("Uploaded '%s' to %s.", model_id, self.hf_repo_id)
 
     def _download(self, model_id: str) -> Path:
-        """Try HF Hub, fall back to synthetic demo bundle."""
+        """Try HF Hub first; fall back to a synthetic demo bundle.
+
+        Parameters
+        ----------
+        model_id : str
+            Catalogue identifier.
+
+        Returns
+        -------
+        Path
+            Local path of the downloaded or generated bundle.
+        """
         filename = _CATALOGUE[model_id]["hf_filename"]
         dest = self.cache_dir / f"{model_id}.joblib"
 
@@ -390,6 +521,24 @@ class ModelRegistry:
             return self._generate_demo_bundle(model_id, dest)
 
     def _generate_demo_bundle(self, model_id: str, dest: Path) -> Path:
+        """Generate and cache a synthetic demo bundle when HF Hub is unreachable.
+
+        The synthetic bundle contains a small GMM fitted on generated data and
+        a probabilistic forecaster.  It lets demos and tests run offline
+        without real training data.
+
+        Parameters
+        ----------
+        model_id : str
+            Catalogue entry used for location type and session count defaults.
+        dest : Path
+            Destination file path for the serialised bundle.
+
+        Returns
+        -------
+        Path
+            Path of the saved bundle (equal to *dest*).
+        """
         from gears.data.loader import make_demo_data
         from gears.models.gmm import EVSessionGMM
         from gears.models.forecaster import SessionForecaster
@@ -425,6 +574,16 @@ _default_registry = None
 
 
 def _get_default_registry() -> NativeGMMRegistry:
+    """Return the module-level singleton ``NativeGMMRegistry``.
+
+    The registry is instantiated lazily on first call and reused thereafter
+    so that the GMM joblib file is not reloaded for every ``get_gmm()``
+    invocation within the same Python session.
+
+    Returns
+    -------
+    NativeGMMRegistry
+    """
     global _default_registry
     if _default_registry is None:
         _default_registry = NativeGMMRegistry()
