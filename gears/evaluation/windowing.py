@@ -10,8 +10,6 @@ mêmes historiques.").
 
 from __future__ import annotations
 
-from typing import Tuple
-
 import pandas as pd
 
 
@@ -19,7 +17,7 @@ def sessions_in_last_n_occurrences(
     df: pd.DataFrame,
     target_date: pd.Timestamp,
     n: int,
-) -> Tuple[pd.DataFrame, dict]:
+) -> tuple[pd.DataFrame, dict]:
     """
     Pool sessions from the ``n`` most recent occurrences of ``target_date``'s
     weekday, strictly before ``target_date`` (no leakage).

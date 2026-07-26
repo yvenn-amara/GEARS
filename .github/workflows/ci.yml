@@ -35,6 +35,10 @@ jobs:
       - name: Install package and dev dependencies
         run: |
           python -m pip install --upgrade pip
+          # CPU-only torch wheel first (avoids pulling ~2GB of CUDA deps on
+          # runners with no GPU); pip then sees torch>=2.0 already satisfied
+          # when resolving the `dev` extra below.
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[dev]"
 
       - name: Lint with ruff

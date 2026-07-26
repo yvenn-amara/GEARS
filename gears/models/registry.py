@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, ClassVar
 
 import joblib
 import pandas as pd
@@ -84,7 +84,7 @@ class NativeGMMRegistry:
     #   EVSessionGMM.load("gears/data/gmm/gmm_french_sample.joblib")
     # ------------------------------------------------------------------
 
-    _CATALOGUE: dict[str, dict] = {
+    _CATALOGUE: ClassVar[dict[str, dict]] = {
         "french": {
             "filename": "gmm_french.joblib",
             "description": (
@@ -109,7 +109,7 @@ class NativeGMMRegistry:
         },
     }
 
-    def __init__(self, gmm_dir: Optional[Path] = None):
+    def __init__(self, gmm_dir: Path | None = None):
         """
         Parameters
         ----------
@@ -141,7 +141,7 @@ class NativeGMMRegistry:
             })
         return pd.DataFrame(rows)
 
-    def load(self, gmm_id: str) -> "EVSessionGMM":
+    def load(self, gmm_id: str) -> EVSessionGMM:
         """
         Load a pre-fitted GMM from the package.
 
@@ -191,7 +191,7 @@ class NativeGMMRegistry:
         logger.info("Loaded native GMM '%s' from %s.", gmm_id, path)
         return gmm
 
-    def _generate_fallback(self, gmm_id: str) -> "EVSessionGMM":
+    def _generate_fallback(self, gmm_id: str) -> EVSessionGMM:
         """Generate a lightweight synthetic model when the native file is absent.
 
         For ``model_type="gmm"`` (default), fits a small sklearn GMM.
@@ -358,7 +358,7 @@ class ModelRegistry:
     def __init__(
         self,
         hf_repo_id: str = HF_REPO_ID,
-        cache_dir: Optional[Path] = None,
+        cache_dir: Path | None = None,
     ):
         """
         Parameters
@@ -426,7 +426,7 @@ class ModelRegistry:
         model_id: str,
         gmm,
         forecaster=None,
-        metadata: Optional[dict] = None,
+        metadata: dict | None = None,
     ) -> Path:
         """Serialize a model bundle to the local cache.
 
@@ -452,7 +452,7 @@ class ModelRegistry:
         logger.info("Saved bundle '%s' to %s.", model_id, path)
         return path
 
-    def upload_to_hub(self, model_id: str, token: Optional[str] = None) -> None:
+    def upload_to_hub(self, model_id: str, token: str | None = None) -> None:
         """Upload a locally cached bundle to HF Hub.
 
         Parameters
@@ -512,7 +512,7 @@ class ModelRegistry:
                 local_dir=str(self.cache_dir),
             )
             return Path(path)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - HF Hub download is best-effort; fall back to local cache on any failure
             logger.warning(
                 "Could not download '%s' from HF Hub (%s). "
                 "Generating synthetic demo bundle instead.",
@@ -540,8 +540,8 @@ class ModelRegistry:
             Path of the saved bundle (equal to *dest*).
         """
         from gears.data.loader import make_demo_data
-        from gears.models.gmm import EVSessionGMM
         from gears.models.forecaster import SessionForecaster
+        from gears.models.gmm import EVSessionGMM
 
         meta = _CATALOGUE[model_id]
         loc = meta.get("location_type", "work")
@@ -595,7 +595,7 @@ def get_gmm(
     departement: str,
     saison: str,
     day_of_week: int,
-) -> "EVSessionGMM":
+) -> EVSessionGMM:
     """
     Retrieve the pre-fitted French EVSessionGMM for a given stratum.
 

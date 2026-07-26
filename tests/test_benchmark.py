@@ -19,11 +19,10 @@ from gears.evaluation import benchmark as bm
 from gears.evaluation.benchmark import (
     RESULT_COLUMNS,
     crps_ensemble,
-    run_rolling_origin_benchmark,
-    run_benchmark_for_datasets,
     eval_window_for,
+    run_benchmark_for_datasets,
+    run_rolling_origin_benchmark,
 )
-
 
 # ---------------------------------------------------------------------------
 # Synthetic dataset builders
@@ -149,7 +148,7 @@ def test_future_session_does_not_change_earlier_origin_pool():
     # Evaluate a fixed origin well inside the dense history, before the
     # window even needs the tail of the dataset.
     origin = pd.Timestamp("2024-02-05")
-    common_kwargs = dict(x_grid=[4], horizons=[1], n_scenarios=2, verbose=False)
+    common_kwargs = {"x_grid": [4], "horizons": [1], "n_scenarios": 2, "verbose": False}
 
     res_before = run_rolling_origin_benchmark(
         base, "future_check",

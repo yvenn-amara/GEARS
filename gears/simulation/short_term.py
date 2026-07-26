@@ -9,13 +9,12 @@ and the SessionForecaster for daily session counts.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
 
-from gears.models.gmm import EVSessionGMM
 from gears.models.forecaster import SessionForecaster
+from gears.models.gmm import EVSessionGMM
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +45,8 @@ class ShortTermSimulator:
     def __init__(
         self,
         gmm: EVSessionGMM,
-        forecaster: Optional[SessionForecaster] = None,
-        charger_mix: Optional[dict[float, float]] = None,
+        forecaster: SessionForecaster | None = None,
+        charger_mix: dict[float, float] | None = None,
         resolution_min: int = 30,
     ):
         self.gmm = gmm
@@ -64,10 +63,10 @@ class ShortTermSimulator:
 
     def simulate(
         self,
-        start_date: Union[str, pd.Timestamp],
+        start_date: str | pd.Timestamp,
         horizon: int = 7,
         n_scenarios: int = 10,
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ) -> pd.DataFrame:
         """
         Simulate sessions over a multi-day horizon across N scenarios.
@@ -144,10 +143,10 @@ class ShortTermSimulator:
 
     def simulate_single_day(
         self,
-        date: Union[str, pd.Timestamp],
+        date: str | pd.Timestamp,
         n_sessions: int = 20,
-        seed: Optional[int] = None,
-        context: Optional[dict] = None,
+        seed: int | None = None,
+        context: dict | None = None,
     ) -> pd.DataFrame:
         """
         Simulate sessions for a single day.
@@ -215,7 +214,7 @@ class ShortTermSimulator:
     def compute_load_curve(
         self,
         sessions: pd.DataFrame,
-        date: Optional[Union[str, pd.Timestamp]] = None,
+        date: str | pd.Timestamp | None = None,
         scenario: int = 0,
     ) -> pd.Series:
         """

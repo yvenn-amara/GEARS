@@ -6,18 +6,17 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional, Union
 
 import pandas as pd
 
 from gears.data.loader import load_sessions
-from gears.models.gmm import EVSessionGMM
 from gears.models.forecaster import SessionForecaster
+from gears.models.gmm import EVSessionGMM
 from gears.models.registry import ModelRegistry, NativeGMMRegistry
-from gears.simulation.short_term import ShortTermSimulator
-from gears.simulation.medium_term import MediumTermSimulator
-from gears.smart_charging.optimizer import SmartChargingOptimizer
 from gears.output.aggregator import OutputAggregator
+from gears.simulation.medium_term import MediumTermSimulator
+from gears.simulation.short_term import ShortTermSimulator
+from gears.smart_charging.optimizer import SmartChargingOptimizer
 
 logger = logging.getLogger(__name__)
 
@@ -79,13 +78,13 @@ class GEARSModel:
 
     def __init__(
         self,
-        n_components: Union[int, str] = "auto",
-        stratify_by: Optional[list[str]] = None,
+        n_components: int | str = "auto",
+        stratify_by: list[str] | None = None,
         forecaster_method: str = "sarima",
-        charger_mix: Optional[dict[float, float]] = None,
+        charger_mix: dict[float, float] | None = None,
         n_scenarios: int = 10,
         resolution_min: int = 30,
-        max_samples_per_context: Optional[int] = None,
+        max_samples_per_context: int | None = None,
         forecaster_use_holidays: bool = True,
         forecaster_country: str = "FR",
         random_state: int = 42,
@@ -101,10 +100,10 @@ class GEARSModel:
         self.forecaster_country = forecaster_country
         self.random_state = random_state
 
-        self.gmm_: Optional[EVSessionGMM] = None
-        self.forecaster_: Optional[SessionForecaster] = None
-        self._short_sim: Optional[ShortTermSimulator] = None
-        self._medium_sim: Optional[MediumTermSimulator] = None
+        self.gmm_: EVSessionGMM | None = None
+        self.forecaster_: SessionForecaster | None = None
+        self._short_sim: ShortTermSimulator | None = None
+        self._medium_sim: MediumTermSimulator | None = None
         self.aggregator_ = OutputAggregator(resolution_min=resolution_min)
         self.metadata_: dict = {}
         self.is_fitted_: bool = False
@@ -117,10 +116,10 @@ class GEARSModel:
     def from_pretrained(
         cls,
         model_id: str,
-        hf_repo_id: Optional[str] = None,
-        cache_dir: Optional[Union[str, Path]] = None,
+        hf_repo_id: str | None = None,
+        cache_dir: str | Path | None = None,
         **kwargs,
-    ) -> "GEARSModel":
+    ) -> GEARSModel:
         """
         Load a pre-trained model bundle from the GEARS registry.
 
@@ -165,9 +164,9 @@ class GEARSModel:
     def from_native_gmm(
         cls,
         gmm_id: str = "french",
-        gmm_dir: Optional[Path] = None,
+        gmm_dir: Path | None = None,
         **kwargs,
-    ) -> "GEARSModel":
+    ) -> GEARSModel:
         """
         Build a GEARSModel from the pre-fitted unified French GMM.
 
@@ -204,13 +203,13 @@ class GEARSModel:
 
     def fit(
         self,
-        data: Union[str, Path, pd.DataFrame],
+        data: str | Path | pd.DataFrame,
         strict: bool = False,
         filter_failed: bool = True,
         verbose: bool = True,
-        recent_months: Optional[int] = None,
+        recent_months: int | None = None,
         **loader_kwargs,
-    ) -> "GEARSModel":
+    ) -> GEARSModel:
         """
         Fit the full GEARS pipeline on a sessions dataset.
 
@@ -287,11 +286,11 @@ class GEARSModel:
 
     def simulate_short_term(
         self,
-        start_date: Union[str, pd.Timestamp],
+        start_date: str | pd.Timestamp,
         horizon: int = 7,
-        n_scenarios: Optional[int] = None,
-        n_sessions: Optional[int] = None,
-        seed: Optional[int] = None,
+        n_scenarios: int | None = None,
+        n_sessions: int | None = None,
+        seed: int | None = None,
     ) -> pd.DataFrame:
         """
         Simulate individual EV sessions for a short-term horizon.
@@ -339,12 +338,12 @@ class GEARSModel:
         self,
         years: float = 3,
         annual_growth_rate: float = 0.15,
-        start_date: Optional[Union[str, pd.Timestamp]] = None,
+        start_date: str | pd.Timestamp | None = None,
         output: str = "daily_energy",
-        weather_factor: Optional[dict[str, float]] = None,
+        weather_factor: dict[str, float] | None = None,
         growth_model: str = "linear",
-        n_scenarios: Optional[int] = None,
-        charger_mix: Optional[dict[float, float]] = None,
+        n_scenarios: int | None = None,
+        charger_mix: dict[float, float] | None = None,
         saturation_factor: float = 3.0,
     ) -> pd.DataFrame:
         """
@@ -476,7 +475,7 @@ class GEARSModel:
         """
         return self.aggregator_.hourly_profile(sessions, **kwargs)
 
-    def export(self, df: pd.DataFrame, path: Union[str, Path], **kwargs) -> None:
+    def export(self, df: pd.DataFrame, path: str | Path, **kwargs) -> None:
         """
         Export a DataFrame to file.
 
@@ -500,7 +499,7 @@ class GEARSModel:
     # Persistence
     # ------------------------------------------------------------------
 
-    def save(self, path: Union[str, Path]) -> None:
+    def save(self, path: str | Path) -> None:
         """
         Save the full GEARSModel to disk using joblib.
 
@@ -520,7 +519,7 @@ class GEARSModel:
         logger.info("GEARSModel saved to %s.", path)
 
     @classmethod
-    def load(cls, path: Union[str, Path]) -> "GEARSModel":
+    def load(cls, path: str | Path) -> GEARSModel:
         """
         Load a GEARSModel from disk.
 

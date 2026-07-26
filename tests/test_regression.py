@@ -56,7 +56,6 @@ from gears.models.forecaster import (
 from gears.smart_charging.optimizer import SmartChargingOptimizer
 from gears.utils import make_price_signal
 
-
 # ---------------------------------------------------------------------------
 # Helpers shared across tests
 # ---------------------------------------------------------------------------

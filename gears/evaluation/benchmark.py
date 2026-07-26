@@ -36,14 +36,14 @@ full specification this module implements. In particular:
 from __future__ import annotations
 
 import logging
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
 
 from gears.evaluation.windowing import sessions_in_last_n_occurrences
-from gears.models.persistence_sampler import PersistenceSessionSampler
 from gears.models.gmm import EVSessionGMM
+from gears.models.persistence_sampler import PersistenceSessionSampler
 from gears.utils import distribution_comparison, forecast_metrics
 
 logger = logging.getLogger(__name__)
@@ -321,7 +321,7 @@ def run_rolling_origin_benchmark(
     dataset_name: str,
     x_grid: Sequence[int] = DEFAULT_X_GRID,
     horizons: Sequence[int] = DEFAULT_HORIZONS,
-    eval_window_days: Optional[int] = None,
+    eval_window_days: int | None = None,
     min_sessions_for_fit: int = MIN_SESSIONS_FOR_FIT,
     n_scenarios: int = DEFAULT_N_SCENARIOS,
     n_components: int = 1,
@@ -530,12 +530,12 @@ def run_sarima_sanity_check(
         model = GEARSModel(n_components=1, forecaster_method="sarima", random_state=random_state)
         try:
             model.fit(train_df, verbose=False)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - sanity check must not abort the benchmark on any model failure
             logger.warning("SARIMA sanity check: fit failed for %s origin=%s: %s",
                             dataset_name, origin, e)
-            rows.append(dict(dataset=dataset_name, origin=origin, target_date=pd.NaT,
-                              day_offset=np.nan, true_count=np.nan,
-                              forecast_mean_count=np.nan, status=f"fit_failed: {e}"))
+            rows.append({"dataset": dataset_name, "origin": origin, "target_date": pd.NaT,
+                              "day_offset": np.nan, "true_count": np.nan,
+                              "forecast_mean_count": np.nan, "status": f"fit_failed: {e}"})
             continue
 
         try:
@@ -543,12 +543,12 @@ def run_sarima_sanity_check(
                 start_date=origin + pd.Timedelta(days=1), horizon=max_h,
                 n_scenarios=n_scenarios, seed=random_state,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - sanity check must not abort the benchmark on any simulate failure
             logger.warning("SARIMA sanity check: simulate failed for %s origin=%s: %s",
                             dataset_name, origin, e)
-            rows.append(dict(dataset=dataset_name, origin=origin, target_date=pd.NaT,
-                              day_offset=np.nan, true_count=np.nan,
-                              forecast_mean_count=np.nan, status=f"simulate_failed: {e}"))
+            rows.append({"dataset": dataset_name, "origin": origin, "target_date": pd.NaT,
+                              "day_offset": np.nan, "true_count": np.nan,
+                              "forecast_mean_count": np.nan, "status": f"simulate_failed: {e}"})
             continue
 
         for day_offset in horizons:
@@ -561,11 +561,11 @@ def run_sarima_sanity_check(
                 forecast_mean = float(counts_by_scenario.mean())
             else:
                 forecast_mean = 0.0
-            rows.append(dict(
-                dataset=dataset_name, origin=origin, target_date=target_date,
-                day_offset=day_offset, true_count=true_count,
-                forecast_mean_count=forecast_mean, status="ok",
-            ))
+            rows.append({
+                "dataset": dataset_name, "origin": origin, "target_date": target_date,
+                "day_offset": day_offset, "true_count": true_count,
+                "forecast_mean_count": forecast_mean, "status": "ok",
+            })
 
     return pd.DataFrame(rows)
 

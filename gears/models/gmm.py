@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 import warnings
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Literal
 
 import joblib
 import numpy as np
@@ -164,13 +164,13 @@ class EVSessionGMM:
 
     def __init__(
         self,
-        n_components: Union[int, str] = "auto",
+        n_components: int | str = "auto",
         min_components: int = 2,
         max_components: int = 10,
         covariance_type: str = "full",
-        stratify_by: Optional[list[str]] = None,
-        max_samples_per_context: Optional[int] = None,
-        recent_months: Optional[int] = None,
+        stratify_by: list[str] | None = None,
+        max_samples_per_context: int | None = None,
+        recent_months: int | None = None,
         random_state: int = 42,
         # VAE-specific parameters (used when model_type="vae")
         model_type: Literal["gmm", "vae"] = "gmm",
@@ -216,8 +216,8 @@ class EVSessionGMM:
         self,
         df: pd.DataFrame,
         is_sample: bool = False,
-        metadata: Optional[dict] = None,
-    ) -> "EVSessionGMM":
+        metadata: dict | None = None,
+    ) -> EVSessionGMM:
         """
         Fit GMM(s) on a validated EV sessions DataFrame.
 
@@ -341,10 +341,14 @@ class EVSessionGMM:
         retained_groups : list of (ctx_tuple, group_df)
             Pre-filtered groups (n >= 10, subsampled if needed).
         """
-        from gears.models.vae import (
-            ConditionalVAE, ContextEncoder, VAEContextSlice, train_cvae,
-        )
         from sklearn.preprocessing import StandardScaler
+
+        from gears.models.vae import (
+            ConditionalVAE,
+            ContextEncoder,
+            VAEContextSlice,
+            train_cvae,
+        )
 
         logger.info(
             "Fitting shared CVAE across %d contexts (latent_dim=%d, hidden=%d, epochs=%d).",
@@ -355,7 +359,6 @@ class EVSessionGMM:
         all_ctx_keys = [ctx for ctx, _ in retained_groups]
         ctx_enc = ContextEncoder(self.stratify_by)
         ctx_enc.fit(all_ctx_keys)
-        n_ctx_dims = len(self.stratify_by)
 
         # Embedding dims: sqrt rule, minimum 4
         emb_dims = [max(4, int(np.ceil(np.sqrt(d)))) for d in ctx_enc.context_dims]
@@ -416,7 +419,7 @@ class EVSessionGMM:
 
         logger.info("CVAE fitted; %d context slices created.", len(self.models_))
 
-    def _fit_single(self, X: np.ndarray) -> Optional[GaussianMixture]:
+    def _fit_single(self, X: np.ndarray) -> GaussianMixture | None:
         """Fit one GMM, optionally selecting n_components via BIC.
 
         Parameters
@@ -446,7 +449,7 @@ class EVSessionGMM:
                     bic = gmm.bic(X)
                     if bic < best_bic:
                         best_bic, best_gmm = bic, gmm
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - skip this k on any GaussianMixture fit failure
                     logger.debug("GMM k=%d failed: %s", k, e)
                     continue
             return best_gmm
@@ -460,7 +463,7 @@ class EVSessionGMM:
                     max_iter=300,
                     reg_covar=1e-5,
                 ).fit(X)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - fall back to None on any GaussianMixture fit failure
                 logger.warning("GMM fitting failed: %s", e)
                 return None
 
@@ -471,9 +474,9 @@ class EVSessionGMM:
     def sample(
         self,
         n_sessions: int,
-        context: Optional[dict] = None,
-        date: Optional[Union[str, pd.Timestamp]] = None,
-        seed: Optional[int] = None,
+        context: dict | None = None,
+        date: str | pd.Timestamp | None = None,
+        seed: int | None = None,
     ) -> pd.DataFrame:
         """
         Generate synthetic EV sessions.
@@ -508,8 +511,8 @@ class EVSessionGMM:
     def _raw_to_sessions(
         self,
         raw: np.ndarray,
-        date: Optional[Union[str, pd.Timestamp]] = None,
-        seed: Optional[int] = None,
+        date: str | pd.Timestamp | None = None,
+        seed: int | None = None,
     ) -> pd.DataFrame:
         """Convert raw GMM samples [hour, log_dur, log_ene] to a sessions DataFrame.
 
@@ -600,8 +603,8 @@ class EVSessionGMM:
 
     def get_sklearn_gmm(
         self,
-        context: Optional[dict] = None,
-        date: Optional[Union[str, pd.Timestamp]] = None,
+        context: dict | None = None,
+        date: str | pd.Timestamp | None = None,
     ) -> GaussianMixture:
         """
         Return the underlying sklearn GaussianMixture for a given context.
@@ -640,7 +643,7 @@ class EVSessionGMM:
     # Persistence
     # ------------------------------------------------------------------
 
-    def save(self, path: Union[str, Path]) -> None:
+    def save(self, path: str | Path) -> None:
         """Serialize model to a joblib file.
 
         Parameters
@@ -654,7 +657,7 @@ class EVSessionGMM:
         logger.info("GMM saved to %s", path)
 
     @classmethod
-    def load(cls, path: Union[str, Path]) -> "EVSessionGMM":
+    def load(cls, path: str | Path) -> EVSessionGMM:
         """Load a serialised GMM from disk.
 
         Parameters
@@ -683,8 +686,8 @@ class EVSessionGMM:
 
     def plot_components(
         self,
-        context: Optional[dict] = None,
-        date: Optional[str] = None,
+        context: dict | None = None,
+        date: str | None = None,
         ax=None,
         figsize: tuple = (8, 4),
     ):
@@ -738,9 +741,9 @@ class EVSessionGMM:
 
     def plot_marginals(
         self,
-        df: Optional[pd.DataFrame] = None,
-        context: Optional[dict] = None,
-        date: Optional[str] = None,
+        df: pd.DataFrame | None = None,
+        context: dict | None = None,
+        date: str | None = None,
         n_samples: int = 2000,
         bins: int = 40,
         figsize: tuple = (14, 4),
@@ -809,8 +812,8 @@ class EVSessionGMM:
 
     def _resolve_context(
         self,
-        context: Optional[dict],
-        date: Optional[Union[str, pd.Timestamp]],
+        context: dict | None,
+        date: str | pd.Timestamp | None,
     ) -> tuple:
         """Return a context tuple matching the stratify_by keys.
 

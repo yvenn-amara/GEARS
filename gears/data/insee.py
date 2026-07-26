@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -124,7 +123,7 @@ def build_panel(
 
 def department_daily_energy(
     df: pd.DataFrame,
-    departments: Optional[list] = None,
+    departments: list | None = None,
 ) -> pd.DataFrame:
     """
     Compute daily energy (kWh) per department.
@@ -203,16 +202,16 @@ class DepartmentForecaster:
 
         self._models: dict[str, object] = {}
         self._dept_stats: dict[str, dict] = {}
-        self._panel: Optional[pd.DataFrame] = None
+        self._panel: pd.DataFrame | None = None
         self.is_fitted_: bool = False
         self.departments_: list[str] = []
 
     def fit(
         self,
         df: pd.DataFrame,
-        departments: Optional[list] = None,
+        departments: list | None = None,
         verbose: bool = True,
-    ) -> "DepartmentForecaster":
+    ) -> DepartmentForecaster:
         """
         Fit SARIMA models on historical daily energy per department.
 
@@ -258,7 +257,7 @@ class DepartmentForecaster:
                 self._models[dept] = model
                 if verbose:
                     logger.debug("Dept %s: SARIMA fitted (n=%d).", dept, n)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - fall back to naive mean forecast on any SARIMA failure
                 logger.warning("Dept %s: SARIMA failed (%s), using mean.", dept, e)
 
         if verbose:
@@ -328,8 +327,8 @@ class DepartmentForecaster:
     def predict(
         self,
         horizon: int = 30,
-        departments: Optional[list] = None,
-        start_date: Optional[str] = None,
+        departments: list | None = None,
+        start_date: str | None = None,
         n_scenarios: int = 1,
         seed: int = 42,
     ) -> pd.DataFrame:
@@ -426,7 +425,7 @@ class DepartmentForecaster:
             noise_scale = max(stats["std"] * 0.05, 0.1)
             fc = fc + rng.normal(0, noise_scale, horizon)
             return np.maximum(0, fc)
-        except Exception:
+        except Exception:  # noqa: BLE001 - fall back to stats-based sample on any forecast failure
             noise = rng.normal(0, stats["std"] * 0.1, horizon)
             return np.maximum(0, stats["mean"] + noise)
 

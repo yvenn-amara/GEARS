@@ -1,15 +1,15 @@
 """Tests for the unified GEARS GMM registry (NativeGMMRegistry + get_gmm)."""
-import numpy as np
-import pandas as pd
-import pytest
 import tempfile
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+import pytest
+
 import gears
 from gears import NativeGMMRegistry
-from gears.models.gmm import EVSessionGMM
 from gears.data.schemas import validate_dataframe
-
+from gears.models.gmm import EVSessionGMM
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -142,7 +142,7 @@ class TestGetSklearnGmm:
             reg.save("french", gmm)
 
             ctx0 = gmm.list_contexts()[0]
-            _loc_type, _dept = ctx0[0], ctx0[1]  # noqa: F841
+            _loc_type, _dept = ctx0[0], ctx0[1]
             # find matching season and dow
             ctx_d = dict(zip(gmm.stratify_by, ctx0))
             sk = reg.get_sklearn_gmm(

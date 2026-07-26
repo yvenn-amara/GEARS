@@ -50,6 +50,10 @@ dev = [
     "seaborn>=0.13",
     "folium>=0.16",
     "pyarrow>=15.0",
+    # CPU-only torch so VAE tests (gears/models/vae.py) run for real in CI,
+    # not just skip. Install with the CPU wheel index in CI to avoid pulling
+    # CUDA dependencies; see .github/workflows/ci.yml / gitlab-ci.yml.
+    "torch>=2.0",
 ]
 all = ["gears-ev[dl,vae,hub,dev]"]
 

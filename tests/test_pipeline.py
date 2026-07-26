@@ -1,6 +1,7 @@
 """Integration tests for GEARSModel pipeline."""
 import pandas as pd
 import pytest
+
 from gears import GEARSModel
 from gears.data.loader import make_demo_data
 
@@ -17,7 +18,7 @@ def test_fit_and_simulate_short():
 
     sessions = model.simulate_short_term("2025-06-01", horizon=3, n_scenarios=3, seed=0)
     assert len(sessions) > 0
-    assert set(["date", "scenario", "arrival_hour", "duration", "energy"]).issubset(sessions.columns)
+    assert {"date", "scenario", "arrival_hour", "duration", "energy"}.issubset(sessions.columns)
 
 
 def test_fit_and_simulate_medium():

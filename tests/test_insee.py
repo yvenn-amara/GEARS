@@ -2,10 +2,9 @@
 import numpy as np
 import pandas as pd
 import pytest
+
+from gears.data.insee import DepartmentForecaster, aggregate_by_department, build_panel
 from gears.data.loader import make_demo_data
-from gears.data.insee import (
-    aggregate_by_department, build_panel, DepartmentForecaster
-)
 
 
 def make_dept_df(n=500, seed=0):
@@ -18,7 +17,7 @@ def make_dept_df(n=500, seed=0):
 def test_aggregate_by_department():
     df = make_dept_df()
     agg = aggregate_by_department(df, freq="D", metric="energy_kwh")
-    assert set(["date", "department", "energy_kwh"]).issubset(agg.columns)
+    assert {"date", "department", "energy_kwh"}.issubset(agg.columns)
     assert (agg["energy_kwh"] >= 0).all()
 
 
@@ -27,7 +26,7 @@ def test_build_panel():
     panel = build_panel(df, freq="D", metric="energy_kwh")
     assert isinstance(panel, pd.DataFrame)
     assert panel.index.is_monotonic_increasing
-    assert set(["75", "69", "33"]).issubset(panel.columns)
+    assert {"75", "69", "33"}.issubset(panel.columns)
 
 
 def test_missing_department_raises():
@@ -42,7 +41,7 @@ def test_department_forecaster_fit_predict():
     fc.fit(df, verbose=False)
     assert fc.is_fitted_
     pred = fc.predict(horizon=14, departments=["75", "69"])
-    assert set(["date", "department", "scenario", "energy_kwh_forecast"]).issubset(pred.columns)
+    assert {"date", "department", "scenario", "energy_kwh_forecast"}.issubset(pred.columns)
     assert (pred["energy_kwh_forecast"] >= 0).all()
 
 

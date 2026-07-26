@@ -44,7 +44,6 @@ are batched together, dramatically reducing Python overhead on long horizons.
 from __future__ import annotations
 
 import logging
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -62,7 +61,7 @@ def linear_growth_profile(
     base_sessions_per_day: float,
     years: float,
     annual_growth_rate: float = 0.15,
-    start_date: Optional[Union[str, pd.Timestamp]] = None,
+    start_date: str | pd.Timestamp | None = None,
 ) -> pd.Series:
     """
     Daily session counts with constant year-on-year growth.
@@ -84,7 +83,7 @@ def linear_growth_profile(
         Daily expected session counts indexed by date.
     """
     start = pd.Timestamp(start_date) if start_date else pd.Timestamp.today().normalize()
-    n_days = max(1, int(round(365.25 * years)))
+    n_days = max(1, round(365.25 * years))
     dates = pd.date_range(start, periods=n_days, freq="D")
     t = np.arange(n_days) / 365.25
     counts = base_sessions_per_day * (1 + annual_growth_rate) ** t
@@ -97,7 +96,7 @@ def s_curve_growth_profile(
     saturation_factor: float = 3.0,
     midpoint_year: float = 2.5,
     steepness: float = 1.5,
-    start_date: Optional[Union[str, pd.Timestamp]] = None,
+    start_date: str | pd.Timestamp | None = None,
 ) -> pd.Series:
     """
     Logistic (S-curve) growth — technology adoption classic.
@@ -122,7 +121,7 @@ def s_curve_growth_profile(
         Daily expected session counts indexed by date.
     """
     start = pd.Timestamp(start_date) if start_date else pd.Timestamp.today().normalize()
-    n_days = max(1, int(round(365.25 * years)))
+    n_days = max(1, round(365.25 * years))
     dates = pd.date_range(start, periods=n_days, freq="D")
     t = np.arange(n_days) / 365.25
     saturation = base_sessions_per_day * saturation_factor
@@ -137,7 +136,7 @@ def s_curve_linear_tail_profile(
     midpoint_year: float = 2.5,
     steepness: float = 1.5,
     tail_rate: float = 0.03,
-    start_date: Optional[Union[str, pd.Timestamp]] = None,
+    start_date: str | pd.Timestamp | None = None,
 ) -> pd.Series:
     """
     S-curve with a linear tail after saturation.
@@ -183,7 +182,7 @@ def bass_diffusion_profile(
     market_potential_factor: float = 4.0,
     p: float = 0.03,
     q: float = 0.38,
-    start_date: Optional[Union[str, pd.Timestamp]] = None,
+    start_date: str | pd.Timestamp | None = None,
 ) -> pd.Series:
     """
     Bass (1969) diffusion model for EV adoption.
@@ -213,7 +212,7 @@ def bass_diffusion_profile(
         Daily expected session counts indexed by date.
     """
     start = pd.Timestamp(start_date) if start_date else pd.Timestamp.today().normalize()
-    n_days = max(1, int(round(365.25 * years)))
+    n_days = max(1, round(365.25 * years))
     dates = pd.date_range(start, periods=n_days, freq="D")
     t = np.arange(n_days) / 365.25
 
@@ -234,7 +233,7 @@ def double_s_curve_profile(
     midpoint_year_2: float = 6.0,
     steepness_1: float = 2.0,
     steepness_2: float = 1.2,
-    start_date: Optional[Union[str, pd.Timestamp]] = None,
+    start_date: str | pd.Timestamp | None = None,
 ) -> pd.Series:
     """
     Double S-curve — two sequential adoption waves.
@@ -343,8 +342,8 @@ class MediumTermSimulator:
     def __init__(
         self,
         gmm,
-        base_sessions_per_day: Optional[float] = None,
-        charger_mix: Optional[dict[float, float]] = None,
+        base_sessions_per_day: float | None = None,
+        charger_mix: dict[float, float] | None = None,
         growth_model: str = "s_curve",
         n_scenarios: int = 10,
         seed: int = 42,
@@ -373,10 +372,10 @@ class MediumTermSimulator:
         self,
         years: float = 3,
         annual_growth_rate: float = 0.15,
-        start_date: Optional[Union[str, pd.Timestamp]] = None,
+        start_date: str | pd.Timestamp | None = None,
         output: str = "daily_energy",
-        weather_factor: Optional[dict[str, float]] = None,
-        n_scenarios: Optional[int] = None,
+        weather_factor: dict[str, float] | None = None,
+        n_scenarios: int | None = None,
         **growth_kwargs,
     ) -> pd.DataFrame:
         """
@@ -630,8 +629,8 @@ class MediumTermSimulator:
         matplotlib.axes.Axes
             The axes containing the fan chart.
         """
-        import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
+        import matplotlib.pyplot as plt
 
         result = result.copy()
         result["date"] = pd.to_datetime(result["date"])

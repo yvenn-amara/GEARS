@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -185,7 +185,7 @@ def _draw_power_levels(
 
 
 def _build_smart_ts(
-    gmm: "EVSessionGMM",
+    gmm: EVSessionGMM,
     profiles_mw: dict,
     smart_profiles_mw: dict,
     year: int,
@@ -326,7 +326,7 @@ class OutputAggregator:
     def daily_energy(
         self,
         sessions: pd.DataFrame,
-        groupby: Optional[list[str]] = None,
+        groupby: list[str] | None = None,
     ) -> pd.DataFrame:
         """
         Aggregate sessions to daily energy totals.
@@ -363,7 +363,7 @@ class OutputAggregator:
     def hourly_profile(
         self,
         sessions: pd.DataFrame,
-        groupby: Optional[list[str]] = None,
+        groupby: list[str] | None = None,
     ) -> pd.DataFrame:
         """
         Aggregate sessions to hourly load profiles.
@@ -448,7 +448,7 @@ class OutputAggregator:
     def export(
         self,
         df: pd.DataFrame,
-        path: Union[str, Path],
+        path: str | Path,
         index: bool = False,
         **kwargs,
     ) -> Path:
@@ -504,15 +504,15 @@ class OutputAggregator:
 
     def build_load_profiles(
         self,
-        gmm: "EVSessionGMM",
+        gmm: EVSessionGMM,
         year: int = 2025,
         n_days_mc: int = 10,
         charging_mode: str = "mean_power",
-        charger_power_kw: Optional[float] = None,
-        location_power_map: Optional[dict] = None,
+        charger_power_kw: float | None = None,
+        location_power_map: dict | None = None,
         noise_std: float = 0.04,
         seed: int = 42,
-        smart_charging_signal: Optional[pd.Series] = None,
+        smart_charging_signal: pd.Series | None = None,
     ) -> dict:
         """
         Reconstruct annual hourly load profiles from a fitted EVSessionGMM.
@@ -811,15 +811,15 @@ class OutputAggregator:
 
     def _build_smart_charging_ts(
         self,
-        gmm: "EVSessionGMM",
+        gmm: EVSessionGMM,
         sk_models: dict,
         stratify: list,
-        loc_idx: Optional[int],
-        dow_idx: Optional[int],
-        season_idx: Optional[int],
+        loc_idx: int | None,
+        dow_idx: int | None,
+        season_idx: int | None,
         charging_mode: str,
-        charger_power_kw: Optional[float],
-        location_power_map: Optional[dict],
+        charger_power_kw: float | None,
+        location_power_map: dict | None,
         n_days_mc: int,
         profiles_mw: dict,
         year: int,
@@ -943,7 +943,7 @@ class OutputAggregator:
 
             try:
                 optimised = opt.optimise(sessions_df, signal)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - aggregation step is best-effort; log and continue on any failure
                 logger.warning(
                     "SmartChargingOptimizer failed for context %s on date %s: %s. "
                     "Falling back to baseline profile.",

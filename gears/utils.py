@@ -4,14 +4,12 @@ Utility functions for GEARS.
 
 from __future__ import annotations
 
-from typing import Optional, Union
-
 import numpy as np
 import pandas as pd
 
 
 def make_price_signal(
-    start: Union[str, pd.Timestamp] = "2025-01-01",
+    start: str | pd.Timestamp = "2025-01-01",
     periods: int = 48,
     resolution_min: int = 30,
     pattern: str = "day_night",
@@ -70,7 +68,7 @@ def make_price_signal(
 
 
 def make_res_signal(
-    start: Union[str, pd.Timestamp] = "2025-01-01",
+    start: str | pd.Timestamp = "2025-01-01",
     periods: int = 48,
     resolution_min: int = 30,
     solar_peak_hour: float = 13.0,
@@ -315,7 +313,7 @@ def kl_divergence(a: np.ndarray, b: np.ndarray, n_bins: int = 50, eps: float = 1
 def distribution_comparison(
     real: pd.DataFrame,
     simulated: pd.DataFrame,
-    features: Optional[list[str]] = None,
+    features: list[str] | None = None,
 ) -> pd.DataFrame:
     """
     Compare real vs. simulated session distributions for multiple features.

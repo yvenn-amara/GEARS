@@ -48,11 +48,9 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
-
 
 logger = logging.getLogger(__name__)
 
@@ -166,11 +164,11 @@ class SessionForecaster:
         self.random_state = random_state
 
         self._model = None
-        self._daily_counts: Optional[pd.Series] = None
-        self._exog_train: Optional[np.ndarray] = None
+        self._daily_counts: pd.Series | None = None
+        self._exog_train: np.ndarray | None = None
         self.is_fitted_: bool = False
 
-    def fit(self, df: pd.DataFrame) -> "SessionForecaster":
+    def fit(self, df: pd.DataFrame) -> SessionForecaster:
         """
         Fit on historical daily session counts.
 
@@ -229,7 +227,7 @@ class SessionForecaster:
     def _build_holiday_exog(
         self,
         date_index: pd.DatetimeIndex,
-    ) -> Optional[np.ndarray]:
+    ) -> np.ndarray | None:
         """Build a [n, 1] holiday dummy array for the given date range.
 
         Returns None when use_holidays=False or when the holidays package
@@ -260,7 +258,7 @@ class SessionForecaster:
                 n_holidays, len(date_index), self.country,
             )
             return dummy
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - holiday exog is optional; any failure falls back to None
             logger.warning("Could not build holiday exog: %s. Proceeding without.", e)
             return None
 
@@ -294,8 +292,8 @@ class SessionForecaster:
         self,
         horizon: int = 7,
         n_scenarios: int = 1,
-        start_date: Optional[Union[str, pd.Timestamp]] = None,
-        seed: Optional[int] = None,
+        start_date: str | pd.Timestamp | None = None,
+        seed: int | None = None,
     ) -> pd.DataFrame:
         """
         Predict daily session counts for the next ``horizon`` days.
@@ -351,7 +349,7 @@ class SessionForecaster:
 
     def _forecast_one_scenario(
         self, horizon: int, rng: np.random.Generator,
-        future_exog: Optional[np.ndarray] = None,
+        future_exog: np.ndarray | None = None,
     ) -> np.ndarray:
         """Generate one stochastic forecast trajectory.
 
@@ -385,7 +383,7 @@ class SessionForecaster:
                 fc = self._model.forecast(horizon, exog=future_exog)
             else:
                 fc = self._model.predict(n_periods=horizon, X=future_exog)
-        except Exception:
+        except Exception:  # noqa: BLE001 - predict fallback to mean on any SARIMA failure
             return np.full(horizon, self.mean_daily_)
 
         # Use the full training std as noise scale so that the 90 % CI achieves
@@ -510,7 +508,7 @@ class TransformerForecaster:
     def __init__(
         self,
         horizon: int = 14,
-        input_size: Optional[int] = None,
+        input_size: int | None = None,
         max_steps: int = 200,
         patch_len: int = 7,
         random_state: int = 42,
@@ -522,7 +520,7 @@ class TransformerForecaster:
         self.random_state = random_state
 
         self._nf = None
-        self._daily_counts: Optional[pd.Series] = None
+        self._daily_counts: pd.Series | None = None
         self.is_fitted_: bool = False
 
     @staticmethod
@@ -535,12 +533,12 @@ class TransformerForecaster:
         """
         try:
             import neuralforecast  # noqa: F401
-            import torch           # noqa: F401
+            import torch  # noqa: F401
             return True
         except ImportError:
             return False
 
-    def fit(self, df: pd.DataFrame) -> "TransformerForecaster":
+    def fit(self, df: pd.DataFrame) -> TransformerForecaster:
         """
         Fit PatchTST on historical daily session counts.
 
@@ -602,8 +600,8 @@ class TransformerForecaster:
         self,
         horizon: int = 14,
         n_scenarios: int = 1,
-        start_date: Optional[Union[str, pd.Timestamp]] = None,
-        seed: Optional[int] = None,
+        start_date: str | pd.Timestamp | None = None,
+        seed: int | None = None,
     ) -> pd.DataFrame:
         """
         Predict daily session counts.
@@ -757,10 +755,10 @@ class PersistenceForecaster:
 
     def __init__(self, n_weeks: int = 1):
         self.n_weeks = n_weeks
-        self._daily_counts: Optional[pd.Series] = None
+        self._daily_counts: pd.Series | None = None
         self.is_fitted_: bool = False
 
-    def fit(self, df: pd.DataFrame) -> "PersistenceForecaster":
+    def fit(self, df: pd.DataFrame) -> PersistenceForecaster:
         """
         Fit by storing historical daily session counts.
 
@@ -784,8 +782,8 @@ class PersistenceForecaster:
         self,
         horizon: int = 7,
         n_scenarios: int = 1,
-        start_date: Optional[Union[str, pd.Timestamp]] = None,
-        seed: Optional[int] = None,
+        start_date: str | pd.Timestamp | None = None,
+        seed: int | None = None,
     ) -> pd.DataFrame:
         """
         Forecast by repeating the value from ``n_weeks`` weeks ago.
@@ -933,7 +931,7 @@ class NHiTSForecaster:
     def __init__(
         self,
         horizon: int = 14,
-        input_size: Optional[int] = None,
+        input_size: int | None = None,
         max_steps: int = 200,           # Reduced from 300: fewer steps prevent overfitting on small datasets
         n_stacks: int = 3,
         scaler_type: str = "standard",  # Explicitly set: normalisation is critical for raw count data (range 0–200)
@@ -953,7 +951,7 @@ class NHiTSForecaster:
         self.random_state = random_state
 
         self._nf = None
-        self._daily_counts: Optional[pd.Series] = None
+        self._daily_counts: pd.Series | None = None
         self.is_fitted_: bool = False
         self.mean_daily_: float = 0.0
         self.std_daily_: float = 1.0
@@ -968,12 +966,12 @@ class NHiTSForecaster:
         """
         try:
             import neuralforecast  # noqa: F401
-            import torch           # noqa: F401
+            import torch  # noqa: F401
             return True
         except ImportError:
             return False
 
-    def fit(self, df: pd.DataFrame) -> "NHiTSForecaster":
+    def fit(self, df: pd.DataFrame) -> NHiTSForecaster:
         """
         Fit NHiTS on historical daily session counts.
 
@@ -1072,6 +1070,7 @@ class NHiTSForecaster:
             Configured model instance, not yet fitted.
         """
         import inspect
+
         from neuralforecast.models import NHITS
 
         sig = inspect.signature(NHITS.__init__)
@@ -1096,8 +1095,8 @@ class NHiTSForecaster:
         self,
         horizon: int = 14,
         n_scenarios: int = 1,
-        start_date: Optional[Union[str, pd.Timestamp]] = None,
-        seed: Optional[int] = None,
+        start_date: str | pd.Timestamp | None = None,
+        seed: int | None = None,
     ) -> pd.DataFrame:
         """
         Predict daily session counts.

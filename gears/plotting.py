@@ -7,8 +7,6 @@ figures.  Return values are always matplotlib Axes (or Figure for multi-panel).
 
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
 import pandas as pd
 
@@ -29,7 +27,7 @@ SEASON_ORDER = ["winter", "spring", "summer", "autumn"]
 
 def plot_arrival_distribution(
     df: pd.DataFrame,
-    group_by: Optional[str] = None,
+    group_by: str | None = None,
     bins: int = 48,
     ax=None,
     figsize: tuple = (10, 4),
@@ -145,7 +143,7 @@ def plot_session_heatmap(
 
 def plot_energy_distribution(
     df: pd.DataFrame,
-    group_by: Optional[str] = None,
+    group_by: str | None = None,
     bins: int = 50,
     log_scale: bool = True,
     ax=None,
@@ -458,10 +456,10 @@ CB_PALETTE = [
 # ---------------------------------------------------------------------------
 
 def _prepend_anchor(
-    pivot: "pd.DataFrame",
-    anchor_date: "pd.Timestamp",
+    pivot: pd.DataFrame,
+    anchor_date: pd.Timestamp,
     anchor_val: float,
-) -> "pd.DataFrame":
+) -> pd.DataFrame:
     """
     Inject a single anchor row at ``anchor_date`` into a scenario pivot table.
 
@@ -584,9 +582,9 @@ def plot_mt_fan_charts(
     -------
     matplotlib.figure.Figure
     """
+    import matplotlib.pyplot as _plt
     import numpy as _np
     import pandas as _pd
-    import matplotlib.pyplot as _plt
 
     forecast_df = forecast_df.copy()
     forecast_df["date"] = _pd.to_datetime(forecast_df["date"])
@@ -650,8 +648,8 @@ def plot_mt_fan_charts(
                     f"MAPE {mape_val:.1f}%\nRMSE {rmse_val:.0f} kWh",
                     transform=ax.transAxes,
                     va="top", ha="left", fontsize=7.5,
-                    bbox=dict(boxstyle="round,pad=0.3", fc="white",
-                              ec="#cccccc", alpha=0.9),
+                    bbox={"boxstyle": "round,pad=0.3", "fc": "white",
+                              "ec": "#cccccc", "alpha": 0.9},
                 )
 
         _apply_pub_style(
@@ -726,8 +724,8 @@ def plot_mt_national_aggregate(
     -------
     matplotlib.figure.Figure
     """
-    import pandas as _pd
     import matplotlib.pyplot as _plt
+    import pandas as _pd
 
     forward_fc = forward_fc.copy()
     forward_fc["date"] = _pd.to_datetime(forward_fc["date"])
@@ -876,11 +874,11 @@ def plot_lt_trajectories(
     -------
     matplotlib.figure.Figure
     """
-    import pandas as _pd
-    import matplotlib.pyplot as _plt
     import matplotlib.dates as _mdates
     import matplotlib.gridspec as _gs
+    import matplotlib.pyplot as _plt
     import matplotlib.transforms as _mtransforms
+    import pandas as _pd
     from matplotlib.lines import Line2D as _Line2D
     from matplotlib.patches import Patch as _Patch
 

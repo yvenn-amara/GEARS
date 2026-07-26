@@ -14,7 +14,6 @@ forward or backward within each vehicle's connection window.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -277,7 +276,7 @@ class SmartChargingOptimizer:
         oracle_sessions: pd.DataFrame,
         predicted_sessions: pd.DataFrame,
         signal: pd.Series,
-        persistence_sessions: Optional[pd.DataFrame] = None,
+        persistence_sessions: pd.DataFrame | None = None,
     ) -> dict:
         """
         Compute a four-way regret analysis across charging strategies.
@@ -343,8 +342,8 @@ class SmartChargingOptimizer:
     def plot_load_curve(
         self,
         sessions: pd.DataFrame,
-        signal: Optional[pd.Series] = None,
-        date: Optional[str] = None,
+        signal: pd.Series | None = None,
+        date: str | None = None,
         ax=None,
         figsize: tuple = (14, 5),
     ):

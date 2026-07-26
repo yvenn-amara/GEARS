@@ -1,8 +1,9 @@
 """Tests for smart charging optimizer — including Section 7 regression tests."""
 import pytest
+
+from gears.data.loader import make_demo_data
 from gears.smart_charging.optimizer import SmartChargingOptimizer
 from gears.utils import make_price_signal, make_res_signal
-from gears.data.loader import make_demo_data
 
 
 def make_sessions(n=20, seed=0, start="2025-06-01", end="2025-06-07"):

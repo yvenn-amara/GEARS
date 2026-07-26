@@ -18,86 +18,87 @@ Optional extras
 - Deep-learning forecasters (PatchTST, NHiTS):  uv pip install "gears-ev[dl]"
 """
 
-from gears.models.gmm import EVSessionGMM
-from gears.models.forecaster import (
-    SessionForecaster,
-    TransformerForecaster,
-    NHiTSForecaster,
-    PersistenceForecaster,
-    sessions_to_daily_counts,
-)
-from gears.models.persistence_sampler import PersistenceSessionSampler
-from gears.evaluation.windowing import sessions_in_last_n_occurrences
+from gears.data.insee import DepartmentForecaster, aggregate_by_department, build_panel
+from gears.data.loader import load_sessions, make_demo_data
 from gears.evaluation.benchmark import (
-    run_rolling_origin_benchmark,
+    crps_ensemble,
     run_benchmark_for_datasets,
+    run_rolling_origin_benchmark,
     run_sarima_sanity_check,
     summarize_sarima_sanity_check,
-    crps_ensemble,
 )
+from gears.evaluation.windowing import sessions_in_last_n_occurrences
+from gears.models.forecaster import (
+    NHiTSForecaster,
+    PersistenceForecaster,
+    SessionForecaster,
+    TransformerForecaster,
+    sessions_to_daily_counts,
+)
+from gears.models.gmm import EVSessionGMM
+from gears.models.persistence_sampler import PersistenceSessionSampler
 from gears.models.registry import ModelRegistry, NativeGMMRegistry, get_gmm
-from gears.simulation.short_term import ShortTermSimulator
+from gears.output.aggregator import LOCATION_POWER_PRESETS, OutputAggregator
+from gears.pipeline import GEARSModel
 from gears.simulation.medium_term import (
-    MediumTermSimulator,
     CHARGER_PRESETS,
     GROWTH_PROFILES,
+    MediumTermSimulator,
+    bass_diffusion_profile,
+    double_s_curve_profile,
     linear_growth_profile,
     s_curve_growth_profile,
     s_curve_linear_tail_profile,
-    bass_diffusion_profile,
-    double_s_curve_profile,
 )
+from gears.simulation.short_term import ShortTermSimulator
 from gears.smart_charging.optimizer import SmartChargingOptimizer
-from gears.output.aggregator import OutputAggregator, LOCATION_POWER_PRESETS
-from gears.pipeline import GEARSModel
-from gears.data.loader import load_sessions, make_demo_data
-from gears.data.insee import DepartmentForecaster, aggregate_by_department, build_panel
 
 __version__ = "1.0.0"
 __author__ = "Yvenn Amara-Ouali"
 
 __all__ = [
-    # Pipeline
-    "GEARSModel",
-    # Models
-    "EVSessionGMM",
-    "SessionForecaster",
-    "TransformerForecaster",
-    "NHiTSForecaster",
-    "PersistenceForecaster",
-    "sessions_to_daily_counts",
-    "PersistenceSessionSampler",
-    "sessions_in_last_n_occurrences",
-    "run_rolling_origin_benchmark",
-    "run_benchmark_for_datasets",
-    "run_sarima_sanity_check",
-    "summarize_sarima_sanity_check",
-    "crps_ensemble",
-    "ModelRegistry",
-    "NativeGMMRegistry",
-    "get_gmm",
-    # Simulation
-    "ShortTermSimulator",
-    "MediumTermSimulator",
     "CHARGER_PRESETS",
     "GROWTH_PROFILES",
-    "linear_growth_profile",
-    "s_curve_growth_profile",
-    "s_curve_linear_tail_profile",
-    "bass_diffusion_profile",
-    "double_s_curve_profile",
-    # Smart charging
-    "SmartChargingOptimizer",
+    "LOCATION_POWER_PRESETS",
+    "DepartmentForecaster",
+    # Models
+    "EVSessionGMM",
+    # Pipeline
+    "GEARSModel",
+    "MediumTermSimulator",
+    "ModelRegistry",
+    "NHiTSForecaster",
+    "NativeGMMRegistry",
     # Output
     "OutputAggregator",
-    "LOCATION_POWER_PRESETS",
+    "PersistenceForecaster",
+    "PersistenceSessionSampler",
+    "SessionForecaster",
+    # Simulation
+    "ShortTermSimulator",
+    # Smart charging
+    "SmartChargingOptimizer",
+    "TransformerForecaster",
+    "aggregate_by_department",
+    "bass_diffusion_profile",
+    "build_panel",
+    "crps_ensemble",
+    "double_s_curve_profile",
+    "get_gmm",
+    "linear_growth_profile",
     # Data
     "load_sessions",
     "make_demo_data",
-    "DepartmentForecaster",
-    "aggregate_by_department",
-    "build_panel",
+    "run_benchmark_for_datasets",
+    "run_rolling_origin_benchmark",
+    "run_sarima_sanity_check",
+    "s_curve_growth_profile",
+    "s_curve_linear_tail_profile",
+    "sessions_in_last_n_occurrences",
+    "sessions_to_daily_counts",
+    "summarize_sarima_sanity_check",
 ]
 
-from gears import utils, plotting
-__all__ += ["utils", "plotting"]
+from gears import plotting, utils
+
+__all__ += ["plotting", "utils"]

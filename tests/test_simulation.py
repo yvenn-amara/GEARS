@@ -4,44 +4,11 @@ Tests for gears.simulation – ShortTermSimulator and MediumTermSimulator.
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
+from gears.simulation.medium_term import MediumTermSimulator
 from gears.simulation.short_term import ShortTermSimulator
-from gears.simulation.medium_term import (
-    MediumTermSimulator,
-    linear_growth_profile,
-    s_curve_growth_profile,
-)
-
-
-# ---------------------------------------------------------------------------
-# Growth profile helpers
-# ---------------------------------------------------------------------------
-
-class TestGrowthProfiles:
-    def test_linear_length(self):
-        profile = linear_growth_profile(50, years=2)
-        assert len(profile) == 365 * 2
-
-    def test_linear_increasing(self):
-        profile = linear_growth_profile(50, years=2, annual_growth_rate=0.1)
-        assert profile.iloc[-1] > profile.iloc[0]
-
-    def test_s_curve_length(self):
-        profile = s_curve_growth_profile(50, years=3)
-        assert len(profile) == round(365.25 * 3)
-
-    def test_s_curve_bounded(self):
-        profile = s_curve_growth_profile(50, years=3, saturation_factor=5)
-        assert profile.max() <= 50 * 5 * 1.01  # slight tolerance
-
-    def test_linear_zero_growth(self):
-        profile = linear_growth_profile(50, years=1, annual_growth_rate=0.0)
-        # all values should be equal to base
-        assert np.allclose(profile.values, 50.0)
-
 
 # ---------------------------------------------------------------------------
 # ShortTermSimulator
@@ -186,14 +153,3 @@ class TestMediumTermSimulator:
         total_no = df_no_wf["total_energy_kwh"].sum()
         total_with = df_with_wf["total_energy_kwh"].sum()
         assert total_with < total_no
-
-    def test_s_curve_growth(self, fitted_gmm):
-        sim = MediumTermSimulator(
-            gmm=fitted_gmm,
-            base_sessions_per_day=10,
-            growth_model="s_curve",
-            n_scenarios=2,
-            seed=0,
-        )
-        df = sim.simulate(years=2, output="daily_energy")
-        assert len(df) > 0

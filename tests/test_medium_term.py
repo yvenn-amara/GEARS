@@ -1,13 +1,18 @@
 """Tests for medium_term simulator — growth profiles and vectorisation."""
+import numpy as np
 import pandas as pd
 import pytest
+
 from gears.data.loader import make_demo_data
 from gears.models.gmm import EVSessionGMM
 from gears.simulation.medium_term import (
-    MediumTermSimulator, GROWTH_PROFILES,
-    linear_growth_profile, s_curve_growth_profile,
-    s_curve_linear_tail_profile, bass_diffusion_profile,
+    GROWTH_PROFILES,
+    MediumTermSimulator,
+    bass_diffusion_profile,
     double_s_curve_profile,
+    linear_growth_profile,
+    s_curve_growth_profile,
+    s_curve_linear_tail_profile,
 )
 
 
@@ -63,6 +68,34 @@ def test_double_s_curve_above_single():
                                 midpoint_year_1=3.0, midpoint_year_2=9.0, start_date="2025-01-01")
     # Double S at long horizon should exceed single S
     assert ds.values[-365:].mean() > s.values[-365:].mean()
+
+
+class TestGrowthProfiles:
+    """Property checks specific to individual profiles, not covered by the
+    generic `test_growth_profile_basic` parametrization above (moved here
+    from test_simulation.py — both files were testing linear_growth_profile
+    and s_curve_growth_profile; see AUDIT.md §g)."""
+
+    def test_linear_length(self):
+        profile = linear_growth_profile(50, years=2)
+        assert len(profile) == 365 * 2
+
+    def test_linear_increasing(self):
+        profile = linear_growth_profile(50, years=2, annual_growth_rate=0.1)
+        assert profile.iloc[-1] > profile.iloc[0]
+
+    def test_s_curve_length(self):
+        profile = s_curve_growth_profile(50, years=3)
+        assert len(profile) == round(365.25 * 3)
+
+    def test_s_curve_bounded(self):
+        profile = s_curve_growth_profile(50, years=3, saturation_factor=5)
+        assert profile.max() <= 50 * 5 * 1.01  # slight tolerance
+
+    def test_linear_zero_growth(self):
+        profile = linear_growth_profile(50, years=1, annual_growth_rate=0.0)
+        # all values should be equal to base
+        assert np.allclose(profile.values, 50.0)
 
 
 # ── MediumTermSimulator ───────────────────────────────────────────────────────

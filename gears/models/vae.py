@@ -29,9 +29,13 @@ than the vanilla ELBO.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -141,8 +145,6 @@ class ConditionalVAE:
 
     def parameters(self):
         """Yield all trainable parameters."""
-        torch = self._torch
-        nn = self._nn
         # Collect all nn.Module parameters
         modules = [*self.embeddings, self.encoder_body, self.fc_mu,
                    self.fc_logvar, self.decoder]
@@ -165,7 +167,6 @@ class ConditionalVAE:
             m.eval()
 
     def state_dict(self) -> dict:
-        torch = self._torch
         sd: dict[str, Any] = {}
         for i, emb in enumerate(self.embeddings):
             sd[f"emb_{i}"] = emb.state_dict()
@@ -186,7 +187,7 @@ class ConditionalVAE:
         with self._torch.no_grad():
             self.log_recon_var.copy_(sd["log_recon_var"])
 
-    def to(self, device) -> "ConditionalVAE":
+    def to(self, device) -> ConditionalVAE:
         for emb in self.embeddings:
             emb.to(device)
         self.encoder_body.to(device)
@@ -196,7 +197,7 @@ class ConditionalVAE:
         self.log_recon_var.data = self.log_recon_var.data.to(device)
         return self
 
-    def _embed_context(self, ctx_idx: "torch.Tensor") -> "torch.Tensor":
+    def _embed_context(self, ctx_idx: torch.Tensor) -> torch.Tensor:
         """Embed categorical context indices and concatenate."""
         torch = self._torch
         parts = [
@@ -205,16 +206,16 @@ class ConditionalVAE:
         ]
         return torch.cat(parts, dim=-1)
 
-    def encode(self, x: "torch.Tensor", ctx_emb: "torch.Tensor"):
+    def encode(self, x: torch.Tensor, ctx_emb: torch.Tensor):
         """Encode x conditioned on ctx_emb → (mu, logvar)."""
         h = self.encoder_body(torch_cat([x, ctx_emb], self._torch))
         return self.fc_mu(h), self.fc_logvar(h)
 
-    def decode(self, z: "torch.Tensor", ctx_emb: "torch.Tensor") -> "torch.Tensor":
+    def decode(self, z: torch.Tensor, ctx_emb: torch.Tensor) -> torch.Tensor:
         """Decode z conditioned on ctx_emb → x_recon."""
         return self.decoder(torch_cat([z, ctx_emb], self._torch))
 
-    def reparameterise(self, mu: "torch.Tensor", logvar: "torch.Tensor") -> "torch.Tensor":
+    def reparameterise(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         """Sample z = mu + eps * exp(0.5 * logvar)."""
         torch = self._torch
         std = torch.exp(0.5 * logvar)
@@ -223,10 +224,10 @@ class ConditionalVAE:
 
     def elbo_loss(
         self,
-        x: "torch.Tensor",
-        ctx_idx: "torch.Tensor",
+        x: torch.Tensor,
+        ctx_idx: torch.Tensor,
         beta: float = 1.0,
-    ) -> "torch.Tensor":
+    ) -> torch.Tensor:
         """Beta-VAE ELBO loss (negative, to minimise)."""
         torch = self._torch
         ctx_emb = self._embed_context(ctx_idx)
@@ -248,10 +249,10 @@ class ConditionalVAE:
 
     def iwae_log_prob(
         self,
-        x: "torch.Tensor",
-        ctx_idx: "torch.Tensor",
+        x: torch.Tensor,
+        ctx_idx: torch.Tensor,
         K: int = 20,
-    ) -> "torch.Tensor":
+    ) -> torch.Tensor:
         """IWAE log-likelihood bound per sample (Burda et al. 2016).
 
         Returns
@@ -296,9 +297,9 @@ class ConditionalVAE:
     def sample_prior(
         self,
         n: int,
-        ctx_idx: "torch.Tensor",
-        seed: Optional[int] = None,
-    ) -> "torch.Tensor":
+        ctx_idx: torch.Tensor,
+        seed: int | None = None,
+    ) -> torch.Tensor:
         """Sample n points from the prior p(z) → decode → x_recon."""
         torch = self._torch
         if seed is not None:
@@ -440,10 +441,10 @@ class VAEContextSlice:
         self.n_components: int = 1
         self.weights_: np.ndarray = np.array([1.0])
         # means_ is set lazily to avoid sampling at construction time
-        self._means_cache: Optional[np.ndarray] = None
+        self._means_cache: np.ndarray | None = None
 
         # Settable seed (used by aggregator.py / medium_term.py)
-        self.random_state: Optional[int] = None
+        self.random_state: int | None = None
 
     # ------------------------------------------------------------------
     # sklearn duck-type API
@@ -566,10 +567,10 @@ class ContextEncoder:
         self.stratify_by = stratify_by
         self.vocab_: dict[str, dict[Any, int]] = {}  # dim_name → {value: idx}
 
-    def fit(self, context_keys: Sequence[tuple]) -> "ContextEncoder":
+    def fit(self, context_keys: Sequence[tuple]) -> ContextEncoder:
         """Build vocabulary from context tuples."""
         for dim_i, dim_name in enumerate(self.stratify_by):
-            values = sorted(set(k[dim_i] for k in context_keys))
+            values = sorted({k[dim_i] for k in context_keys})
             self.vocab_[dim_name] = {v: i for i, v in enumerate(values)}
         return self
 

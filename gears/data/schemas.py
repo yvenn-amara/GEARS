@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import re
 import warnings
-from typing import Optional
 
 import pandas as pd
 
@@ -299,7 +298,7 @@ def _normalize_key(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", s.strip().lower()).strip("_")
 
 
-def _find_column(df: pd.DataFrame, canonical: str) -> Optional[str]:
+def _find_column(df: pd.DataFrame, canonical: str) -> str | None:
     """
     Return the first alias of ``canonical`` present in ``df``, matched in a
     case/punctuation-insensitive way (e.g. ``'Start'`` matches the

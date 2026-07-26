@@ -1,8 +1,10 @@
 """Tests for gears.models.gmm."""
-import numpy as np
-import pandas as pd
 import tempfile
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
 from gears.data.schemas import validate_dataframe
 from gears.models.gmm import EVSessionGMM
 
@@ -39,7 +41,7 @@ def test_sample_basic():
     gmm = EVSessionGMM(n_components=3).fit(df)
     synth = gmm.sample(50, seed=0)
     assert len(synth) == 50
-    assert set(["arrival_hour", "duration", "energy"]).issubset(synth.columns)
+    assert {"arrival_hour", "duration", "energy"}.issubset(synth.columns)
     assert synth["duration"].min() >= 0
     assert synth["energy"].min() >= 0
 
@@ -217,7 +219,6 @@ def test_vae_context_slice_sklearn_api():
     """VAEContextSlice must satisfy the duck-type contract used by aggregator.py
     and plotting.py: random_state, sample, score_samples, n_components,
     means_, weights_."""
-    from gears.models.vae import VAEContextSlice
     model, _ = _fit_tiny_vae()
     slice_ = next(iter(model.models_.values()))
 

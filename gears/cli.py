@@ -12,8 +12,8 @@ Usage examples
 
 from __future__ import annotations
 
-import sys
 import logging
+import sys
 
 import click
 import pandas as pd
@@ -25,7 +25,6 @@ logging.basicConfig(level=logging.WARNING)
 @click.version_option(package_name="gears-ev")
 def main():
     """GEARS – Generating Electric Vehicle Recharging Sessions."""
-    pass
 
 
 # ---------------------------------------------------------------------------

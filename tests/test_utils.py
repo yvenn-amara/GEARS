@@ -2,13 +2,21 @@
 import numpy as np
 import pandas as pd
 import pytest
-from gears.utils import (
-    make_price_signal, make_res_signal,
-    rmse, mae, mape, forecast_metrics, ks_test,
-    wasserstein_distance, kl_divergence, distribution_comparison,
-)
+
 from gears.data.loader import make_demo_data
 from gears.models.gmm import EVSessionGMM
+from gears.utils import (
+    distribution_comparison,
+    forecast_metrics,
+    kl_divergence,
+    ks_test,
+    mae,
+    make_price_signal,
+    make_res_signal,
+    mape,
+    rmse,
+    wasserstein_distance,
+)
 
 
 def test_price_signal_shape():

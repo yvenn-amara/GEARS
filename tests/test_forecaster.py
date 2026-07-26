@@ -2,9 +2,12 @@
 import numpy as np
 import pandas as pd
 import pytest
+
 from gears.data.schemas import validate_dataframe
 from gears.models.forecaster import (
-    SessionForecaster, PersistenceForecaster, TransformerForecaster,
+    PersistenceForecaster,
+    SessionForecaster,
+    TransformerForecaster,
     sessions_to_daily_counts,
 )
 

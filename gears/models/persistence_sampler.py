@@ -23,8 +23,6 @@ instance is currently expected (``distribution_comparison``,
 
 from __future__ import annotations
 
-from typing import Optional, Union
-
 import numpy as np
 import pandas as pd
 
@@ -58,14 +56,14 @@ class PersistenceSessionSampler:
 
     def __init__(self, random_state: int = 42):
         self.random_state = random_state
-        self.pool_: Optional[pd.DataFrame] = None
+        self.pool_: pd.DataFrame | None = None
         self.is_fitted_: bool = False
 
     # ------------------------------------------------------------------
     # Fitting
     # ------------------------------------------------------------------
 
-    def fit(self, df: pd.DataFrame) -> "PersistenceSessionSampler":
+    def fit(self, df: pd.DataFrame) -> PersistenceSessionSampler:
         """
         Store the historical pool to bootstrap-resample from.
 
@@ -106,9 +104,9 @@ class PersistenceSessionSampler:
     def sample(
         self,
         n_sessions: int,
-        context: Optional[dict] = None,
-        date: Optional[Union[str, pd.Timestamp]] = None,
-        seed: Optional[int] = None,
+        context: dict | None = None,
+        date: str | pd.Timestamp | None = None,
+        seed: int | None = None,
     ) -> pd.DataFrame:
         """
         Generate synthetic EV sessions by bootstrap-resampling the fitted pool.

@@ -3,10 +3,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from gears.data.schemas import validate_dataframe
+from gears.evaluation.windowing import sessions_in_last_n_occurrences
 from gears.models.gmm import EVSessionGMM
 from gears.models.persistence_sampler import PersistenceSessionSampler
-from gears.evaluation.windowing import sessions_in_last_n_occurrences
-from gears.data.schemas import validate_dataframe
 from gears.utils import distribution_comparison
 
 
@@ -79,7 +79,7 @@ def test_sample_basic_shape():
     sampler = PersistenceSessionSampler(random_state=42).fit(pool)
     synth = sampler.sample(50, seed=0)
     assert len(synth) == 50
-    assert set(["arrival_hour", "duration", "energy"]).issubset(synth.columns)
+    assert {"arrival_hour", "duration", "energy"}.issubset(synth.columns)
 
 
 def test_sample_more_than_pool_size():
@@ -246,21 +246,21 @@ def _make_daily_history(start="2024-01-01", n_days=120, sessions_per_day=3, seed
 def test_windowing_no_leakage_past_target():
     df = _make_daily_history(n_days=60)
     target = pd.Timestamp("2024-02-01")  # Thursday
-    pool, info = sessions_in_last_n_occurrences(df, target, n=4)
+    pool, _info = sessions_in_last_n_occurrences(df, target, n=4)
     assert (pool["arrival_time"] < target).all()
 
 
 def test_windowing_only_same_weekday():
     df = _make_daily_history(n_days=60)
     target = pd.Timestamp("2024-02-01")
-    pool, info = sessions_in_last_n_occurrences(df, target, n=4)
+    pool, _info = sessions_in_last_n_occurrences(df, target, n=4)
     assert (pool["arrival_time"].dt.dayofweek == target.dayofweek).all()
 
 
 def test_windowing_respects_n_occurrences():
     df = _make_daily_history(n_days=120, sessions_per_day=3)
     target = pd.Timestamp("2024-04-15")
-    pool, info = sessions_in_last_n_occurrences(df, target, n=4)
+    _pool, info = sessions_in_last_n_occurrences(df, target, n=4)
     assert info["n_available_occurrences"] == 4
     assert info["n_sessions"] == 4 * 3
     assert info["insufficient_history"] is False

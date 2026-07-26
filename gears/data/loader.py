@@ -7,12 +7,11 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Union
 
 import numpy as np
 import pandas as pd
 
-from gears.data.schemas import validate_dataframe, summary_stats
+from gears.data.schemas import summary_stats, validate_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,7 @@ _SUPPORTED_EXTENSIONS = {
 
 
 def load_sessions(
-    source: Union[str, Path, pd.DataFrame],
+    source: str | Path | pd.DataFrame,
     *,
     strict: bool = False,
     filter_failed: bool = True,
