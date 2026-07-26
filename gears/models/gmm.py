@@ -45,6 +45,21 @@ from gears.data.schemas import _season
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Recency-weighting defaults (see EVSessionGMM's ``recency`` parameter)
+# ---------------------------------------------------------------------------
+# Cap on the size of the weighted-bootstrap resample used to approximate a
+# recency-weighted GMM fit (sklearn's GaussianMixture has no sample_weight
+# argument). Kept as a named constant rather than a literal buried in
+# _recency_resample so the performance/fidelity trade-off is easy to find
+# and override.
+DEFAULT_RECENCY_RESAMPLE_CAP = 5000
+
+# Default divisor used to derive half_life_days from a context group's
+# observed history span (in days) when half_life_days is not given
+# explicitly: half_life_days = span_days / DEFAULT_RECENCY_HALFLIFE_DIVISOR.
+DEFAULT_RECENCY_HALFLIFE_DIVISOR = 3.5
+
 
 # ---------------------------------------------------------------------------
 # Feature extraction
@@ -148,6 +163,47 @@ class EVSessionGMM:
         subsampling.  Useful when the distribution has shifted over time.
     random_state : int
         Random seed for reproducibility.
+    recency : bool or None
+        If truthy, fit each context group on a recency-weighted bootstrap
+        resample instead of a uniform one. sklearn's ``GaussianMixture`` has
+        no ``sample_weight`` argument, so weighting is implemented by
+        resampling with replacement from a probability distribution over
+        sessions, weight(session) = 0.5 ** (days_since_session /
+        half_life_days), then fitting a standard unweighted GMM on the
+        resample -- a classic weighted-bootstrap approximation of a
+        weighted fit. Default ``None`` (disabled); behavior is then
+        byte-for-byte identical to before this parameter existed. Only
+        applies to the GMM path (``model_type="gmm"``); ignored (with a
+        warning) when ``model_type="vae"``.
+        Note: the resample cap (see ``recency_resample_cap``) only bounds
+        the *training* sample fed to ``GaussianMixture.fit`` -- it is not
+        allowed to distort ``n_sessions_per_day_``, which is computed from
+        the true pre-resample pool so downstream simulation still sees the
+        real historical session rate rather than a rate implied by however
+        small the capped training sample happens to be.
+    half_life_days : float or None
+        Half-life of the exponential recency decay, only used when
+        ``recency`` is truthy. If ``None`` (default), it is derived per
+        context group from that group's own observed history span:
+        ``half_life_days = span_days / recency_halflife_divisor``.
+        Pass an explicit value to override the automatic scaling.
+    recency_reference_date : str, pd.Timestamp, or None
+        The "as of" date that ``days_since_session`` is measured against.
+        If ``None`` (default), the most recent ``arrival_time`` in the
+        fitting data is used, i.e. weighting is relative to "today" =
+        the last observed session.
+    recency_resample_cap : int
+        Upper bound on the size of the recency-weighted resample per
+        context group (see ``DEFAULT_RECENCY_RESAMPLE_CAP``). For small
+        groups the resample size is simply ``n`` (no inflation); this cap
+        only matters for large pools (e.g. ~40k sessions at long history
+        windows), where resampling to the full pool size would be far
+        slower for no fidelity benefit. If ``max_samples_per_context`` is
+        also set, the smaller of the two is used.
+    recency_halflife_divisor : float
+        Divisor used to derive the default ``half_life_days`` from a
+        context group's history span in days, when ``half_life_days`` is
+        not given explicitly (see ``DEFAULT_RECENCY_HALFLIFE_DIVISOR``).
 
     Attributes
     ----------
@@ -160,6 +216,12 @@ class EVSessionGMM:
         Training sample counts per context.
     is_sample_ : bool
         True if this GMM was fitted on a data subset (provisional).
+    half_life_days_used_ : dict
+        Half-life actually used per context tuple, populated only when
+        ``recency`` is enabled (useful for inspecting the automatic scaling).
+    recency_reference_date_used_ : pd.Timestamp or None
+        The reference date actually used for recency weighting, populated
+        only when ``recency`` is enabled.
     """
 
     def __init__(
@@ -182,6 +244,12 @@ class EVSessionGMM:
         vae_lr: float = 3e-3,
         vae_beta: float = 1.0,
         vae_score_n_samples: int = 20,
+        # Recency-weighting parameters (opt-in; GMM path only)
+        recency: bool | None = None,
+        half_life_days: float | None = None,
+        recency_reference_date: str | pd.Timestamp | None = None,
+        recency_resample_cap: int = DEFAULT_RECENCY_RESAMPLE_CAP,
+        recency_halflife_divisor: float = DEFAULT_RECENCY_HALFLIFE_DIVISOR,
     ):
         self.n_components = n_components
         self.min_components = min_components
@@ -200,6 +268,11 @@ class EVSessionGMM:
         self.vae_lr = vae_lr
         self.vae_beta = vae_beta
         self.vae_score_n_samples = vae_score_n_samples
+        self.recency = recency
+        self.half_life_days = half_life_days
+        self.recency_reference_date = recency_reference_date
+        self.recency_resample_cap = recency_resample_cap
+        self.recency_halflife_divisor = recency_halflife_divisor
 
         self.models_: dict[tuple, GaussianMixture] = {}
         self.n_sessions_per_day_: dict[tuple, float] = {}
@@ -207,6 +280,8 @@ class EVSessionGMM:
         self.is_fitted_: bool = False
         self.is_sample_: bool = False   # True = fitted on data subset
         self.metadata_: dict = {}
+        self.half_life_days_used_: dict[tuple, float] = {}
+        self.recency_reference_date_used_: pd.Timestamp | None = None
 
     # ------------------------------------------------------------------
     # Fitting
@@ -261,6 +336,27 @@ class EVSessionGMM:
             )
             self.stratify_by = ["day_of_week", "season"]
 
+        # Recency-weighted resampling (opt-in) is only implemented for the
+        # GMM path; VAE fitting collects raw groups and trains a single
+        # shared model differently, so recency weighting is out of scope
+        # here and is ignored (loudly) rather than silently.
+        reference_date: pd.Timestamp | None = None
+        if self.recency:
+            if self.model_type == "vae":
+                logger.warning(
+                    "recency=%r is set but model_type='vae'; recency weighting "
+                    "is only implemented for the GMM path and will be ignored.",
+                    self.recency,
+                )
+            else:
+                reference_date = (
+                    pd.Timestamp(self.recency_reference_date)
+                    if self.recency_reference_date is not None
+                    else pd.to_datetime(df["arrival_time"]).max()
+                )
+                self.recency_reference_date_used_ = reference_date
+                self.half_life_days_used_ = {}
+
         groups = df.groupby(self.stratify_by, observed=True)
 
         retained_groups: list[tuple[tuple, pd.DataFrame]] = []
@@ -276,8 +372,29 @@ class EVSessionGMM:
                 )
                 continue
 
-            # Optional stratified subsampling
-            if self.max_samples_per_context is not None and n > self.max_samples_per_context:
+            # Recency-weighted bootstrap resample (opt-in). Replaces the
+            # uniform max_samples_per_context subsampling below for this
+            # group -- the resample has its own size cap, and drawing with
+            # replacement from a recency-weighted distribution already
+            # subsumes plain subsampling.
+            #
+            # IMPORTANT: capture the *true* underlying volume (n_true,
+            # n_days_true) before resampling. The resample cap exists purely
+            # to keep the GMM *fit* tractable and recency-weighted; it must
+            # not distort the sessions-per-day *rate* used downstream by
+            # simulation (aggregator.py / medium_term). At long history
+            # windows a 40k-session pool can be capped to 5000 for fitting --
+            # if n_sessions_per_day_ were computed from that capped count
+            # instead of the true pool, it would silently undercount daily
+            # volume by ~8x for exactly the high-volume contexts this
+            # feature targets.
+            n_days_true, n_true = None, None
+            if reference_date is not None:
+                n_days_true = group_df["date"].nunique() if "date" in group_df.columns else 1
+                n_true = n
+                group_df, n = self._recency_resample(group_df, ctx_tuple, reference_date)
+            # Optional stratified subsampling (unweighted)
+            elif self.max_samples_per_context is not None and n > self.max_samples_per_context:
                 rng_sub = np.random.default_rng(self.random_state)
                 idx = rng_sub.choice(n, size=self.max_samples_per_context, replace=False)
                 group_df = group_df.iloc[idx].reset_index(drop=True)
@@ -299,8 +416,13 @@ class EVSessionGMM:
 
             self.models_[ctx_tuple] = gmm
 
-            n_days = group_df["date"].nunique() if "date" in group_df.columns else 1
-            self.n_sessions_per_day_[ctx_tuple] = n / max(n_days, 1)
+            if n_true is not None:
+                # recency path: true pre-resample volume, not the capped
+                # training-sample size used for X above.
+                self.n_sessions_per_day_[ctx_tuple] = n_true / max(n_days_true, 1)
+            else:
+                n_days = group_df["date"].nunique() if "date" in group_df.columns else 1
+                self.n_sessions_per_day_[ctx_tuple] = n / max(n_days, 1)
             self.context_counts_[ctx_tuple] = n
 
             logger.info(
@@ -418,6 +540,69 @@ class EVSessionGMM:
             self.context_counts_[ctx_tuple] = n
 
         logger.info("CVAE fitted; %d context slices created.", len(self.models_))
+
+    def _recency_resample(
+        self,
+        group_df: pd.DataFrame,
+        ctx_tuple: tuple,
+        reference_date: pd.Timestamp,
+    ) -> tuple[pd.DataFrame, int]:
+        """
+        Weighted bootstrap resample favoring recent sessions.
+
+        sklearn's ``GaussianMixture`` has no ``sample_weight`` parameter, so
+        half-life recency weighting is implemented via resampling rather than
+        a custom EM: each session gets
+        ``weight = 0.5 ** (days_since_session / half_life_days)``, weights
+        are normalized into a probability distribution over the group's
+        sessions, and a new set is drawn *with replacement* from that
+        distribution. Recent sessions are drawn often (possibly more than
+        once); old sessions rarely or never appear. Fitting a standard,
+        unweighted GMM on this resample statistically approximates a true
+        weighted fit on the original data (classic weighted bootstrap).
+
+        Parameters
+        ----------
+        group_df : pd.DataFrame
+            One context group's pooled sessions, pre-resample.
+        ctx_tuple : tuple
+            Context key; used only to record the half-life actually used in
+            ``half_life_days_used_`` for diagnostics.
+        reference_date : pd.Timestamp
+            The "as of" date ``days_since_session`` is measured against.
+
+        Returns
+        -------
+        (pd.DataFrame, int)
+            The resampled group (index reset) and its new size.
+        """
+        n = len(group_df)
+        arrival = pd.to_datetime(group_df["arrival_time"])
+        days_since = (reference_date - arrival).dt.total_seconds().to_numpy() / 86400.0
+
+        if self.half_life_days is not None:
+            half_life = float(self.half_life_days)
+        else:
+            span_days = float(days_since.max() - days_since.min()) if n > 1 else 0.0
+            half_life = max(1.0, span_days / self.recency_halflife_divisor)
+        self.half_life_days_used_[ctx_tuple] = half_life
+
+        # Clip to guard against numerical overflow/underflow at the extremes
+        # (e.g. an explicit reference_date earlier than some sessions, or a
+        # very short half_life on a very old session); does not affect the
+        # normal case where all days_since >= 0.
+        weight = np.clip(0.5 ** (days_since / half_life), 1e-300, 1e12)
+        probs = weight / weight.sum()
+
+        cap = self.recency_resample_cap
+        if self.max_samples_per_context is not None:
+            cap = min(cap, self.max_samples_per_context)
+        resample_size = min(n, cap)
+
+        rng_rec = np.random.default_rng(self.random_state)
+        idx = rng_rec.choice(n, size=resample_size, replace=True, p=probs)
+        resampled = group_df.iloc[idx].reset_index(drop=True)
+        return resampled, resample_size
 
     def _fit_single(self, X: np.ndarray) -> GaussianMixture | None:
         """Fit one GMM, optionally selecting n_components via BIC.
@@ -899,6 +1084,8 @@ class EVSessionGMM:
             extras.append("is_sample=True")
         if self.max_samples_per_context is not None:
             extras.append(f"max_samples={self.max_samples_per_context}")
+        if self.recency:
+            extras.append("recency=True")
         extra_str = (", " + ", ".join(extras)) if extras else ""
         return (
             f"EVSessionGMM("

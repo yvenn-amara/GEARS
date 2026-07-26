@@ -108,6 +108,23 @@ def parse_args() -> argparse.Namespace:
         "--model-type", default="gmm", choices=["gmm", "vae"],
         help="Model type to fit: 'gmm' (default) or 'vae' (conditional VAE).",
     )
+    p.add_argument(
+        "--recency", action="store_true",
+        help=(
+            "[GMM only] Fit each context on a recency-weighted bootstrap resample "
+            "(half-life exponential decay) instead of a uniform one. See "
+            "--half-life-days. Off by default (unweighted, current behavior)."
+        ),
+    )
+    p.add_argument(
+        "--half-life-days", type=float, default=None,
+        help=(
+            "[GMM only, requires --recency] Half-life (days) of the recency decay: "
+            "a session this many days old counts half as much as the most recent "
+            "one. If omitted, it is derived per context from that context's own "
+            "history span (span_days / 3.5)."
+        ),
+    )
     # VAE hyperparameters
     p.add_argument("--vae-latent-dim", type=int, default=16, help="[VAE] Latent space dimension.")
     p.add_argument("--vae-hidden-dim", type=int, default=256, help="[VAE] MLP hidden layer width.")
@@ -278,6 +295,8 @@ def fit_and_save(
     max_samples: int,
     seed: int,
     model_type: str = "gmm",
+    recency: bool = False,
+    half_life_days: float | None = None,
     vae_latent_dim: int = 16,
     vae_hidden_dim: int = 256,
     vae_n_layers: int = 2,
@@ -292,9 +311,13 @@ def fit_and_save(
 
     n_comp_arg = "auto" if n_components == "auto" else int(n_components)
 
+    recency_note = ""
+    if recency:
+        hl = half_life_days if half_life_days is not None else "auto"
+        recency_note = f" | recency=True half_life_days={hl}"
     logger.info(
-        "Fitting %s '%s' | sessions=%d | stratify_by=%s | max_samples_per_ctx=%d",
-        model_type.upper(), gmm_id, len(df), stratify_by, max_samples,
+        "Fitting %s '%s' | sessions=%d | stratify_by=%s | max_samples_per_ctx=%d%s",
+        model_type.upper(), gmm_id, len(df), stratify_by, max_samples, recency_note,
     )
     t0 = time.time()
 
@@ -322,6 +345,8 @@ def fit_and_save(
             stratify_by=stratify_by,
             max_samples_per_context=max_samples,
             random_state=seed,
+            recency=recency,
+            half_life_days=half_life_days,
         )
 
     year_val = int(df["arrival_time"].dt.year.mode()[0]) if len(df) > 0 else None
@@ -438,136 +463,6 @@ def main() -> None:
 
     logger.info("=" * 60)
     logger.info("Done — %d contexts fitted.", len(model.models_))
-    logger.info(
-        "Verify: python -c \"import gears; print(gears.NativeGMMRegistry().list())\""
-    )
-
-
-if __name__ == "__main__":
-    main()
-
-    from gears.models.gmm import EVSessionGMM
-    from gears.models.registry import NativeGMMRegistry
-
-    n_comp_arg = "auto" if n_components == "auto" else int(n_components)
-
-    logger.info(
-        "Fitting GMM '%s' | sessions=%d | stratify_by=%s | max_samples_per_ctx=%d",
-        gmm_id, len(df), stratify_by, max_samples,
-    )
-    t0 = time.time()
-
-    gmm = EVSessionGMM(
-        n_components=n_comp_arg,
-        min_components=min_components,
-        max_components=max_components,
-        covariance_type="full",
-        stratify_by=stratify_by,
-        max_samples_per_context=max_samples,
-        random_state=seed,
-    )
-
-    year_val = int(df["arrival_time"].dt.year.mode()[0]) if len(df) > 0 else None
-    gmm.fit(
-        df,
-        is_sample=False,
-        metadata={
-            "gmm_id": gmm_id,
-            "n_training_sessions": len(df),
-            "stratify_by": stratify_by,
-            "year": year_val,
-        },
-    )
-    elapsed = time.time() - t0
-    logger.info("Fitted '%s': %d contexts | %.1fs.", gmm_id, len(gmm.models_), elapsed)
-
-    bic_df = gmm.bic_summary()
-    logger.info(
-        "  BIC — mean_k=%.1f | min=%d | max=%d",
-        bic_df["n_components"].mean(),
-        bic_df["n_components"].min(),
-        bic_df["n_components"].max(),
-    )
-
-    registry   = NativeGMMRegistry(gmm_dir=output_dir)
-    saved_path = registry.save(gmm_id, gmm)
-    logger.info("  Saved → %s", saved_path)
-    return gmm
-
-
-# ── Entry point ---------------------------------------------------------------
-
-def main() -> None:
-    args = parse_args()
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
-
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # --list: display registry and exit immediately
-    if args.list_gmms:
-        list_gmms(output_dir)
-        sys.exit(0)
-
-    # --input is required for all other operations
-    if args.input is None:
-        logger.error(
-            "--input is required unless --list is used.\n"
-            "  Example: python scripts/fit_gmm.py --input /path/to/sessions.csv\n"
-            "  Run with --list to see existing GMMs."
-        )
-        sys.exit(1)
-
-    try:
-        input_path = _validate_input_path(args.input)
-    except (FileNotFoundError, ValueError) as exc:
-        logger.error("%s", exc)
-        sys.exit(1)
-
-    n_components = "auto" if args.n_components == "auto" else int(args.n_components)
-
-    # Overwrite guard — abort early before spending time on fitting
-    _check_overwrite(output_dir, "french", args.overwrite)
-
-    try:
-        df = load_data(input_path, year=args.year, filter_failed=args.filter_failed)
-    except (FileNotFoundError, ValueError, RuntimeError) as exc:
-        logger.error("%s", exc)
-        sys.exit(1)
-
-    if len(df) == 0:
-        logger.error("No sessions found after loading/filtering. Exiting.")
-        sys.exit(1)
-
-    # Omit 'department' from stratification when only one is present
-    has_dept = "department" in df.columns and df["department"].nunique() > 1
-    if not has_dept:
-        logger.warning(
-            "Column 'department' is missing or has a single unique value. "
-            "Stratifying by ['location_type', 'day_of_week', 'season'] only."
-        )
-        stratify = ["location_type", "day_of_week", "season"]
-    else:
-        stratify = ["location_type", "department", "day_of_week", "season"]
-
-    try:
-        gmm = fit_and_save(
-            df=df,
-            gmm_id="french",
-            stratify_by=stratify,
-            output_dir=output_dir,
-            n_components=n_components,
-            min_components=args.min_components,
-            max_components=args.max_components,
-            max_samples=args.max_samples,
-            seed=args.seed,
-        )
-    except Exception as exc:
-        logger.error("Fitting failed: %s", exc, exc_info=True)
-        sys.exit(1)
-
-    logger.info("=" * 60)
-    logger.info("Done — %d contexts fitted.", len(gmm.models_))
     logger.info(
         "Verify: python -c \"import gears; print(gears.NativeGMMRegistry().list())\""
     )
