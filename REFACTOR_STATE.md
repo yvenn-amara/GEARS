@@ -1,7 +1,8 @@
 # GEARS Refactor — Running State
 
-Session 2 complete — 2026-07-26. CI status for this session's push: see bottom of this
-section (pushed via REST API, same approach as session 1 — no `gh` CLI available).
+Session 3 complete — 2026-07-27. CI status for this session's push: see bottom of the
+Session 3 section (pushed via REST API, same approach as sessions 1 and 2 — no `gh` CLI
+available).
 
 ---
 
@@ -338,6 +339,195 @@ Pushed as commit `b7ca8c4` (parent `2ce260d`) directly to `main`
   see "Test suite trim" above.
 - No changes to VAE modeling logic (`gears/models/vae.py`'s math/training code),
   GMM logic (`gears/models/gmm.py`'s fitting/sampling code), or any notebook.
+
+---
+
+## Session 3 — VAE competitiveness (`gears/models/vae.py`)
+
+Scope: make the VAE (`model_type="vae"` on `EVSessionGMM`) genuinely competitive with (or
+better than) the persistence-bootstrap baseline on the existing rolling-origin benchmark
+methodology (`gears/evaluation/benchmark.py`), root-causing and fixing the variance-collapse
+bug flagged in AUDIT.md §d and session 0's suggested fix order item 6, then iterating on
+architecture/training and measuring honestly. Per this session's own scope, the benchmark
+harness's formal wiring and the notebooks were not touched (same precedent as session 2's
+`validate_recency_bias.py`): a new script, `scripts/validate_vae_competitiveness.py`, adds a
+third arm reusing the harness's own lower-level building blocks
+(`sessions_in_last_n_occurrences`, `distribution_comparison`, `crps_ensemble`) and its exact
+win-rate convention from notebook 4 (mean of the 3 Wasserstein distances per cell; win = lower
+than persistence).
+
+### Root cause confirmed and fixed
+
+`ConditionalVAE.sample_prior()` returned `decode(z, ctx_emb)` directly — the decoder's mean
+output, with **zero observation noise** — even though the model already learns an explicit
+observation variance (`log_recon_var`) for exactly this purpose, used during training
+(`elbo_loss`) and scoring (`iwae_log_prob`). Scoring and generation are decoupled in this
+codebase, so the bug was invisible to log-likelihood-based evaluation and only showed up in
+generated-sample statistics. Reproduced on synthetic multi-context data before touching
+anything: sampled `hour` std was **0.73** against a true std of **6.92** (~10x too narrow);
+duration/energy features were 50-150x too narrow in their own (log) space. Fixed by sampling
+`x ~ N(decode(z,c), recon_var)` instead of returning the mean; same synthetic check after the
+fix: sampled `hour` std **6.92**, matching the true value almost exactly. A regression test
+(`test_vae_sample_prior_adds_observation_noise` in `tests/test_gmm.py`) isolates this
+precisely: same-seed decoder-only variance vs. full `sample_prior` variance, asserting the gap
+tracks the learned `recon_var` — this fails immediately if the noise term is ever silently
+dropped again.
+
+### Honest result: bug fix alone reaches GMM's level, not persistence's
+
+After the fix, on `paris.csv` (39 paired cells, X∈{1,2,3,4,8}, 3 horizons): VAE mean
+Wasserstein score **1.2159** vs. GMM **1.2287** vs. persistence **0.9467** — VAE ties GMM, both
+well behind persistence, 0% win rate for either. This matches AUDIT.md's own diagnosis for why
+GMM loses to begin with: a single-component parametric model, fit from scratch on a small
+per-cell pool (the harness's `stratify_by=["day_of_week"]` design means each cell effectively
+starves the VAE of its main structural advantage — cross-context sharing — since it's retrained
+per cell on the same narrow pool as GMM), is fundamentally worse at reproducing a skewed,
+possibly multi-modal empirical distribution than a bootstrap that replays it exactly by
+construction.
+
+### What did help: model capacity + larger X (more data per cell)
+
+Tested beta annealing (`vae_beta=0.3`) first — no clear benefit (mixed, roughly a wash on
+`sap.csv` X=52). What did help: **larger X and a bigger network**. On `sap.csv` (long-span,
+continuous dataset, 26 430 sessions):
+
+| Config | X | Wasserstein (VAE / GMM / persistence) | Profile NRMSE (VAE / GMM / persistence) | Profile win-rate (VAE / GMM) |
+|---|---|---|---|---|
+| hidden=128, latent=8, 50 epochs | 8 | tied with GMM | — | — |
+| hidden=128, latent=8, 50 epochs | 52 (1 cell) | 3.82 / 5.87 / 3.51 | — | — |
+| hidden=128, latent=8, 50 epochs, 54 cells | 8,16,52 | 5.73 / 6.44 / 3.90 | — | 3.7% / 0% |
+| **hidden=256, latent=16, 80 epochs, 18 cells** | 52 | 4.79 / — / 4.12 | 1.29 / 1.36 / 1.22 | **27.8% / 11.1%** |
+
+Larger X consistently narrows the gap (mirrors GMM's own X=52 pattern in AUDIT/notebook 4, but
+VAE narrows further); more capacity + epochs helps further, at real compute cost (fit time
+~15-21s/cell for the bigger config vs. ~1-6s for the smaller one, vs. ~0.02s for GMM and
+~0.0005s for persistence — VAE is 300-1000x slower to fit per cell than GMM in this harness).
+
+### Load-profile reconstruction metric (added this session, per your request)
+
+Distributional (Wasserstein/CRPS) metrics compare individual-session features; they don't
+directly say whether the *aggregate charging load curve* — the thing that actually matters for
+downstream capacity planning / `SmartChargingOptimizer` use — is reproduced. Added
+`session_load_profile()` to the validation script, reusing `OutputAggregator`'s own
+`"mean_power"` convention (`power = energy / duration`, spread across the connection window via
+the package's existing `_overlap_profile_24h`, midnight-wraparound included) rather than
+reinventing that math. Metric: NRMSE between the true day's 24h kW profile and each
+scenario's, normalised by the true profile's mean power (scale-free across contexts of very
+different absolute power levels). Reported as a **separate** win-rate, not folded into
+notebook 4's established Wasserstein-based score.
+
+Interesting finding: **VAE does noticeably better on profile reconstruction than on point-wise
+Wasserstein distance** — e.g. 50% profile win-rate on `sap.csv` X=52 at the larger network
+config, vs. 0% Wasserstein win-rate on the same cells. Plausible mechanism (not directly
+verified further this session): the profile is a sum over all of a day's sessions, so
+sampling noise at the individual-session level partly cancels out in aggregate, while
+persistence's bootstrap-with-replacement doesn't get that same aggregate smoothing benefit
+beyond what the raw pool's shape already gives it. This is a genuinely different signal from
+the primary metric and worth carrying into session 4's formal harness integration.
+
+### Official measurement on `sample_df.pkl` (this session's designated validation dataset)
+
+Filtered to `location_type="home", department="92"` (42 278 sessions, 2016-2026, the largest
+"home" département in the sample) as a single coherent time series, same harness, X=52,
+6 origins × 3 horizons = 18 paired cells, `hidden_dim=256, latent_dim=16, epochs=80`:
+
+- Wasserstein: VAE **2.14** vs. GMM **2.39** vs. persistence **1.88** — VAE win rate
+  **11.1%** (2/18 cells) vs. GMM's **0%**.
+- Profile NRMSE: VAE **1.01** vs. GMM **1.07** vs. persistence **0.59** — 0% profile win rate
+  for both VAE and GMM here (unlike the more promising `sap.csv` result above; "home" charging
+  behaviour in this département appears to have more session-level idiosyncrasy that a
+  bootstrap captures better than either parametric model).
+
+**Success criterion (VAE competitive with or better than persistence on a clear majority of
+cells) is not met on this official dataset.** The bug fix and capacity/epoch increase are both
+real, verified improvements — VAE beats GMM on every configuration and dataset tested, and
+narrows (sometimes substantially, e.g. the profile metric on `sap.csv`) the gap to persistence
+— but does not close it into a majority-win position. Reported plainly rather than declared a
+success on partial evidence, per this session's own instructions.
+
+Result files (small, following the `results/recency/recency_validation.csv` /
+`results/benchmark/all_results.parquet` precedent of committing benchmark evidence):
+`results/benchmark/vae_sampledf_home92_x52_final.csv` (the official measurement above),
+`results/benchmark/vae_sap_x52_final.csv`-equivalent console output (not saved — the `--out`
+flag's parquet writer failed on a missing `pyarrow` in this sandbox before being fixed to CSV;
+the printed numbers above are from that run), `results/benchmark/vae_dundee_x52_final.csv` and
+`vae_dundee_x16_final.csv` (dundee has real date gaps — most X=52 cells hit
+`insufficient_history` and most X=16 cells hit `no_target_sessions`; the X=16 result rests on
+a single paired cell and should not be read as a finding, only as a documented dead end).
+
+### Why persistence keeps winning, in one paragraph
+
+A non-parametric bootstrap of the real historical pool reproduces that pool's exact empirical
+shape (skew, multi-modality, outliers) by construction and pays zero approximation error
+relative to it. Any parametric model — GMM's single Gaussian component or a VAE's smoothed,
+regularised decode — necessarily deviates from the raw pool's shape, which mostly manifests as
+a *disadvantage* on distributional distance metrics unless the smoothing itself is what
+generalises better than the pool's own sampling noise. That crossover seems to need either (a)
+enough per-cell data that a smoothed model's bias is small relative to the pool's own sampling
+variance (the X=52 pattern above), or (b) genuinely borrowing strength across contexts, which
+the current per-cell-retrain harness design structurally prevents the VAE from doing (its main
+theoretical advantage over GMM is a *shared* CVAE across many contexts; fit-from-scratch per
+cell on a single day-of-week's own pool discards that). (b) is a natural session 4 candidate:
+fit the shared CVAE once across many contexts (as `_fit_vae` already does when called
+normally, outside this per-cell harness), and score each cell's held-out day against that
+shared model instead of a per-cell refit.
+
+### Tests
+
+Added `test_vae_sample_prior_adds_observation_noise` (described above). Full suite:
+**271 passed, 10 skipped, 1 failed** in this environment. The 1 failure
+(`tests/test_output.py::TestExport::test_export_parquet`) is a pre-existing test unrelated to
+this session's changes — it fails on `ImportError: ... pyarrow or fastparquet is required`
+because this sandbox's disk budget didn't allow installing `pyarrow` (torch's CUDA-dependency
+wheels alone used most of the available quota); CI installs the full `dev` extra including
+`pyarrow` and should pass it normally. The skip count (10, not session 2's 21) is because
+`data/preprocessed_data/*.csv` happens to be locally present this session (uploaded by the
+user to unblock this session's network restriction — see below), so the 11
+`test_all_11_real_csvs_load_without_error[...]` cases that skip for lack of `data/` in session
+2's environment now run and pass here; this is an environment difference, not a code change,
+and both counts are consistent with `data/` being gitignored either way.
+
+`ruff check gears/ tests/ scripts/validate_vae_competitiveness.py`: clean on every file touched
+this session (`gears/models/vae.py`, `tests/test_gmm.py`,
+`scripts/validate_vae_competitiveness.py`). Two issues were fixed along the way (missing
+executable bit on the new script's shebang; a `dict()` call rewritten as a literal) — both
+pre-existing ruff findings in **other, untouched** files (`scripts/prepare_hf_bundles.py`
+mainly) were left alone, out of scope.
+
+### Environment notes for the next session
+
+- This sandbox's network allowlist does not include the domain the raw datasets are normally
+  downloaded from; the user uploaded `sample_df.pkl` and `preprocessed_data.zip` directly into
+  the chat this session to unblock it (see also session 2's note on `download.pytorch.org` not
+  being reachable either — same allowlist).
+- Disk is tight: installing `torch` from plain PyPI (no `download.pytorch.org` index available)
+  pulls the full CUDA-dependency wheels (~7 GB) since there's no way to reach the official
+  CPU-only index; recreating the venv with `--system-site-packages` (this sandbox already has
+  system `numpy`/`pandas`/`sklearn`/`scipy`/`click`/`joblib`/`matplotlib`) avoids duplicating
+  those in the venv and is the main lever to stay under quota.
+- VAE fits are 300-1000x slower than GMM per cell in this harness (network training vs. a
+  closed-form fit) — full-grid rolling-origin runs (the notebook 4 style `X=[1,2,3,4,8,16,52]`
+  × many origins × 50 scenarios) are not tractable for the VAE arm in this sandbox; every
+  result above used a deliberately reduced grid, sized and stated explicitly, following the
+  precedent notebook 4 itself already set for the same reason.
+
+### CI status — confirmed via the GitHub Actions API, not assumed from the local pass
+
+<!-- CI_STATUS_PLACEHOLDER_SESSION_3 -->
+
+### Explicitly not done this session (out of scope / flagged, not silently skipped)
+
+- The benchmark harness's formal 3-arm wiring (`gears/evaluation/benchmark.py` itself) — per
+  this session's own scope, that's session 4's job. `scripts/validate_vae_competitiveness.py`
+  reuses its building blocks without modifying it.
+- No notebook was touched.
+- The "shared CVAE across contexts, score held-out days against it" idea in the "why
+  persistence keeps winning" section above — flagged as the most promising next lever, not
+  attempted this session (it needs a different harness shape than the per-cell-refit design
+  this session's success criterion was measured against).
+- `scripts/fit_gmm.py`'s duplicate-`main()` SyntaxError (session 0/1 item 1, still open),
+  `test_insee.py`/`test_regression.py` restructuring (session 1's "not touched" list) — both
+  still untouched, unrelated to this session.
 
 ---
 
