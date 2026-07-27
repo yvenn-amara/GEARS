@@ -469,6 +469,51 @@ def test_vae_sample_shape():
     assert synth["energy"].min() >= 0
 
 
+def test_vae_sample_prior_adds_observation_noise():
+    """Regression test for the variance-collapse bug (AUDIT.md section d).
+
+    ``ConditionalVAE.sample_prior`` used to return ``decode(z, ctx_emb)``
+    directly -- the decoder's mean output with zero observation noise --
+    even though the model has an explicit, learned observation variance
+    (``log_recon_var``) for exactly this purpose (used in ``elbo_loss`` and
+    ``iwae_log_prob``). This made generated samples collapse to far less
+    spread than the training data (empirically ~10-150x too narrow).
+
+    This test isolates the fix directly: it compares the variance of a
+    "decoder-only" draw (same z, no noise -- what the old, buggy
+    ``sample_prior`` effectively returned) against the variance of the real
+    ``sample_prior`` output using the *same* seed (so both draw the same
+    z's). The full sample's variance must exceed the decoder-only variance
+    by close to the learned ``recon_var`` -- if ``sample_prior`` regresses
+    to not adding observation noise, this assertion fails.
+    """
+    torch = pytest.importorskip("torch")
+    model, _ = _fit_tiny_vae()
+    ctx_key = next(iter(model.models_.keys()))
+    slice_ = model.models_[ctx_key]
+    cvae = slice_.cvae
+    n = 2000
+
+    ctx_idx = torch.tensor(slice_.ctx_index, dtype=torch.long).repeat(n, 1)
+
+    torch.manual_seed(123)
+    with torch.no_grad():
+        ctx_emb = cvae._embed_context(ctx_idx)
+        z = torch.randn(n, cvae.latent_dim)
+        decode_only = cvae.decode(z, ctx_emb)
+    decode_only_var = decode_only.var(dim=0)
+
+    full_samples = cvae.sample_prior(n, ctx_idx, seed=123)
+    full_var = full_samples.var(dim=0)
+
+    recon_var = torch.exp(cvae.log_recon_var).clamp(1e-4, 10.0)
+
+    # Full generative variance must exceed decoder-only variance by a
+    # meaningful fraction of the learned observation variance -- i.e. the
+    # noise term is actually being added, not silently dropped.
+    assert torch.all(full_var > decode_only_var + 0.3 * recon_var)
+
+
 def test_vae_score_finite():
     model, df = _fit_tiny_vae()
     s = model.score(df)

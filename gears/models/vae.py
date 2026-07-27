@@ -300,7 +300,23 @@ class ConditionalVAE:
         ctx_idx: torch.Tensor,
         seed: int | None = None,
     ) -> torch.Tensor:
-        """Sample n points from the prior p(z) → decode → x_recon."""
+        """Sample n points from the prior: z ~ p(z), then x ~ p(x|z,c) =
+        N(decoder(z,c), recon_var) -- i.e. draw from the full generative
+        (observation) distribution, not just its mean.
+
+        Bug fixed here (see AUDIT.md section d): this used to return
+        ``decode(z, ctx_emb)`` directly, i.e. the decoder's mean output with
+        zero observation noise. Since ``z`` is already a single draw from
+        the prior, the *only* remaining source of sample-to-sample spread
+        was however much the decoder's mean happens to vary across z draws
+        -- which, once the KL term encourages a smooth decoder, collapses
+        to near-zero variance relative to the real data (confirmed
+        empirically: sampled std ~10-150x too narrow, AUDIT.md section d).
+        The model already learns an explicit observation variance
+        (``log_recon_var``) for exactly this purpose during training
+        (``elbo_loss``) and scoring (``iwae_log_prob``) -- ``sample_prior``
+        is now the only place that wasn't using it.
+        """
         torch = self._torch
         if seed is not None:
             torch.manual_seed(seed)
@@ -308,7 +324,10 @@ class ConditionalVAE:
             ctx_emb = self._embed_context(ctx_idx)  # (n, emb_dim)
             z = torch.randn(n, self.latent_dim)
             x_recon = self.decode(z, ctx_emb)
-        return x_recon  # (n, feature_dim)
+            recon_var = torch.exp(self.log_recon_var).clamp(1e-4, 10.0)
+            eps = torch.randn_like(x_recon)
+            x_sample = x_recon + eps * torch.sqrt(recon_var)
+        return x_sample  # (n, feature_dim)
 
 
 def torch_cat(tensors, torch):
