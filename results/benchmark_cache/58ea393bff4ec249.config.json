@@ -1,0 +1,34 @@
+{
+  "_dataset_names": [
+    "boulder",
+    "caltech",
+    "dundee",
+    "jpl",
+    "office",
+    "paris",
+    "perth",
+    "sap"
+  ],
+  "arms": [
+    "persistence",
+    "gmm",
+    "gmm_recency",
+    "vae"
+  ],
+  "horizons": [
+    1,
+    2,
+    3
+  ],
+  "min_sessions_for_fit": 10,
+  "n_components": 1,
+  "n_scenarios": 5,
+  "random_state": 42,
+  "step_days": 7,
+  "verbose": false,
+  "x_grid": [
+    1,
+    4,
+    16
+  ]
+}
