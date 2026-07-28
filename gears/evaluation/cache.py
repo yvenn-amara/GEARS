@@ -12,7 +12,9 @@ silent reuse of a different config's results.
 
 Cache layout: ``results/benchmark_cache/<config_hash>.parquet`` (the results
 table) plus a sibling ``<config_hash>.config.json`` (the exact config that
-produced it, for human inspection -- not read back programmatically).
+produced it, including the resolved dataset roster -- see
+:func:`resolve_config` -- for human inspection, not read back
+programmatically).
 """
 
 from __future__ import annotations
@@ -42,9 +44,9 @@ def config_hash(config: dict) -> str:
         JSON-serialisable run config (e.g. ``arms``, ``x_grid``,
         ``horizons``, ``n_scenarios``, ``step_days``, ``eval_window_days``,
         ``min_sessions_for_fit``, ``n_components``, ``random_state``, and
-        which datasets are included). Key order and list-vs-tuple don't
-        affect the hash (JSON round-trips lists either way); the *values*
-        fully determine it.
+        (via :func:`resolve_config`) which datasets are included). Key
+        order and list-vs-tuple don't affect the hash (JSON round-trips
+        lists either way); the *values* fully determine it.
 
     Returns
     -------
@@ -56,6 +58,37 @@ def config_hash(config: dict) -> str:
     """
     canonical = json.dumps(config, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def resolve_config(config: dict, dataset_names) -> dict:
+    """
+    Merge a run config with the dataset roster it applies to.
+
+    The dataset roster is part of a cache entry's identity just as much as
+    the numeric settings (``arms``, ``x_grid``, ...) -- hashing the bare
+    settings dict alone would let a changed dataset list silently reuse a
+    stale cache entry from a *different* set of datasets. Always resolve
+    before hashing/loading/saving; ``load_or_run_benchmark`` does this
+    internally, but callers building their own cache key by hand (e.g. to
+    check a hit before deciding whether to load real data) should call this
+    explicitly too, rather than hashing ``config`` on its own.
+
+    Parameters
+    ----------
+    config : dict
+        The numeric/arm run config (forwarded as-is to
+        ``run_benchmark_for_datasets`` -- this function does not mutate it).
+    dataset_names : iterable of str
+        The dataset names the run does or would cover.
+
+    Returns
+    -------
+    dict
+        A new dict, ``config`` plus a ``"_dataset_names"`` key (sorted, for
+        order-independence) -- this is what gets hashed/cached, never the
+        bare ``config``.
+    """
+    return {**config, "_dataset_names": sorted(dataset_names)}
 
 
 def cache_paths(config: dict, cache_dir: str | Path = DEFAULT_CACHE_DIR) -> tuple[Path, Path]:
@@ -102,14 +135,17 @@ def load_or_run_benchmark(
     Parameters
     ----------
     datasets : dict[str, pd.DataFrame]
-        Mapping dataset name -> validated sessions DataFrame. Only needed
-        when actually (re)running -- ignored on a cache hit, so callers can
-        defer loading real data until they know a rerun is happening.
+        Mapping dataset name -> validated sessions DataFrame. Determines
+        the dataset roster half of the cache key (via
+        :func:`resolve_config`) *and* is what actually gets run on a cache
+        miss -- so, unlike the config, this must be the real dict even to
+        check for a hit (its keys, not its values, are what's hashed).
     config : dict
-        The full run config -- forwarded as ``**config`` to
+        The numeric/arm run config -- forwarded as ``**config`` to
         :func:`gears.evaluation.benchmark.run_benchmark_for_datasets` when a
-        fresh run is needed, and hashed to form the cache key. Keep values
-        JSON-serialisable (e.g. lists, not tuples, for ``arms``/``x_grid``).
+        fresh run is needed, and (merged with the dataset roster) hashed to
+        form the cache key. Keep values JSON-serialisable (e.g. lists, not
+        tuples, for ``arms``/``x_grid``).
     force_rerun : bool
         The notebook's ``RERUN_BENCHMARK`` flag -- bypass the cache and run
         for real regardless of whether a cached entry exists.
@@ -128,16 +164,18 @@ def load_or_run_benchmark(
     """
     from gears.evaluation.benchmark import run_benchmark_for_datasets
 
+    full_config = resolve_config(config, datasets.keys())
+
     if not force_rerun:
-        cached = load_cached(config, cache_dir)
+        cached = load_cached(full_config, cache_dir)
         if cached is not None:
             logger.info("Cache hit (config hash %s) -- skipping the real run.",
-                        config_hash(config))
+                        config_hash(full_config))
             return cached, True
-        logger.info("Cache miss (config hash %s) -- running fresh.", config_hash(config))
+        logger.info("Cache miss (config hash %s) -- running fresh.", config_hash(full_config))
     else:
         logger.info("force_rerun=True -- bypassing the cache regardless of hit/miss.")
 
     results = run_benchmark_for_datasets(datasets, exclude=list(exclude), **config)
-    save_cache(results, config, cache_dir)
+    save_cache(results, full_config, cache_dir)
     return results, False
