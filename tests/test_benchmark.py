@@ -392,6 +392,46 @@ def test_raises_if_eval_window_shorter_than_max_horizon():
         )
 
 
+def test_default_arms_unchanged_from_session_3():
+    """Session 4 must not change what callers get by default -- only
+    callers that explicitly opt into ALL_ARMS see the two new arms."""
+    assert bm.DEFAULT_ARMS == ("persistence", "gmm")
+    assert set(bm.ALL_ARMS) == {"persistence", "gmm", "gmm_recency", "vae"}
+
+
+def test_all_four_arms_produce_ok_rows_with_real_numbers():
+    """Session 4 task 1: gmm_recency and vae must follow the exact same
+    try/except-and-skip-row pattern as persistence/gmm -- when arms=ALL_ARMS
+    is passed explicitly, all four should fit and produce usable results on
+    a dense enough synthetic pool."""
+    df = make_dense_daily_df(n_days=90, n_per_day=20)
+    res = run_rolling_origin_benchmark(
+        df, "four_arms", x_grid=[4], horizons=[1], eval_window_days=5,
+        n_scenarios=2, verbose=False, arms=bm.ALL_ARMS,
+    )
+    ok = res[res["status"] == "ok"]
+    assert set(ok["method"].unique()) == {"persistence", "gmm", "gmm_recency", "vae"}
+    for method in bm.ALL_ARMS:
+        sub = ok[ok["method"] == method]
+        assert sub["wasserstein_energy"].notna().any(), f"{method} produced no usable rows"
+
+
+def test_arms_subset_only_evaluates_requested_methods():
+    """Requesting a single arm should never fit or report the others."""
+    df = make_dense_daily_df(n_days=60, n_per_day=15)
+    res = run_rolling_origin_benchmark(
+        df, "gmm_recency_only", x_grid=[4], horizons=[1], eval_window_days=5,
+        n_scenarios=2, verbose=False, arms=["gmm_recency"],
+    )
+    ok = res[res["status"] == "ok"]
+    assert set(ok["method"].unique()) <= {"gmm_recency"}
+    assert ok["method"].eq("gmm_recency").any()
+
+
+def test_new_skip_reasons_registered():
+    assert {"gmm_recency_fit_failed", "vae_fit_failed"}.issubset(bm.SKIP_REASONS)
+
+
 def test_gmm_and_persistence_output_same_columns_from_this_harness():
     """Interface parity check reused inside a realistic pool (Session 2's
     acceptance criterion, re-verified in the harness's own context)."""
