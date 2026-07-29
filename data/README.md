@@ -102,8 +102,46 @@ section rather than leaving the GitHub mirror as the canonical pointer.
 
 ## Your own data (`custom/`)
 
-*(placeholder — filled in by Session 5, alongside `notebooks/5_generic_dataset_example.ipynb`,
-which is the notebook built to demonstrate this path end-to-end.)*
+Drop your own CSV (or Parquet — anything `pandas.read_csv`/`read_parquet` can open) under
+`data/custom/` and point `load_sessions()` at it directly; no code changes needed as long
+as the file's columns match (or alias to) the same canonical schema every dataset on this
+page already goes through — the one `gears.data.schemas` validates:
+
+| Column | Required? | Meaning |
+|---|---|---|
+| `arrival_time` | **required** | datetime of plug-in |
+| `duration` | **required** | session duration in hours (> 0) |
+| `energy` | **required** | energy delivered in kWh (≥ 0) |
+| `power` | optional | charger power in kW |
+| `location_type` | optional | one of `work`, `home`, `public`, `heavy` |
+| `user_id` | optional | anonymised user identifier |
+| `department` | optional | INSEE department code (French-specific; irrelevant for non-French data) |
+
+You don't need your raw column names to match exactly — `load_sessions()` resolves common
+aliases automatically (e.g. a raw `Start`/`Energy`/`Arrival` column layout, like the 11
+public benchmark CSVs above, loads unmodified). See `COLUMN_ALIASES` and `REQUIRED_COLS` in
+[`gears/data/schemas.py`](../gears/data/schemas.py) for the exact, authoritative list of
+recognised aliases and required columns — this table intentionally doesn't duplicate it in
+full, to keep one source of truth.
+
+Once loaded, a `GEARSModel` fits on it exactly like any dataset on this page:
+
+```python
+from gears.data.loader import load_sessions
+from gears.pipeline import GEARSModel
+
+df = load_sessions("data/custom/my_sessions.csv")
+model = GEARSModel().fit(df)
+```
+
+[`notebooks/5_generic_dataset_example.ipynb`](../notebooks/5_generic_dataset_example.ipynb)
+demonstrates this end-to-end (data loading through V1G smart-charging optimisation) on
+`sap.csv`, staged at `data/custom/` for the walkthrough — a single-site dataset with none
+of the French-specific columns (`department`, `location_type`) sample_df.pkl has, closer to
+what a first-time user's own file typically looks like. It also includes a quick
+load-and-validate check on `domestics.csv` (UK residential charging — a genuinely different
+usage profile from `sap.csv`'s workplace+home fleet) to show the same schema handles both
+without any code changes.
 
 ## GEARS reference datasets
 

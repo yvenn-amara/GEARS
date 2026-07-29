@@ -283,6 +283,32 @@ class EVSessionGMM:
         self.half_life_days_used_: dict[tuple, float] = {}
         self.recency_reference_date_used_: pd.Timestamp | None = None
 
+    def __setstate__(self, state: dict) -> None:
+        """Restore instance state from unpickling.
+
+        Older on-disk bundles (e.g. the committed ``gmm_french.joblib``,
+        pickled before Session 2 added recency-weighting support) don't have
+        the recency-related attributes below in their pickled ``__dict__``.
+        Without this, plain attribute access on those attributes elsewhere
+        in the class (``__repr__`` in particular: ``if self.recency:``)
+        raises ``AttributeError`` on load — surfaced by notebook 1's
+        ``get_gmm()`` call. Backfilling with the same defaults ``__init__``
+        uses keeps old bundles loadable under the current code without
+        needing to refit and re-commit them.
+        """
+        defaults = {
+            "recency": None,
+            "half_life_days": None,
+            "recency_reference_date": None,
+            "recency_resample_cap": DEFAULT_RECENCY_RESAMPLE_CAP,
+            "recency_halflife_divisor": DEFAULT_RECENCY_HALFLIFE_DIVISOR,
+            "half_life_days_used_": {},
+            "recency_reference_date_used_": None,
+        }
+        for key, default in defaults.items():
+            state.setdefault(key, default)
+        self.__dict__.update(state)
+
     # ------------------------------------------------------------------
     # Fitting
     # ------------------------------------------------------------------

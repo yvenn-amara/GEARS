@@ -404,6 +404,46 @@ def test_recency_ignored_for_vae_with_warning(caplog):
     assert model.half_life_days_used_ == {}
 
 
+def test_unpickling_old_bundle_backfills_recency_attrs():
+    """Regression test for the bug notebook 1 surfaced via ``get_gmm()``.
+
+    The committed ``gmm_french.joblib`` bundle was pickled before Session 2
+    added the recency-weighting attributes to ``EVSessionGMM.__init__``, so
+    its pickled ``__dict__`` doesn't have them. Unpickling it and calling
+    ``repr()`` (which does ``if self.recency:``) raised
+    ``AttributeError: 'EVSessionGMM' object has no attribute 'recency'``.
+    Simulates that exact situation: fit a model, strip the recency-era
+    attributes to mimic an old-style pickle, round-trip it through
+    ``pickle``, and confirm it loads cleanly with sane defaults.
+    """
+    import pickle
+
+    gmm = EVSessionGMM(n_components=2, stratify_by=["day_of_week"]).fit(make_df(200))
+
+    recency_attrs = [
+        "recency",
+        "half_life_days",
+        "recency_reference_date",
+        "recency_resample_cap",
+        "recency_halflife_divisor",
+        "half_life_days_used_",
+        "recency_reference_date_used_",
+    ]
+    for attr in recency_attrs:
+        delattr(gmm, attr)
+
+    old_style_bytes = pickle.dumps(gmm)
+    loaded = pickle.loads(old_style_bytes)
+
+    assert loaded.recency is None
+    assert loaded.half_life_days is None
+    assert loaded.recency_resample_cap == 5000
+    assert loaded.half_life_days_used_ == {}
+    assert loaded.recency_reference_date_used_ is None
+    # The actual symptom reported: __repr__ must not raise AttributeError.
+    assert "EVSessionGMM" in repr(loaded)
+
+
 def test_recency_repr_flag():
     df = make_df_regime_shift()
     gmm = EVSessionGMM(
