@@ -25,7 +25,8 @@ Usage
     # acceptance criterion) before scaling up.
     python scripts/run_benchmark.py --dataset office --quick
 
-    # Full sweep, all defaults.
+    # Full sweep, all defaults -- all four arms (persistence, gmm,
+    # gmm_recency, vae; Session 4).
     python scripts/run_benchmark.py \\
         --datasets acn,boulder,caltech,domestics,dundee,jpl,office,palo_alto,paris,perth,sap \\
         --exclude acn --horizons 1,2,3 --x-grid 1,2,3,4,8,16,52
@@ -34,6 +35,11 @@ Usage
     # single-core / time-boxed machine, step origins every 5 days instead
     # of daily and use fewer Monte Carlo scenarios:
     python scripts/run_benchmark.py --step-days 5 --n-scenarios 20
+
+    # Select which arms to run (default: all four). The vae arm is the slow
+    # one (fresh network training per cell, not a closed-form fit) -- drop
+    # it for a fast GMM-only iteration loop:
+    python scripts/run_benchmark.py --arms persistence,gmm,gmm_recency
 
     python scripts/run_benchmark.py --help
 """
@@ -68,6 +74,12 @@ DEFAULT_EXCLUDE = ["acn"]
 DEFAULT_DATA_DIR = "data/preprocessed_data"
 DEFAULT_OUTPUT = "results/benchmark/all_results.parquet"
 
+# Imported lazily (not at module import time) inside main(), same pattern as
+# the other gears.evaluation.benchmark imports below -- keeps `--help`
+# instant without importing torch/sklearn. Re-declared here as a plain
+# string list so --help's default text doesn't itself trigger that import.
+ALL_ARMS = ["persistence", "gmm", "gmm_recency", "vae"]
+
 
 # ── CLI -----------------------------------------------------------------------
 
@@ -100,6 +112,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--min-sessions-for-fit", type=int, default=10)
     p.add_argument("--n-components", type=int, default=1,
                     help="Fixed GMM component count for windowed fits (Section 1.3).")
+    p.add_argument("--arms", default=",".join(ALL_ARMS),
+                    help="Comma-separated arms to evaluate, subset of "
+                         f"{{{','.join(ALL_ARMS)}}} (default: all four -- Session 4). "
+                         "The vae arm is far slower per cell than the others (fresh "
+                         "network training vs. a closed-form fit); narrow this or use "
+                         "--quick / a small --x-grid for a fast iteration loop.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--output", default=DEFAULT_OUTPUT,
                     help="Path to write the combined tidy results parquet.")
@@ -171,8 +189,17 @@ def main() -> None:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    arms = [a.strip() for a in args.arms.split(",") if a.strip()]
+    unknown_arms = set(arms) - set(ALL_ARMS)
+    if unknown_arms:
+        raise ValueError(f"Unknown --arms value(s) {sorted(unknown_arms)}; "
+                          f"must be a subset of {ALL_ARMS}.")
+    if not arms:
+        raise ValueError("--arms resolved to an empty list -- nothing to evaluate.")
+
     dataset_names = _resolve_dataset_list(args)
     logger.info("Datasets to run: %s", dataset_names)
+    logger.info("Arms to evaluate: %s", arms)
 
     frames: list[pd.DataFrame] = []
     sanity_frames: list[pd.DataFrame] = []
@@ -204,6 +231,7 @@ def main() -> None:
                 step_days=step_days,
                 random_state=args.seed,
                 verbose=False,
+                arms=arms,
             )
         except Exception as exc:  # noqa: BLE001 -- keep going across datasets
             logger.error("Dataset '%s' failed: %s", name, exc)

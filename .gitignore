@@ -3,9 +3,15 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# Données locales
+# Données locales -- structure + README tracked, real data files ignored
+# (Session 4: data/ now holds 11 public-benchmark subfolders + custom/, see
+# data/README.md; nothing under data/ can be committed by accident except the
+# directory tree itself, its .gitkeep placeholders, and the README.)
 # -----------------------------------------------------------------------------
-data/
+data/**
+!data/**/
+!data/**/.gitkeep
+!data/README.md
 scripts/simu.csv
 
 # -----------------------------------------------------------------------------

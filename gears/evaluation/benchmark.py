@@ -105,7 +105,22 @@ SKIP_REASONS: set[str] = {
     "no_target_sessions",
     "persistence_fit_failed",
     "gmm_fit_failed",
+    "gmm_recency_fit_failed",
+    "vae_fit_failed",
 }
+
+#: All arms the harness knows how to evaluate (Session 4). "gmm_recency" is
+#: EVSessionGMM(recency=True) -- the half-life-weighted bootstrap variant
+#: from Session 2; "vae" is EVSessionGMM(model_type="vae") -- the shared
+#: ConditionalVAE from Session 3. Both share EVSessionGMM's interface, so
+#: they slot into the harness the same way "gmm" already does.
+ALL_ARMS: tuple[str, ...] = ("persistence", "gmm", "gmm_recency", "vae")
+
+#: Arms evaluated when the caller doesn't specify -- unchanged from
+#: Session 3 (persistence + gmm only), so existing callers/tests keep their
+#: exact prior behaviour. run_benchmark.py's CLI passes ALL_ARMS explicitly
+#: as its own default instead (Session 4 task 2).
+DEFAULT_ARMS: tuple[str, ...] = ("persistence", "gmm")
 
 
 def eval_window_for(dataset_name: str, default: int = DEFAULT_EVAL_WINDOW_DAYS) -> int:
@@ -206,11 +221,24 @@ def _evaluate_cell(
     min_sessions_for_fit: int,
     n_components: int,
     random_state: int,
+    arms: Sequence[str] = DEFAULT_ARMS,
 ) -> list[dict]:
-    """Evaluate a single (origin, day_offset, X) cell for both arms.
+    """Evaluate a single (origin, day_offset, X) cell for the requested arms.
 
-    Returns a list of result rows: either one skip row, or
-    ``n_scenarios`` ok rows per successfully-fitted arm (1 or 2 arms).
+    Parameters
+    ----------
+    arms : sequence of str
+        Which of :data:`ALL_ARMS` to attempt for this cell (default:
+        :data:`DEFAULT_ARMS`, i.e. persistence + gmm only, unchanged from
+        Session 3).
+
+    Returns
+    -------
+    list of dict
+        Either one skip row (calendar/volume/zero-target gates, checked once
+        for the whole cell -- these apply to every arm identically), or up
+        to ``n_scenarios`` ok rows per successfully-fitted arm, plus one
+        fit-failure skip row per arm that raised during ``.fit()``.
     """
     rows: list[dict] = []
     true_count = len(true_sessions)
@@ -248,42 +276,84 @@ def _evaluate_cell(
     # "arrival_hour" -- rename, don't refit or re-window.
     pool_persistence = pool.rename(columns={"hour": "arrival_hour"})
 
-    arms: list[tuple[str, object]] = []
+    fitted_arms: list[tuple[str, object]] = []
 
-    try:
-        persistence = PersistenceSessionSampler(random_state=random_state).fit(pool_persistence)
-        arms.append(("persistence", persistence))
-    except (ValueError, RuntimeError) as e:
-        logger.warning("Persistence fit failed for %s X=%d target=%s: %s",
-                        dataset_name, X, target_date, e)
-        rows.append(_skip_row(
-            dataset_name, origin, target_date, day_offset, X, true_count,
-            "persistence_fit_failed", n_pool_sessions, n_pool_occurrences,
-        ))
+    if "persistence" in arms:
+        try:
+            persistence = PersistenceSessionSampler(random_state=random_state).fit(pool_persistence)
+            fitted_arms.append(("persistence", persistence))
+        except (ValueError, RuntimeError) as e:
+            logger.warning("Persistence fit failed for %s X=%d target=%s: %s",
+                            dataset_name, X, target_date, e)
+            rows.append(_skip_row(
+                dataset_name, origin, target_date, day_offset, X, true_count,
+                "persistence_fit_failed", n_pool_sessions, n_pool_occurrences,
+            ))
 
-    try:
-        # stratify_by=["day_of_week"], never [] -- Section 1.3: the pool is
-        # already filtered to a single weekday by construction, and an
-        # empty stratify_by list crashes pandas groupby([]).
-        # n_components=1, not "auto" -- Section 1.3: the default BIC search
-        # (min_components=2) is a poor fit for small windowed pools.
-        gmm = EVSessionGMM(
-            n_components=n_components, stratify_by=["day_of_week"],
-            random_state=random_state,
-        ).fit(pool)
-        arms.append(("gmm", gmm))
-    except RuntimeError as e:
-        logger.warning("GMM fit failed for %s X=%d target=%s: %s",
-                        dataset_name, X, target_date, e)
-        rows.append(_skip_row(
-            dataset_name, origin, target_date, day_offset, X, true_count,
-            "gmm_fit_failed", n_pool_sessions, n_pool_occurrences,
-        ))
+    if "gmm" in arms:
+        try:
+            # stratify_by=["day_of_week"], never [] -- Section 1.3: the pool is
+            # already filtered to a single weekday by construction, and an
+            # empty stratify_by list crashes pandas groupby([]).
+            # n_components=1, not "auto" -- Section 1.3: the default BIC search
+            # (min_components=2) is a poor fit for small windowed pools.
+            gmm = EVSessionGMM(
+                n_components=n_components, stratify_by=["day_of_week"],
+                random_state=random_state,
+            ).fit(pool)
+            fitted_arms.append(("gmm", gmm))
+        except RuntimeError as e:
+            logger.warning("GMM fit failed for %s X=%d target=%s: %s",
+                            dataset_name, X, target_date, e)
+            rows.append(_skip_row(
+                dataset_name, origin, target_date, day_offset, X, true_count,
+                "gmm_fit_failed", n_pool_sessions, n_pool_occurrences,
+            ))
+
+    if "gmm_recency" in arms:
+        try:
+            # Same windowed-fit conventions as "gmm" above (stratify_by,
+            # n_components), plus recency=True -- Session 2's half-life
+            # exponential-decay bootstrap resample. Same interface
+            # (EVSessionGMM), so it fits/samples exactly like "gmm".
+            gmm_recency = EVSessionGMM(
+                n_components=n_components, stratify_by=["day_of_week"],
+                random_state=random_state, recency=True,
+            ).fit(pool)
+            fitted_arms.append(("gmm_recency", gmm_recency))
+        except RuntimeError as e:
+            logger.warning("Recency-GMM fit failed for %s X=%d target=%s: %s",
+                            dataset_name, X, target_date, e)
+            rows.append(_skip_row(
+                dataset_name, origin, target_date, day_offset, X, true_count,
+                "gmm_recency_fit_failed", n_pool_sessions, n_pool_occurrences,
+            ))
+
+    if "vae" in arms:
+        try:
+            # model_type="vae" -- Session 3's shared ConditionalVAE, same
+            # EVSessionGMM wrapper/interface as the GMM arms above. Note:
+            # per-cell VAE fits are far slower than GMM (fresh network
+            # training vs. a closed-form fit); callers sweeping the full
+            # rolling-origin grid with this arm enabled should expect a
+            # materially longer run (see run_benchmark.py's --arms docs).
+            vae = EVSessionGMM(
+                stratify_by=["day_of_week"], random_state=random_state,
+                model_type="vae",
+            ).fit(pool)
+            fitted_arms.append(("vae", vae))
+        except RuntimeError as e:
+            logger.warning("VAE fit failed for %s X=%d target=%s: %s",
+                            dataset_name, X, target_date, e)
+            rows.append(_skip_row(
+                dataset_name, origin, target_date, day_offset, X, true_count,
+                "vae_fit_failed", n_pool_sessions, n_pool_occurrences,
+            ))
 
     true_energy_total = float(true_sessions["energy"].sum())
     true_duration_mean = float(true_sessions["duration"].mean())
 
-    for method_name, model in arms:
+    for method_name, model in fitted_arms:
         scenario_dists: list[pd.DataFrame] = []
         energies = np.empty(n_scenarios)
         durations = np.empty(n_scenarios)
@@ -328,6 +398,7 @@ def run_rolling_origin_benchmark(
     step_days: int = 1,
     random_state: int = 42,
     verbose: bool = True,
+    arms: Sequence[str] = DEFAULT_ARMS,
 ) -> pd.DataFrame:
     """
     Run the rolling-origin persistence-vs-GMM benchmark for one dataset.
@@ -366,6 +437,11 @@ def run_rolling_origin_benchmark(
         Base random seed for both arms.
     verbose : bool
         Show a progress bar over origins.
+    arms : sequence of str
+        Which arms to evaluate per cell, subset of :data:`ALL_ARMS`
+        (default: :data:`DEFAULT_ARMS`, i.e. persistence + gmm only --
+        unchanged from Session 3). Pass :data:`ALL_ARMS` for the full
+        4-arm comparison (Session 4).
 
     Returns
     -------
@@ -423,7 +499,7 @@ def run_rolling_origin_benchmark(
                 rows.extend(_evaluate_cell(
                     dataset_name, train_df, origin, target_date, day_offset, X,
                     true_sessions, n_scenarios, min_sessions_for_fit,
-                    n_components, random_state,
+                    n_components, random_state, arms,
                 ))
 
     result = pd.DataFrame(rows, columns=RESULT_COLUMNS)
