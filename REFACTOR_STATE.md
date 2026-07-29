@@ -154,7 +154,19 @@ being an environment gap, not a code issue, as Session 3 already suspected.)
 
 ### CI status — to confirm via the GitHub Actions API after push (see bottom of file)
 
-<!-- CI_STATUS_PLACEHOLDER_SESSION_4 -->
+Confirmed via the GitHub Actions API (not assumed from the local pass): run
+[30409490223](https://github.com/yvenn-amara/GEARS/actions/runs/30409490223), triggered by
+this session's push to `refactor/session-4-benchmark` (commit `d37319e`), **completed —
+conclusion: success**. All 4 jobs green: `test (3.10)`, `test (3.11)`, `test (3.12)`,
+`build`. Checked by polling `GET /repos/yvenn-amara/GEARS/actions/runs/{id}` every ~25s
+until `status == "completed"` (~4 minutes from push to green), then confirming per-job
+detail via `GET .../jobs` — not inferred from the run merely existing.
+
+PR: [#2](https://github.com/yvenn-amara/GEARS/pull/2), opened from
+`refactor/session-4-benchmark` against `main` via the REST API (`POST /repos/.../pulls`,
+same reason `gh` CLI isn't available in this sandbox as in prior sessions). Left open,
+not merged, per this session's instructions — the PR description explicitly flags
+notebook 4's status as pending Yvenn's review.
 
 ### Explicitly not done this session (out of scope / flagged, not silently skipped)
 
@@ -198,13 +210,13 @@ being an environment gap, not a code issue, as Session 3 already suspected.)
       with real numbers (770 `ok` rows each), not placeholders.
 - [x] Full test suite passes (288 passed, 10 skipped, 0 failed) and `ruff check gears/
       tests/` returns 0 errors.
-- [ ] A PR was opened from a session branch; its real CI result was checked via the
+- [x] A PR was opened from a session branch; its real CI result was checked via the
       GitHub Actions API and reported; the PR description explicitly flags notebook 4's
-      status as pending Yvenn's review. **Pending** — done immediately after this file is
-      committed, per the session's "before ending" steps; see the CI status placeholder
-      above, filled in once that happens.
-- [ ] The session token was removed from the git remote before finishing. **Pending**,
-      same reason — this happens as this session's literal last step.
+      status as pending Yvenn's review. **Done** — [PR #2](https://github.com/yvenn-amara/GEARS/pull/2),
+      CI run [30409490223](https://github.com/yvenn-amara/GEARS/actions/runs/30409490223)
+      confirmed green (4/4 jobs) via the Actions API, not assumed.
+- [ ] The session token was removed from the git remote before finishing. **Pending** —
+      this happens as this session's literal last step, after this file is committed.
 
 ---
 
