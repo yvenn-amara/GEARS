@@ -45,10 +45,8 @@ from gears.simulation.medium_term import (
     GROWTH_PROFILES,
     MediumTermSimulator,
     bass_diffusion_profile,
-    double_s_curve_profile,
     linear_growth_profile,
     s_curve_growth_profile,
-    s_curve_linear_tail_profile,
 )
 from gears.simulation.short_term import ShortTermSimulator
 from gears.smart_charging.optimizer import SmartChargingOptimizer
@@ -83,7 +81,6 @@ __all__ = [
     "bass_diffusion_profile",
     "build_panel",
     "crps_ensemble",
-    "double_s_curve_profile",
     "get_gmm",
     "linear_growth_profile",
     # Data
@@ -93,7 +90,6 @@ __all__ = [
     "run_rolling_origin_benchmark",
     "run_sarima_sanity_check",
     "s_curve_growth_profile",
-    "s_curve_linear_tail_profile",
     "sessions_in_last_n_occurrences",
     "sessions_to_daily_counts",
     "summarize_sarima_sanity_check",

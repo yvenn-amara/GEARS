@@ -422,7 +422,16 @@ class DepartmentForecaster:
                 raw_fc = model.predict(n_periods=horizon)
 
             fc = np.expm1(raw_fc) if self.use_log else raw_fc
-            noise_scale = max(stats["std"] * 0.05, 0.1)
+            # Use the full training std as noise scale, not a small fraction of it.
+            # AUDIT.md §e (Mechanism 1) traced this: with the old `std * 0.05` scale,
+            # the resulting 80% CI band stayed at ~2% of the median at every horizon
+            # step — visually a flat, pinched line rather than a genuine forecast
+            # cone, which is what produced the "artificial plateau" look in notebook
+            # 3's medium-term fan charts. `gears.models.forecaster.SessionForecaster.
+            # _forecast_one_scenario` already made this exact fix (full std achieves
+            # ~87% empirical CI coverage vs. ~33% for a small fraction) but it was
+            # never ported to this class. Fixed in Session 6; see REFACTOR_STATE.md.
+            noise_scale = max(stats["std"], 1.0)
             fc = fc + rng.normal(0, noise_scale, horizon)
             return np.maximum(0, fc)
         except Exception:  # noqa: BLE001 - fall back to stats-based sample on any forecast failure

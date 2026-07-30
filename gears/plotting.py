@@ -919,12 +919,21 @@ def plot_lt_trajectories(
         color = info.get("color", CB_PALETTE[0])
         ls    = info.get("ls", "-")
 
-        # Resample to monthly averages and clip extreme outliers.
+        # Resample to monthly averages. No value-altering ceiling is applied here:
+        # an earlier version hard-clipped at `anchor_monthly_val * 10`, which was
+        # undocumented and silently flattened any scenario whose real trajectory
+        # legitimately grew beyond 10x its starting point — AUDIT.md §e (Mechanism
+        # 2) traced this exactly: two of notebook 3's three long-term scenarios
+        # (central ~13x, ambitious ~21x by 2040) were flattened years before the
+        # simulation horizon ended, purely as a plotting artifact with no relation
+        # to the underlying growth model. Only genuine non-finite values (which
+        # should not occur in a correctly-behaving simulation, but would otherwise
+        # break the axis autoscaling) are guarded against. Fixed in Session 6; see
+        # REFACTOR_STATE.md.
         m_pivot = res.pivot_table(index="date", columns="scenario", values=energy_col)
         m_pivot.index = _pd.DatetimeIndex(_pd.to_datetime(m_pivot.index)).normalize()
         m_pivot = m_pivot.resample("ME").mean()
-        _y_ceiling = anchor_monthly_val * 10
-        m_pivot = m_pivot.clip(upper=_y_ceiling)
+        m_pivot = m_pivot.replace([np.inf, -np.inf], np.nan)
         m_pivot = _prepend_anchor(m_pivot, anchor_monthly_date, anchor_monthly_val)
 
         med = m_pivot.median(axis=1)
