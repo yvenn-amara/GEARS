@@ -220,9 +220,23 @@ normally, per the exact same pattern already documented in session 3's entry for
   future session doing further work on notebooks 1-3 will hit the same blocker unless it's
   uploaded directly (network access to yvenn-amara.com is not available in this sandbox).
 
-### CI status — confirmed via `gh pr checks`, not assumed from the local pass
+### CI status — confirmed via `gh pr checks` + the GitHub Actions API, not assumed from the local pass
 
-<!-- CI_STATUS_PLACEHOLDER_SESSION_6 -->
+PR: [#4](https://github.com/yvenn-amara/GEARS/pull/4), opened from `refactor/session-6-notebook3`
+against `main` via `gh pr create` (`gh` CLI installed manually this session from GitHub
+Releases — see environment notes above). Left open, not merged, per this session's
+instructions.
+
+Run [30581931156](https://github.com/yvenn-amara/GEARS/actions/runs/30581931156), triggered by
+this session's push (commit `81a93c7`), **completed — conclusion: success**. All 4 jobs green:
+`test (3.10)` (3m51s), `test (3.11)` (4m37s), `test (3.12)` (5m23s), `build` (20s). Checked two
+ways: `gh pr checks 4` polled every ~20-25s until no job showed `pending`, then confirmed
+independently via `gh api repos/yvenn-amara/GEARS/actions/runs/30581931156` (`status:
+"completed"`, `conclusion: "success"`) and `.../jobs` (all 4 `conclusion: "success"`) — not
+inferred from `gh pr checks`'s summary alone. This also confirms the 14 local test failures
+(all `torch`/VAE-related, see above) are specific to this sandbox's environment, not real: CI's
+`dev` extra install includes a working `torch`, and none of those 14 tests are in the list
+above of files this session actually touched.
 
 ### Explicitly not done this session (out of scope / flagged, not silently skipped)
 
