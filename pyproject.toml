@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gears-ev"
-version = "1.0.0"
+version = "1.1.0"
 description = "Generating Electric vehicle recharging Sessions – simulation, forecasting and smart charging"
 readme = "README.md"
 license = {text = "MIT"}
@@ -58,6 +58,7 @@ dev = [
 all = ["gears-ev[dl,vae,hub,dev]"]
 
 [project.scripts]
+gears = "gears.cli:main"
 gears-fit-gmm = "scripts.fit_gmm:main"
 
 [tool.setuptools.packages.find]

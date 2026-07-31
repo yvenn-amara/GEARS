@@ -171,11 +171,17 @@ Download both with:
 ```bash
 mkdir -p data
 curl -L -o data/preprocessed_data.zip https://www.yvenn-amara.com/wp-content/uploads/2026/07/preprocessed_data.zip
-unzip -oq data/preprocessed_data.zip -d data/preprocessed/
+unzip -oq data/preprocessed_data.zip -d data/
 curl -L -o data/sample_df.zip https://www.yvenn-amara.com/wp-content/uploads/2026/07/sample_df.zip
 unzip -oq data/sample_df.zip -d data/
 ```
 
-(Adjust the extraction paths if the real zip layout nests files in an
-unexpected subfolder — both land under `data/`, already covered by the
-`.gitignore` rule above.)
+Both zips already contain a top-level folder matching their target layout
+(`preprocessed_data/*.csv` and `sample_df.pkl` respectively), so extracting
+straight into `data/` lands the 11 CSVs at `data/preprocessed_data/<name>.csv`
+— matching `run_benchmark.py`'s `DEFAULT_DATA_DIR` exactly — and
+`sample_df.pkl` at `data/sample_df.pkl`. (An earlier version of this snippet
+extracted `preprocessed_data.zip` to `data/preprocessed/` instead, which
+nested the CSVs one level too deep at `data/preprocessed/preprocessed_data/`
+and didn't match what the harness actually reads — fixed in Session 7,
+verified against a real extraction of both archives, not assumed.)

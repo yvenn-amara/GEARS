@@ -351,7 +351,7 @@ class ModelRegistry:
     -----
     >>> registry = ModelRegistry()
     >>> registry.list_models()
-    >>> bundle = registry.load("work_fr_demo")
+    >>> bundle = registry.load("french_demo")
     >>> gmm = bundle["gmm"]
     """
 

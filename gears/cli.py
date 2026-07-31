@@ -5,7 +5,7 @@ Usage examples
 --------------
     gears fit data/sessions.csv --output models/my_model.joblib
     gears simulate --model models/my_model.joblib --start 2024-06-01 --horizon 7
-    gears simulate --pretrained work_fr_demo --start 2024-06-01 --output out/sessions.csv
+    gears simulate --pretrained french_demo --start 2024-06-01 --output out/sessions.csv
     gears medium-term --model models/my_model.joblib --years 3 --growth 0.15
     gears list-models
 """
@@ -64,7 +64,7 @@ def fit(data_path, output, n_components, forecaster, scenarios, verbose):
 
 @main.command()
 @click.option("--model", "-m", default=None, help="Path to a saved .joblib model.")
-@click.option("--pretrained", default=None, help="Pre-trained model ID (e.g. work_fr_demo).")
+@click.option("--pretrained", default=None, help="Pre-trained model ID (e.g. french_demo).")
 @click.option("--start", required=True, help="Start date (YYYY-MM-DD).")
 @click.option("--horizon", default=7, show_default=True, help="Number of days.")
 @click.option("--scenarios", default=1, show_default=True, help="Number of scenarios.")

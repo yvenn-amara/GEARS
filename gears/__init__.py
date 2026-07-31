@@ -51,7 +51,7 @@ from gears.simulation.medium_term import (
 from gears.simulation.short_term import ShortTermSimulator
 from gears.smart_charging.optimizer import SmartChargingOptimizer
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "Yvenn Amara-Ouali"
 
 __all__ = [
