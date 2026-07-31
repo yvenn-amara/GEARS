@@ -70,7 +70,7 @@ class GEARSModel:
     >>> model.fit("data/sessions_france.pkl")
     >>> sessions = model.simulate_short_term("2025-06-10", horizon=7)
 
-    >>> model = GEARSModel.from_pretrained("work_fr_demo")
+    >>> model = GEARSModel.from_pretrained("french_demo")
     >>> sessions = model.simulate_short_term("2025-06-10")
 
     >>> energy = model.simulate_medium_term(years=10, annual_growth_rate=0.15)
@@ -126,7 +126,7 @@ class GEARSModel:
         Parameters
         ----------
         model_id : str
-            Registry model identifier (e.g. ``'work_fr_demo'``).
+            Registry model identifier (e.g. ``'french_demo'``).
         hf_repo_id : str, optional
             Override the default Hugging Face Hub repository.
         cache_dir : str or Path, optional
