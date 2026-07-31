@@ -9,10 +9,8 @@ from gears.simulation.medium_term import (
     GROWTH_PROFILES,
     MediumTermSimulator,
     bass_diffusion_profile,
-    double_s_curve_profile,
     linear_growth_profile,
     s_curve_growth_profile,
-    s_curve_linear_tail_profile,
 )
 
 
@@ -27,9 +25,7 @@ def fitted_gmm():
 @pytest.mark.parametrize("fn,extra", [
     (linear_growth_profile,            {"annual_growth_rate": 0.1}),
     (s_curve_growth_profile,           {"saturation_factor": 3.0}),
-    (s_curve_linear_tail_profile,      {"saturation_factor": 3.0, "tail_rate": 0.03}),
     (bass_diffusion_profile,           {"market_potential_factor": 4.0, "p": 0.03, "q": 0.38}),
-    (double_s_curve_profile,           {"saturation_factor_1": 2.0, "saturation_factor_2": 1.5}),
 ])
 def test_growth_profile_basic(fn, extra):
     series = fn(50, 2.0, start_date="2025-01-01", **extra)
@@ -40,34 +36,83 @@ def test_growth_profile_basic(fn, extra):
 
 
 def test_all_profiles_registered():
-    assert set(GROWTH_PROFILES.keys()) == {
-        "linear", "s_curve", "s_curve_linear_tail", "bass", "double_s_curve"
-    }
+    """Session 6: reduced from 5 to 3 profiles (`s_curve_linear_tail` and
+    `double_s_curve` cut — see gears/simulation/medium_term.py's module
+    docstring "Session 6 fix note" and REFACTOR_STATE.md for the
+    justification)."""
+    assert set(GROWTH_PROFILES.keys()) == {"linear", "s_curve", "bass"}
 
 
-def test_s_curve_tail_exceeds_s_curve():
-    """S-curve+tail should be >= S-curve after saturation."""
-    s   = s_curve_growth_profile(50, 10, saturation_factor=3.0, start_date="2025-01-01")
-    st  = s_curve_linear_tail_profile(50, 10, saturation_factor=3.0,
-                                       tail_rate=0.05, start_date="2025-01-01")
-    # After midpoint, tail version should be higher
-    assert (st.values[-100:] >= s.values[-100:]).all()
+@pytest.mark.parametrize("fn,extra", [
+    (linear_growth_profile,  {"annual_growth_rate": 0.2}),
+    (s_curve_growth_profile, {"saturation_factor": 3.0}),
+    (bass_diffusion_profile, {"market_potential_factor": 4.0}),
+])
+def test_growth_profile_anchors_at_base(fn, extra):
+    """Session 6 regression test: every growth profile must start exactly at
+    `base_sessions_per_day` at t=0 — no discontinuity between "current
+    observed fleet" and the simulated trajectory. Before the Session 6 fix,
+    this held only for `linear_growth_profile`; `s_curve_growth_profile`
+    started at ~2-7% of its asymptote depending on parameters, and
+    `bass_diffusion_profile` started at exactly 0 regardless of `base`."""
+    base = 1234.0
+    series = fn(base, years=15, start_date="2025-01-01", **extra)
+    assert series.iloc[0] == pytest.approx(base, rel=1e-9)
 
 
-def test_bass_starts_near_zero():
-    """Bass model cumulative adoption starts near 0."""
+def test_s_curve_saturation_timing_scales_with_horizon():
+    """Session 6 regression test for the actual traced root cause of the
+    notebook 3 "plateau" (AUDIT.md §e / REFACTOR_STATE.md): with the old
+    fixed defaults (midpoint_year=2.5, steepness=1.5), the curve was ~100%
+    saturated by year 8 *regardless of the requested horizon* — so a
+    20-year simulation was completely flat for its last 12 years. With the
+    horizon-relative defaults, the % of asymptote reached at a fixed
+    absolute year (8) should clearly DECREASE as the requested horizon
+    grows, showing growth is now spread across the full horizon instead of
+    being front-loaded into the first ~8 years unconditionally."""
+    base, saturation_factor = 1000.0, 3.0
+    pct_at_year8 = {}
+    for years in (8, 15, 20):
+        s = s_curve_growth_profile(base, years, saturation_factor=saturation_factor)
+        idx8 = min(int(8 * 365.25), len(s) - 1)
+        pct_at_year8[years] = s.iloc[idx8] / (base * saturation_factor)
+
+    # Longer horizons must show meaningfully less saturation at year 8 than
+    # shorter ones — i.e. saturation timing tracks the horizon, not a fixed year.
+    assert pct_at_year8[20] < pct_at_year8[15] < pct_at_year8[8]
+    # And whatever the horizon, growth should still be well underway (not
+    # flat/near-zero) rather than saturating implausibly early or late.
+    for years in (8, 15, 20):
+        idx_end = len(s_curve_growth_profile(base, years, saturation_factor=saturation_factor)) - 1
+        s_full = s_curve_growth_profile(base, years, saturation_factor=saturation_factor)
+        assert s_full.iloc[idx_end] / (base * saturation_factor) > 0.9  # ~95% by design
+
+
+def test_linear_growth_profile_is_actually_linear():
+    """Session 6 regression test: `linear_growth_profile` previously computed
+    compound/exponential growth (`base * (1 + rate) ** t`) despite its name —
+    flagged in AUDIT.md §c. Must now match `base * (1 + rate * t)` exactly,
+    and must clearly differ from the old exponential formula at a long
+    horizon (they agree only at t=0 and t=1)."""
+    base, rate, years = 1000.0, 0.15, 15
+    profile = linear_growth_profile(base, years, annual_growth_rate=rate)
+    t = np.arange(len(profile)) / 365.25
+    expected_linear = base * (1 + rate * t)
+    np.testing.assert_allclose(profile.values, expected_linear, rtol=1e-9)
+
+    old_exponential_value_at_15y = base * (1 + rate) ** 15
+    assert profile.iloc[-1] < old_exponential_value_at_15y * 0.5  # clearly not exponential
+
+
+def test_bass_anchors_at_base_not_zero():
+    """Session 6 regression test: the raw Bass closed-form solution is 0 at
+    t=0 by construction (modelling brand-new-product diffusion from zero
+    adopters) — applied directly to `base_sessions_per_day`, this made the
+    simulated trajectory start at a literal zero sessions/day. Must now
+    start exactly at `base_sessions_per_day` instead."""
     b = bass_diffusion_profile(100, 5, market_potential_factor=4.0,
                                p=0.03, q=0.38, start_date="2025-01-01")
-    assert b.iloc[0] < 5   # cumulative starts small
-
-
-def test_double_s_curve_above_single():
-    """Double S-curve (2 waves) should exceed single S-curve at long horizons."""
-    s  = s_curve_growth_profile(50, 15, saturation_factor=2.0, start_date="2025-01-01")
-    ds = double_s_curve_profile(50, 15, saturation_factor_1=2.0, saturation_factor_2=2.0,
-                                midpoint_year_1=3.0, midpoint_year_2=9.0, start_date="2025-01-01")
-    # Double S at long horizon should exceed single S
-    assert ds.values[-365:].mean() > s.values[-365:].mean()
+    assert b.iloc[0] == pytest.approx(100.0, rel=1e-9)
 
 
 class TestGrowthProfiles:

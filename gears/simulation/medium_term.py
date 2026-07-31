@@ -6,21 +6,22 @@ Generates aggregated daily energy demand over a configurable multi-year horizon
 
 Growth profiles
 ---------------
-Five growth models are available (see module-level functions):
+Three growth models are available (see module-level functions). All three
+are anchored so that ``growth(t=0) == base_sessions_per_day`` exactly — no
+discontinuity between "current observed fleet" and the simulated trajectory
+(see Session 6 fix note below).
 
 linear_growth_profile
-    Simple year-on-year percentage growth.  Best for short horizons (1–3 yr)
-    where penetration is still far from saturation.
+    Genuinely linear year-on-year growth: ``base * (1 + rate * t)``. Best for
+    short horizons or as a simple "conservative" baseline scenario.
 
 s_curve_growth_profile
     Logistic (sigmoid) growth.  Captures the classic S-curve of technology
     adoption: slow start, rapid middle phase, plateau at saturation.
-
-s_curve_linear_tail_profile
-    S-curve that transitions to a small linear growth after saturation
-    (slope = ``tail_rate`` × base_sessions/yr).  More realistic for EV
-    charging than a pure plateau because new chargers and new users keep
-    trickling in even after the initial wave saturates.
+    ``midpoint_year``/``steepness`` default to values *relative to* the
+    requested ``years`` horizon, so the curve spans the full horizon instead
+    of saturating after a fixed number of years regardless of how long a
+    simulation is requested.
 
 bass_diffusion_profile
     Bass (1969) diffusion model, the standard in technology adoption
@@ -28,11 +29,28 @@ bass_diffusion_profile
     adopt independently, and *imitators* (q) who adopt after social contact.
     Typical EV parameters: p ≈ 0.03, q ≈ 0.38.
 
-double_s_curve_profile
-    Sum of two logistic curves offset in time.  Models two sequential
-    adoption waves: e.g. early-adopters + premium cars first, then mass
-    market + commercial vehicles.  Relevant for 2025–2040 where light and
-    heavy EVs are on different trajectories.
+Session 6 fix note
+-------------------
+Two earlier profiles (`s_curve_linear_tail_profile`, `double_s_curve_profile`)
+were removed: with the base-anchoring and horizon-relative-timing fixes below
+applied to `s_curve_growth_profile`, both added extra hyperparameters without
+materially differentiated behaviour for this package's three canonical
+adoption scenarios (conservative/central/ambitious — see notebook 3 and
+REFACTOR_STATE.md, Session 6, for the traced comparison that motivated the
+cut). Two bugs were fixed in the three remaining profiles, both found by
+tracing concrete numbers rather than assumed:
+(1) `s_curve_growth_profile` and `bass_diffusion_profile` did not actually
+start at `base_sessions_per_day` at t=0 (s_curve started at ~2-7% of the
+asymptote depending on parameters; bass started at exactly 0) — a real
+discontinuity when a scenario is meant to start "from the current observed
+fleet, not zero". Both are now rescaled so growth(0) == base exactly.
+(2) `s_curve_growth_profile`'s `midpoint_year`/`steepness` were fixed
+absolute constants independent of the `years` horizon, so with the old
+defaults the curve was 100% saturated by year 8 *regardless of whether a
+3-year or a 20-year simulation was requested* — the actual mechanism behind
+the "plateau" observed in notebook 3's long-term scenarios. Defaults are now
+`years / 2` and `6 / years` respectively, so the curve reaches ~95% of its
+asymptote at t=years for any requested horizon.
 
 Simulation speed
 ----------------
@@ -66,14 +84,23 @@ def linear_growth_profile(
     """
     Daily session counts with constant year-on-year growth.
 
+    Genuinely linear in elapsed time: ``base * (1 + annual_growth_rate * t)``.
+    (An earlier version of this function computed compound/exponential growth,
+    ``base * (1 + rate) ** t``, despite its name — a real bug, not a design
+    choice: flagged in AUDIT.md §c and fixed in Session 6, traced by comparing
+    the two formulas' year-15 output directly; see REFACTOR_STATE.md.)
+
     Parameters
     ----------
     base_sessions_per_day : float
-        Sessions per day at the start of the simulation (t = 0).
+        Sessions per day at the start of the simulation (t = 0). The returned
+        series starts exactly at this value.
     years : float
         Simulation horizon (any positive value).
     annual_growth_rate : float
-        Fractional annual growth (0.15 = +15%/yr).
+        Fractional annual growth, applied linearly (0.15 = +15% of the t=0
+        value, added each year — so 1+15*0.15 = 3.25x after 15 years, not
+        1.15**15 = 8.1x).
     start_date : str or Timestamp, optional
         Start of the date index. Defaults to today.
 
@@ -86,7 +113,7 @@ def linear_growth_profile(
     n_days = max(1, round(365.25 * years))
     dates = pd.date_range(start, periods=n_days, freq="D")
     t = np.arange(n_days) / 365.25
-    counts = base_sessions_per_day * (1 + annual_growth_rate) ** t
+    counts = base_sessions_per_day * (1 + annual_growth_rate * t)
     return pd.Series(counts, index=dates, name="n_sessions_expected")
 
 
@@ -94,25 +121,40 @@ def s_curve_growth_profile(
     base_sessions_per_day: float,
     years: float,
     saturation_factor: float = 3.0,
-    midpoint_year: float = 2.5,
-    steepness: float = 1.5,
+    midpoint_year: float | None = None,
+    steepness: float | None = None,
     start_date: str | pd.Timestamp | None = None,
 ) -> pd.Series:
     """
     Logistic (S-curve) growth — technology adoption classic.
 
+    Rescaled so the curve is anchored exactly at ``base_sessions_per_day`` at
+    t=0 and approaches ``base_sessions_per_day * saturation_factor`` as an
+    asymptote. (A raw logistic curve with the old default parameters was only
+    ~2.3% of its asymptote at t=0 regardless of `base_sessions_per_day` — a
+    real discontinuity, not a design choice, when a scenario is meant to
+    start "from the current observed fleet, not zero". Fixed in Session 6 by
+    subtracting the raw curve's own t=0 value and rescaling the remainder to
+    span exactly [base, base*saturation_factor]; see REFACTOR_STATE.md.)
+
     Parameters
     ----------
     base_sessions_per_day : float
-        Sessions per day at t = 0.
+        Sessions per day at t = 0. The returned series starts exactly here.
     years : float
         Simulation horizon.
     saturation_factor : float
         Max sessions as multiple of base (asymptote).
-    midpoint_year : float
-        Year at which growth rate is maximal.
-    steepness : float
-        Controls the slope of the S (larger = sharper transition).
+    midpoint_year : float, optional
+        Year at which growth rate is maximal. Defaults to ``years / 2`` —
+        i.e. scales with the requested horizon. (The old fixed default of
+        2.5 meant the curve was ~100% saturated by year 8 regardless of
+        whether `years` was 3 or 20 — see Session 6 trace in
+        REFACTOR_STATE.md for the numbers.)
+    steepness : float, optional
+        Controls the slope of the S (larger = sharper transition). Defaults
+        to ``6 / years`` so the curve reaches ~95% of the way to saturation
+        at t=years, for any requested horizon.
     start_date : str or Timestamp, optional
 
     Returns
@@ -120,60 +162,22 @@ def s_curve_growth_profile(
     pd.Series
         Daily expected session counts indexed by date.
     """
+    if midpoint_year is None:
+        midpoint_year = years / 2.0
+    if steepness is None:
+        steepness = 6.0 / years
+
     start = pd.Timestamp(start_date) if start_date else pd.Timestamp.today().normalize()
     n_days = max(1, round(365.25 * years))
     dates = pd.date_range(start, periods=n_days, freq="D")
     t = np.arange(n_days) / 365.25
-    saturation = base_sessions_per_day * saturation_factor
-    growth = saturation / (1 + np.exp(-steepness * (t - midpoint_year)))
+
+    raw = 1.0 / (1.0 + np.exp(-steepness * (t - midpoint_year)))
+    raw0 = 1.0 / (1.0 + np.exp(steepness * midpoint_year))  # raw curve's own value at t=0
+    normalized = (raw - raw0) / (1.0 - raw0)  # rescaled so normalized(0) = 0, normalized(inf) = 1
+    asymptote = base_sessions_per_day * saturation_factor
+    growth = base_sessions_per_day + (asymptote - base_sessions_per_day) * normalized
     return pd.Series(growth, index=dates, name="n_sessions_expected")
-
-
-def s_curve_linear_tail_profile(
-    base_sessions_per_day: float,
-    years: float,
-    saturation_factor: float = 3.0,
-    midpoint_year: float = 2.5,
-    steepness: float = 1.5,
-    tail_rate: float = 0.03,
-    start_date: str | pd.Timestamp | None = None,
-) -> pd.Series:
-    """
-    S-curve with a linear tail after saturation.
-
-    The logistic curve captures rapid early adoption; after the plateau
-    a small linear slope ``tail_rate`` (fraction of base/yr) accounts for
-    continued slow growth from new entrants and new geographies — more
-    realistic than a hard asymptote.
-
-    Parameters
-    ----------
-    base_sessions_per_day : float
-    years : float
-    saturation_factor : float
-    midpoint_year : float
-    steepness : float
-    tail_rate : float
-        Annual slope after saturation, as fraction of base_sessions_per_day.
-        E.g. 0.03 = +3%/yr linear growth on top of the plateau.
-    start_date : str or Timestamp, optional
-
-    Returns
-    -------
-    pd.Series
-        Daily expected session counts indexed by date.
-    """
-    s_curve = s_curve_growth_profile(
-        base_sessions_per_day, years,
-        saturation_factor=saturation_factor,
-        midpoint_year=midpoint_year,
-        steepness=steepness,
-        start_date=start_date,
-    )
-    t = np.arange(len(s_curve)) / 365.25
-    linear_tail = tail_rate * base_sessions_per_day * t
-    combined = s_curve.values + linear_tail
-    return pd.Series(combined, index=s_curve.index, name="n_sessions_expected")
 
 
 def bass_diffusion_profile(
@@ -194,9 +198,23 @@ def bass_diffusion_profile(
 
     Typical EV values: p ≈ 0.01–0.05 (innovators), q ≈ 0.3–0.5 (imitators).
 
+    Anchored so the curve equals ``base_sessions_per_day`` exactly at t=0 and
+    approaches ``base_sessions_per_day * market_potential_factor`` as an
+    asymptote. (The textbook Bass formulation models cumulative adopters of a
+    brand-new product diffusing from zero — appropriate when there truly are
+    no adopters yet, but wrong here: applied directly to
+    `base_sessions_per_day`, it made the simulated trajectory start at a
+    literal zero sessions/day, a hard discontinuity from whatever the real
+    current baseline is. Confirmed by tracing the raw output: t=0 was exactly
+    0 regardless of `base_sessions_per_day`. Fixed in Session 6 by treating
+    the Bass cumulative-adoption fraction F(t) as tracking growth *beyond*
+    the current base rather than adoption from scratch; see
+    REFACTOR_STATE.md.)
+
     Parameters
     ----------
     base_sessions_per_day : float
+        Sessions per day at t = 0. The returned series starts exactly here.
     years : float
     market_potential_factor : float
         Ultimate market size as multiple of base.
@@ -216,77 +234,27 @@ def bass_diffusion_profile(
     dates = pd.date_range(start, periods=n_days, freq="D")
     t = np.arange(n_days) / 365.25
 
-    M = base_sessions_per_day * market_potential_factor
-    # Cumulative adoption fraction F(t) from the closed-form Bass solution
+    # Cumulative adoption fraction F(t) from the closed-form Bass solution:
+    # F(0) = 0, F(t) -> 1 as t -> infinity.
     exponent = np.exp(-(p + q) * t)
     F = (1 - exponent) / (1 + (q / p) * exponent)
-    N = M * F  # cumulative sessions
+
+    additional_ceiling = base_sessions_per_day * (market_potential_factor - 1.0)
+    N = base_sessions_per_day + additional_ceiling * F
     return pd.Series(N, index=dates, name="n_sessions_expected")
 
 
-def double_s_curve_profile(
-    base_sessions_per_day: float,
-    years: float,
-    saturation_factor_1: float = 1.8,
-    saturation_factor_2: float = 1.5,
-    midpoint_year_1: float = 2.0,
-    midpoint_year_2: float = 6.0,
-    steepness_1: float = 2.0,
-    steepness_2: float = 1.2,
-    start_date: str | pd.Timestamp | None = None,
-) -> pd.Series:
-    """
-    Double S-curve — two sequential adoption waves.
-
-    Models two distinct EV adoption cohorts.  For example:
-    - Wave 1 (early, steeper): premium/early-adopter BEVs
-    - Wave 2 (later, slower): mass-market / commercial vehicles
-
-    Parameters
-    ----------
-    base_sessions_per_day : float
-    years : float
-    saturation_factor_1, saturation_factor_2 : float
-        Saturation multipliers for each wave (relative to base).
-    midpoint_year_1, midpoint_year_2 : float
-        Year of maximum growth for each wave.
-    steepness_1, steepness_2 : float
-        Slope parameters for each wave.
-    start_date : str or Timestamp, optional
-
-    Returns
-    -------
-    pd.Series
-        Daily expected session counts indexed by date (sum of both waves).
-    """
-    wave1 = s_curve_growth_profile(
-        base_sessions_per_day, years,
-        saturation_factor=saturation_factor_1,
-        midpoint_year=midpoint_year_1,
-        steepness=steepness_1,
-        start_date=start_date,
-    )
-    # The second wave starts from a smaller base (30 % of base_sessions_per_day)
-    # because it represents a secondary cohort that overlaps with the first.
-    wave2 = s_curve_growth_profile(
-        base_sessions_per_day * 0.3,
-        years,
-        saturation_factor=saturation_factor_2,
-        midpoint_year=midpoint_year_2,
-        steepness=steepness_2,
-        start_date=start_date,
-    )
-    combined = wave1.values + wave2.values
-    return pd.Series(combined, index=wave1.index, name="n_sessions_expected")
-
-
 # Growth profile registry
+# Reduced from 5 to 3 in Session 6 (see module docstring "Session 6 fix note"
+# and REFACTOR_STATE.md for the justification: `s_curve_linear_tail_profile`
+# and `double_s_curve_profile` added extra hyperparameters without materially
+# differentiated behaviour once the base-anchoring and horizon-relative-timing
+# bugs in `s_curve_growth_profile` were fixed, and neither mapped to any of
+# this package's three canonical adoption scenarios).
 GROWTH_PROFILES = {
     "linear": linear_growth_profile,
     "s_curve": s_curve_growth_profile,
-    "s_curve_linear_tail": s_curve_linear_tail_profile,
     "bass": bass_diffusion_profile,
-    "double_s_curve": double_s_curve_profile,
 }
 
 
@@ -328,15 +296,20 @@ class MediumTermSimulator:
     charger_mix : dict, optional
         Power distribution e.g. {7.4: 0.3, 22.0: 0.7} (auto-normalised).
     growth_model : str
-        One of: 'linear', 's_curve', 's_curve_linear_tail', 'bass', 'double_s_curve'.
+        One of: 'linear', 's_curve', 'bass'. Set at construction time (not a
+        `.simulate()` argument — passing `growth_model=` to `.simulate()` is
+        silently ignored, since it isn't a growth-profile-function parameter;
+        this was already true before Session 6 and the class-level example
+        below was previously wrong about it, see REFACTOR_STATE.md).
     n_scenarios : int
     seed : int
 
     Examples
     --------
-    >>> sim = MediumTermSimulator(gmm, base_sessions_per_day=80)
-    >>> result = sim.simulate(years=5, growth_model='bass')
-    >>> result = sim.simulate(years=15, growth_model='double_s_curve')
+    >>> sim = MediumTermSimulator(gmm, base_sessions_per_day=80, growth_model='bass')
+    >>> result = sim.simulate(years=15, market_potential_factor=8)
+    >>> sim2 = MediumTermSimulator(gmm, base_sessions_per_day=80, growth_model='s_curve')
+    >>> result2 = sim2.simulate(years=15, saturation_factor=13)
     """
 
     def __init__(
@@ -386,7 +359,11 @@ class MediumTermSimulator:
         years : float
             Simulation horizon (any positive value, no upper limit).
         annual_growth_rate : float
-            Annual growth rate for 'linear' and 's_curve*' models.
+            Annual growth rate, used only by the 'linear' growth model
+            (silently ignored by 's_curve'/'bass', which take their own
+            shape parameters — `saturation_factor`/`midpoint_year`/
+            `steepness` or `market_potential_factor`/`p`/`q` — via
+            `**growth_kwargs` below).
         start_date : str or Timestamp, optional
             Start of the simulation. Defaults to today.
         output : str

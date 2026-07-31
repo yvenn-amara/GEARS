@@ -1,8 +1,254 @@
 # GEARS Refactor — Running State
 
-Session 5 complete — 2026-07-30. CI status for this session's push: see bottom of the
-Session 5 section (pushed via REST API, same approach as sessions 1-4 — no `gh` CLI
-available in this sandbox).
+Session 6 complete — 2026-07-30. CI status for this session's push: see bottom of the
+Session 6 section (pushed via `gh` CLI, installed manually in this sandbox from GitHub
+Releases since it wasn't preinstalled — see "Environment notes" below).
+
+---
+
+## Session 6 — Notebook 3 "plateau" fix (`medium_term.py`, `insee.py`, `plotting.py`)
+
+Scope: diagnose and fix the root cause of the "plateau bizarre" AUDIT.md §e flagged in
+notebook 3's medium/long-term scenarios, reduce the exposed growth-model surface, and rebuild
+notebook 3 to run cleanly under 5 minutes with the fix visibly reflected in the plots.
+
+### Diagnosis — going beyond what AUDIT.md §e had already traced
+
+AUDIT.md §e had already traced two active mechanisms and flagged a third as "currently inert
+since notebook 3 doesn't call `medium_term.py` at all". This session confirmed both active
+mechanisms with fresh numbers, and — because task 1 explicitly asked to fix
+`gears/simulation/medium_term.py` and the notebook was going to be rewired to actually call it
+(see below) — went further and traced two additional bugs in that file that AUDIT.md hadn't
+needed to cover since the path was inert at the time:
+
+- **Mechanism 1 (`gears/data/insee.py`, confirmed)**: `DepartmentForecaster._forecast_dept`
+  used `noise_scale = max(stats["std"] * 0.05, 0.1)` — the exact bug AUDIT.md §e described as
+  "known, already fixed elsewhere, never ported". Ported the fix from
+  `gears/models/forecaster.py`'s `SessionForecaster._forecast_one_scenario`
+  (`noise_scale = max(stats["std"], 1.0)`). Measured effect on a real fit (see
+  `tests/test_insee.py::test_forecast_ci_width_not_artificially_pinched`, and cell 8's printed
+  check in the rebuilt notebook): the 80% CI band width went from the ~2% of the median AUDIT.md
+  measured, to a clearly double-digit percentage (150.9% on this session's synthetic dataset —
+  see the environment note below on why this run isn't on the real data. The exact number will
+  differ on real data; what matters is the mechanism: constant, non-hairline noise, not the
+  specific figure).
+- **Mechanism 2 (`gears/plotting.py`, confirmed)**: `plot_lt_trajectories` hard-clipped monthly
+  values at `anchor_monthly_val * 10` — an undocumented ceiling that silently flattened any
+  scenario whose real trajectory grew past 10x, which the notebook's own "Central" (~13x) and
+  "Ambitious" (~21x) scenarios do well before 2040. Removed the clip; added a non-finite-value
+  guard instead (`.replace([inf, -inf], NaN)`) since that's the only thing a value ceiling was
+  legitimately protecting against. New test:
+  `tests/test_plotting.py::test_lt_trajectories_not_clipped_at_10x` (no test file existed for
+  `gears/plotting.py` before this session).
+- **New, mechanism 3 made concrete (`gears/simulation/medium_term.py`)**: AUDIT.md called this
+  "inert" because the notebook imported `s_curve_growth_profile` /
+  `bass_diffusion_profile` / etc. but never actually called them — it used a bespoke
+  `build_lt_scenario_analytical()` with hand-rolled numpy curves instead (AUDIT.md §c flagged
+  this exact "imports a whole subsystem it never calls" as its own issue). Traced two concrete,
+  numeric bugs in the profile functions themselves, which is *why* they were never wired in in
+  the first place, most likely:
+  1. **t=0 discontinuity.** Only `linear_growth_profile` actually started at
+     `base_sessions_per_day` at t=0. With default params, `s_curve_growth_profile` started at
+     6.9% of its own asymptote (not of `base`); `bass_diffusion_profile` started at **exactly
+     0**, regardless of `base_sessions_per_day` — the textbook Bass closed-form solution models
+     cumulative adopters of a brand-new product diffusing from zero, which is wrong for "current
+     fleet growing from a nonzero baseline". Confirmed by direct evaluation, not assumed.
+  2. **Saturation timing didn't scale with the requested horizon.** With the old fixed defaults
+     (`midpoint_year=2.5`, `steepness=1.5`), `s_curve_growth_profile` was ~100% saturated by
+     year 8 *regardless of whether `years=3` or `years=20` was requested* — so a 15+-year
+     simulation was flat for a large fraction of its own length, unconditionally. Traced
+     numerically at years ∈ {3, 8, 15, 20}: pre-fix, all four hit the same absolute saturation
+     year; post-fix (`midpoint_year` defaults to `years/2`, `steepness` to `6/years`), each
+     reaches ~95% of its own asymptote at its *own* `t=years`, whatever that horizon is (see
+     `tests/test_medium_term.py::test_s_curve_saturation_timing_scales_with_horizon`, which
+     would fail under the old implementation).
+  3. (Confirmed, not a new finding) `linear_growth_profile` computed `base * (1+rate)**t`
+     (exponential/compound) despite its name — AUDIT.md §c's "misleading name" flag. Fixed to
+     genuinely linear: `base * (1 + rate*t)`.
+
+### Fix
+
+- `gears/simulation/medium_term.py`: `linear_growth_profile` now genuinely linear;
+  `s_curve_growth_profile` and `bass_diffusion_profile` rescaled to anchor exactly at
+  `base_sessions_per_day` at t=0 and to use horizon-relative `midpoint_year`/`steepness`
+  defaults; `s_curve_linear_tail_profile` and `double_s_curve_profile` **removed** (see
+  reduction below); `GROWTH_PROFILES` now `{"linear", "s_curve", "bass"}`;
+  `MediumTermSimulator`'s class docstring example was *also* wrong before this session
+  (`sim.simulate(years=5, growth_model='bass')` — `growth_model` is a constructor arg, not a
+  `.simulate()` kwarg, and was silently swallowed by `**growth_kwargs` filtering) — fixed the
+  docstring to show the correct usage.
+- `gears/data/insee.py`: `_forecast_dept`'s noise_scale ported from `forecaster.py` (Mechanism 1
+  above). The `model is None` / exception-fallback branches (2 other call sites in the same
+  file, both using an even narrower `std * 0.1`) were **left untouched** — out of the traced
+  scope (only exercised when SARIMA fitting fails entirely, not what produces the reported
+  plateau), flagged here as a possible future consistency fix, not silently ignored.
+- `gears/plotting.py`: `plot_lt_trajectories`'s hard clip removed (Mechanism 2 above).
+
+### Growth-model surface reduced from 5 to 3 (task 2)
+
+Kept: `linear` (now genuinely linear — maps to the notebook's "Conservative" scenario),
+`s_curve` (logistic — "Central"), `bass` (Bass diffusion — "Ambitious"). Each of the 3 kept
+profiles now maps 1:1 to one of the notebook's three canonical scenarios.
+
+Cut, each checked before removal (not just asserted):
+- `s_curve_linear_tail_profile` — existed to avoid a hard plateau after saturation, but once
+  `s_curve`'s own horizon-relative timing fix (above) means it no longer saturates
+  implausibly early for a given horizon, the tail's marginal behavior difference becomes
+  small, and it doesn't map to any of the notebook's 3 scenarios; adds a `tail_rate`
+  hyperparameter with no literature/data source behind it (unlike `s_curve`/`bass`, which do).
+- `double_s_curve_profile` — sum of two independent `s_curve` waves (6 parameters). Checked:
+  after fixing `s_curve`'s own t=0 anchor, summing two anchored waves as this function does
+  would itself reintroduce a NEW t=0 discontinuity (wave1(0)+wave2(0) = 1.3× base, not base) —
+  fixable, but at the cost of yet more special-casing for a profile that doesn't map to any of
+  the notebook's 3 scenarios either. Cut rather than fixed.
+
+### Notebook 3 rebuild
+
+23 code cells → 15 (7 markdown cells kept, minus the one introducing the now-cut SARIMA+calendar
+/ NHiTS side-comparison — see below). Changes beyond the bug fixes:
+- **Part A**: cut the SARIMA+calendar-features / NHiTS side-by-side comparison sub-section
+  (was a tangential addition, not core to the notebook's own stated medium/long-term narrative);
+  merged panel-construction+plot, split+fit, and predict+metrics into fewer, denser cells: 11
+  code cells → 5.
+- **Part B**: rebuilt to *actually call* `linear_growth_profile` / `s_curve_growth_profile` /
+  `bass_diffusion_profile` (now fixed) instead of the bespoke `build_lt_scenario_analytical`'s
+  hand-rolled numpy curve duplication — directly resolves the AUDIT.md §c "imports a subsystem
+  it never calls" flag. Kept the fast analytical energy-scaling approach (rather than switching
+  to `MediumTermSimulator.simulate()`'s full per-session GMM sampling) for a stated, checked
+  reason: at national scale the baseline is already ~4-5k kWh/day per department and grows to
+  tens of departments × up to ~21x by 2040 — sampling every individual session for 30 scenarios
+  × 15 years at that volume is not tractable in a 5-minute notebook budget; `MediumTermSimulator`
+  remains suited to smaller-scale/shorter-horizon use, not this national multi-decade case. This
+  reasoning is stated in the notebook itself (see the `build_lt_scenario_analytical` docstring),
+  not just asserted here. 7 code cells → 5 (also dropped the now-fully-unused
+  `MediumTermSimulator` import and 2 unused imports that predated this session —
+  `matplotlib.lines.Line2D`, `scipy.ndimage.gaussian_filter1d` — neither was ever referenced in
+  the notebook's own code).
+- **Section C** (plug-and-charge / smart charging, GMM+VAE): left structurally as-is (not this
+  session's scope — no plateau-bug connection), only merged the "build smart-charging subset"
+  and "plot plug vs. smart" cells into one: 4 code cells → 3.
+- Growth-factor / capacity figures in the "Bilan" markdown are now described by pointing at the
+  printed, measured cell output rather than hardcoded in prose, so they can't go stale relative
+  to what the notebook actually computes.
+
+### Verification — and an important environment caveat
+
+**`data/sample_df.pkl` was not available this session.** Only `preprocessed_data.zip` (the 11
+public-benchmark CSVs) and this markdown plan were uploaded; `sample_df.pkl`/`sample_df.zip` —
+the ~3M-session French national dataset notebook 3 needs — normally comes from
+yvenn-amara.com, which is outside this sandbox's network allowlist (same restriction noted in
+earlier sessions for `download.pytorch.org`). Rather than guess at whether the notebook would
+run, a synthetic stand-in matching the real file's exact raw schema
+(`debut_session_timestamp`, `energie_delivree_wh`, `insee_code_departement`, etc. — see
+`gears/data/schemas.py`'s `FRENCH_COLUMN_MAP`/`FRENCH_DOMAINE_MAP`) was generated
+(~260k sessions, 20 departments, 2023-06→2026-07) purely to exercise the real code paths
+end-to-end. This **did** catch one real bug before it reached the user: the rebuilt Part A used
+a `metrics_df` column named `"Departement"`, but `plot_mt_fan_charts` hard-requires the accented
+`"Département"` — fixed.
+
+With that synthetic file, Parts A+B (this session's actual scope) executed with **0 errors in
+22 seconds**. Measured, not assumed: CI band width check printed 150.9% (vs. AUDIT.md's ~2%
+pre-fix); scenario growth factors printed as 6.5x / 12.3x / 20.4x (Conservative / Central /
+Ambitious by 2040), matching this session's own by-hand derivation to within rounding; all 5
+expected figures rendered (`outputs/03_*.png`, visually inspected — the long-term trajectories
+plot in particular shows continued growth into 2040 with no flattening, and the fan chart shows
+a clearly visible band, not a hairline).
+
+**Section C could not be executed in this sandbox**: `registry.load("french_vae_sample")`
+needs `gmm_vae_french_sample.joblib`, which — unlike `gmm_french.joblib` and
+`gmm_french_sample.joblib` — **is not git-tracked in this repo** (confirmed via
+`git ls-files gears/data/gmm/`), so the registry falls back to fitting one from raw data on the
+fly, which itself needs `torch` (not installed in this sandbox — see environment notes). This
+predates this session (Section C's GMM+VAE design is from an earlier session) and is unrelated
+to this session's changes; flagging the missing `.joblib` as a real, previously-unnoticed gap
+for a future session, not something fixed here.
+
+**Because of the above, the notebook was left in its clean (no-outputs) state for this
+commit**, unlike the other 4 notebooks in this repo, which are committed with real, executed
+outputs. Committing outputs from the synthetic proxy dataset would look like real French EV
+data to anyone opening the notebook on GitHub, which would be worse than no outputs at all.
+**A real-data re-run (quick — Parts A+B alone took 22s on synthetic data of comparable
+volume) is needed before or after merging to populate real outputs**, ideally by Yvenn locally
+via Claude Code where `sample_df.pkl` and `torch` are both presumably already available.
+
+### Test suite
+
+`tests/test_medium_term.py`: rewritten for the 3-profile surface; added
+`test_growth_profile_anchors_at_base` (parametrized over all 3, would fail pre-fix for
+`s_curve`/`bass`), `test_s_curve_saturation_timing_scales_with_horizon` (would fail pre-fix),
+`test_linear_growth_profile_is_actually_linear`, `test_bass_anchors_at_base_not_zero`. 26 tests,
+all passing.
+
+`tests/test_insee.py`: added `test_forecast_ci_width_not_artificially_pinched` (Mechanism 1
+regression, would fail pre-fix).
+
+`tests/test_plotting.py`: **new file** (none existed for `gears/plotting.py` before this
+session). `test_lt_trajectories_not_clipped_at_10x` (Mechanism 2 regression, would fail
+pre-fix) and `test_lt_trajectories_handles_non_finite_values_without_crashing`.
+
+Full suite: **265 passed, 22 skipped, 14 failed** (`pytest tests/`, 84s). All 14 failures are
+`torch`/VAE-related (`tests/test_gmm.py`'s VAE tests, one `test_registry.py` VAE test, one
+`test_benchmark.py` test) — confirmed pre-existing and unrelated to this session: none of the
+3 files this session touched (`medium_term.py`, `insee.py`, `plotting.py`) import or exercise
+`torch`/`vae.py` in any way. `torch` could not be kept installed in this sandbox (see
+environment notes) — CI installs the full `dev` extra including `torch` and should pass these
+normally, per the exact same pattern already documented in session 3's entry for `pyarrow`.
+
+`ruff check gears/ tests/`: clean (`All checks passed!`).
+
+### Environment notes for the next session
+
+- `gh` CLI was not preinstalled in this sandbox; installed manually from GitHub Releases
+  (`release-assets.githubusercontent.com` is on the network allowlist) rather than falling back
+  to the raw REST API sessions 1-5 used — worked without issue, future sessions could do the
+  same if `gh` isn't present.
+- Installing `torch` from plain PyPI in this sandbox unconditionally pulls the full CUDA
+  dependency stack at import time (`libtorch_global_deps.so` dlopens `libcudart.so` etc.
+  directly, even for CPU-only usage) — there's no way around this without either the
+  `download.pytorch.org` CPU-only index (not reachable, same restriction as previous sessions)
+  or the full ~7GB nvidia-* package set, which risks the same disk overflow session 3 hit.
+  `torch` was uninstalled for this session rather than risk it; the 14 VAE-related test
+  failures above are the direct, expected consequence, not a surprise.
+- **`gears/data/gmm/gmm_vae_french_sample.joblib` is missing from git** even though the
+  registry catalogue (`gears/models/registry.py`) expects it and `.gitignore` explicitly allows
+  `gears/data/gmm/*.joblib`. `gmm_french.joblib` (21MB) and `gmm_french_sample.joblib` (745KB,
+  no "vae" in the name — a *different* file from what the catalogue looks for under
+  `"french_vae_sample"`) are both present. Whether this is an oversight or an intentional
+  "generate on first use" design should be checked with Yvenn before a future session tries to
+  "fix" it.
+- `data/sample_df.pkl` was not available this session (see verification section above) — a
+  future session doing further work on notebooks 1-3 will hit the same blocker unless it's
+  uploaded directly (network access to yvenn-amara.com is not available in this sandbox).
+
+### CI status — confirmed via `gh pr checks` + the GitHub Actions API, not assumed from the local pass
+
+PR: [#4](https://github.com/yvenn-amara/GEARS/pull/4), opened from `refactor/session-6-notebook3`
+against `main` via `gh pr create` (`gh` CLI installed manually this session from GitHub
+Releases — see environment notes above). Left open, not merged, per this session's
+instructions.
+
+Run [30581931156](https://github.com/yvenn-amara/GEARS/actions/runs/30581931156), triggered by
+this session's push (commit `81a93c7`), **completed — conclusion: success**. All 4 jobs green:
+`test (3.10)` (3m51s), `test (3.11)` (4m37s), `test (3.12)` (5m23s), `build` (20s). Checked two
+ways: `gh pr checks 4` polled every ~20-25s until no job showed `pending`, then confirmed
+independently via `gh api repos/yvenn-amara/GEARS/actions/runs/30581931156` (`status:
+"completed"`, `conclusion: "success"`) and `.../jobs` (all 4 `conclusion: "success"`) — not
+inferred from `gh pr checks`'s summary alone. This also confirms the 14 local test failures
+(all `torch`/VAE-related, see above) are specific to this sandbox's environment, not real: CI's
+`dev` extra install includes a working `torch`, and none of those 14 tests are in the list
+above of files this session actually touched.
+
+### Explicitly not done this session (out of scope / flagged, not silently skipped)
+
+- Section C (GMM+VAE plug/smart-charging comparison) — not touched beyond the 1-cell merge
+  noted above; no plateau-bug connection, and this session could not execute it regardless (see
+  environment notes).
+- The 2 untouched `insee.py` fallback noise-scale call sites (narrower `std*0.1`, only hit when
+  SARIMA fitting fails entirely) — flagged above, not fixed.
+- The missing `gmm_vae_french_sample.joblib` — flagged above as a real gap, not fixed (needs
+  real data + a fitting run, and clarification on whether it's intentional).
+- A true real-data re-run of notebook 3 to populate committed outputs — flagged above, needs
+  `sample_df.pkl` which wasn't available this session.
 
 ---
 
