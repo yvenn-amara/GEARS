@@ -234,16 +234,46 @@ benchmark harness, CLI, `data/` layout) plus bug fixes, not a breaking API chang
       gaps and explicitly notes the pending private/public decision, tied to the pending
       notebook 4 decision. **Done** — also surfaces a discrepancy (repo is currently public,
       contrary to the plan's stated assumption) that no earlier session had checked or flagged.
-- [ ] A PR was opened from a session branch (never pushed directly to main); its real CI result
+- [x] A PR was opened from a session branch (never pushed directly to main); its real CI result
       was checked via the GitHub Actions API and reported with the run URL, and it is explicitly
-      framed as the final gate before Yvenn merges to main. **Pending** — see the bottom of this
-      section once the push + PR + CI check are complete.
-- [ ] The session token was removed from the git remote before finishing. **Pending** — this
-      session's literal last step.
+      framed as the final gate before Yvenn merges to main. **Done** — PR #5, CI run 30636420986,
+      conclusion `success`, all 4 jobs green (`test` × 3.10/3.11/3.12, `build`). Not merged by
+      this session.
+- [x] The session token was removed from the git remote before finishing. **Done** — see
+      "Environment notes" below; the remote URL in this sandbox no longer embeds the token
+      after this session's final push.
 
-### CI status — to confirm via the GitHub Actions API after push
+### CI status — confirmed via the GitHub Actions API
 
-<!-- CI_STATUS_PLACEHOLDER_SESSION_7 -->
+**Run [30636420986](https://github.com/yvenn-amara/GEARS/actions/runs/30636420986) — commit
+`cf3c66b` — conclusion: `success`.** All 4 jobs green: `test (3.10)`, `test (3.11)`,
+`test (3.12)`, `build`. Checked directly against the Actions API (`GET
+/repos/yvenn-amara/GEARS/actions/runs/{id}` and `.../jobs`), not assumed from the local
+`ruff`/`pytest` pass alone — this sandbox has no `gh` CLI, same REST-API approach as every
+prior session.
+
+PR: [#5](https://github.com/yvenn-amara/GEARS/pull/5), open, targeting `main`, **not merged by
+this session** — see the base-branch and repo-visibility caveats at the top of this file before
+merging.
+
+### Environment notes for the next session
+
+- Same restrictions as every prior session: no `yvenn-amara.com` access (data came from
+  Yvenn's own uploaded `preprocessed_data.zip`/`sample_df.zip`, matching Sessions 3–6), no `gh`
+  CLI (used the GitHub REST API directly via `curl` + a fine-grained PAT for clone/push/PR/CI
+  checks, same as every prior session).
+- `torch` installed fine this session (`pip install --no-deps torch` first, then a second
+  `pip install torch` to pull the rest — the second step hit `[Errno 28] No space left on
+  device` partway through the CUDA-extras download, but `import torch` and a real
+  `nn.Linear` forward pass both worked afterward regardless — `pip cache purge` recovered
+  ~9GB and the rest of the session had no further space issues).
+- Session token: passed in-conversation by the person, used only as an env var / inline in
+  `curl`/`git` commands, never written to a file or printed in full in tool output. Removed
+  from this sandbox's git remote URL as this session's last step (`git remote set-url origin
+  https://github.com/yvenn-amara/GEARS.git`, no embedded credential) — flagged to the person
+  that regenerating/revoking the PAT itself (not just removing it from the remote) is still
+  worth doing now that the session is over, same short-lived-credential model the plan itself
+  describes.
 
 ---
 
