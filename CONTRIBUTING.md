@@ -9,7 +9,7 @@ Thank you for your interest in contributing! This document explains the process.
 ```bash
 git clone https://github.com/yvenn-amara/GEARS.git
 cd GEARS
-pip install -e ".[dev,notebooks]"
+pip install -e ".[dev]"
 ```
 
 ## Running tests
@@ -29,7 +29,7 @@ pytest tests/test_gmm.py -v
 
 ```bash
 ruff check gears/ tests/          # lint
-black gears/ tests/               # format
+ruff format gears/ tests/         # format
 mypy gears/ --ignore-missing-imports  # type hints (non-blocking)
 ```
 
@@ -47,7 +47,7 @@ mypy gears/ --ignore-missing-imports  # type hints (non-blocking)
 - [ ] All 260+ existing tests still pass
 - [ ] Docstrings updated
 - [ ] `CHANGELOG.md` entry added under `[Unreleased]`
-- [ ] `ruff` and `black` pass with no errors
+- [ ] `ruff check` and `ruff format --check` pass with no errors
 
 ## Reporting bugs
 

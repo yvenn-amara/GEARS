@@ -99,7 +99,7 @@ def simulate(model, pretrained, start, horizon, scenarios, n_sessions, output, s
 @click.option("--growth", default=0.15, show_default=True,
               help="Annual growth rate (0.15 = +15%/yr).")
 @click.option("--growth-model", default="linear", show_default=True,
-              type=click.Choice(["linear", "s_curve"]))
+              type=click.Choice(["linear", "s_curve", "bass"]))
 @click.option("--output-type", default="daily_energy", show_default=True,
               type=click.Choice(["daily_energy", "hourly_energy", "sessions"]))
 @click.option("--scenarios", default=10, show_default=True)
