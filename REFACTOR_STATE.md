@@ -68,11 +68,13 @@ doc/comment fixes. No renames or dispatch mechanism implemented yet — that's S
       regressions from the CLI/docstring/comment edits; targeted re-run of
       `cli`/`growth`/`medium_term`-related tests also green after the `bass` exposure).
 - [x] The GEAR 2nd sanity-check question was asked (and answered).
-- [ ] PR opened against `main`, CI checked — status recorded below once available.
+- [x] PR opened against `main` ([#6](https://github.com/yvenn-amara/GEARS/pull/6)), CI green, not
+      merged.
 
-### CI status
-To be confirmed via the GitHub Actions API after push — see bottom of file / PR for the actual
-run result once CI completes.
+### CI status — confirmed via the GitHub Actions API, not assumed
+Run [30749173616](https://github.com/yvenn-amara/GEARS/actions/runs/30749173616) on
+`refactor/phase2-session-1-naming-design`: all 4 jobs green — `test (3.10)`, `test (3.11)`,
+`test (3.12)`, `build`.
 
 **Base-branch caveat, read first**: Session 6's PR ([#4](https://github.com/yvenn-amara/GEARS/pull/4))
 was still open/unmerged when this session started — `main` was still at the Session 5 state.
