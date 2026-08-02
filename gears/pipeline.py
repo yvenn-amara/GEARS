@@ -362,7 +362,7 @@ class GEARSModel:
         weather_factor : dict, optional
             Seasonal modifiers, e.g. ``{'winter': 1.1, 'summer': 0.9}``.
         growth_model : str
-            ``'linear'`` or ``'s_curve'``.
+            ``'linear'``, ``'s_curve'``, or ``'bass'``.
         n_scenarios : int, optional
             Override the default number of scenarios.
         charger_mix : dict, optional

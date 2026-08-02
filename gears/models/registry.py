@@ -66,21 +66,18 @@ class NativeGMMRegistry:
     """
 
     # ------------------------------------------------------------------
-    # Catalogue — single source of truth for all GMM bundle metadata.
+    # Catalogue — single source of truth for all native bundle metadata.
     #
-    # KEY INVARIANT: the canonical key is "french" and it must point to
-    # gmm_french.joblib (the full 8 008-context model, is_sample=False).
+    # Two entries as of Session 4:
+    #   • "french": the full national GMM (8 008 contexts, is_sample=False).
+    #     get_gmm() currently always resolves to this entry regardless of
+    #     its arguments — see PROPOSAL_NAMING.md for why and what's proposed.
+    #   • "french_vae_sample": the shared conditional VAE (top-5 departments,
+    #     is_sample=True), added in Session 4.
     #
-    # Why only one entry?
-    #   • get_gmm() calls registry.load("french").
-    #   • get_sklearn_gmm() defaults to gmm_id="french".
-    #   • fit_gmm.py saves with gmm_id="french".
-    #   • test_registry.py::TestCatalogue expects exactly ["french"].
-    #
-    # The sample bundle (gmm_french_sample.joblib) is a development /
-    # CI artefact; it is NOT exposed in the public catalogue to keep the
-    # API surface clean and tests unambiguous.  Developers who need the
-    # sample bundle can load it directly via:
+    # The separate CI/dev-only sample bundle (gmm_french_sample.joblib) is
+    # NOT in this catalogue, to keep the public API surface unambiguous.
+    # Developers who need it can load it directly via:
     #   EVSessionGMM.load("gears/data/gmm/gmm_french_sample.joblib")
     # ------------------------------------------------------------------
 

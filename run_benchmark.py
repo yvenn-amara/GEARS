@@ -23,25 +23,25 @@ Usage
 -----
     # Smoke-test on the smallest, fastest dataset first (Session 3's own
     # acceptance criterion) before scaling up.
-    python scripts/run_benchmark.py --dataset office --quick
+    python run_benchmark.py --dataset office --quick
 
     # Full sweep, all defaults -- all four arms (persistence, gmm,
     # gmm_recency, vae; Session 4).
-    python scripts/run_benchmark.py \\
+    python run_benchmark.py \\
         --datasets acn,boulder,caltech,domestics,dundee,jpl,office,palo_alto,paris,perth,sap \\
         --exclude acn --horizons 1,2,3 --x-grid 1,2,3,4,8,16,52
 
     # Reduced grid density (see Section 4.2 runtime controls) -- e.g. on a
     # single-core / time-boxed machine, step origins every 5 days instead
     # of daily and use fewer Monte Carlo scenarios:
-    python scripts/run_benchmark.py --step-days 5 --n-scenarios 20
+    python run_benchmark.py --step-days 5 --n-scenarios 20
 
     # Select which arms to run (default: all four). The vae arm is the slow
     # one (fresh network training per cell, not a closed-form fit) -- drop
     # it for a fast GMM-only iteration loop:
-    python scripts/run_benchmark.py --arms persistence,gmm,gmm_recency
+    python run_benchmark.py --arms persistence,gmm,gmm_recency
 
-    python scripts/run_benchmark.py --help
+    python run_benchmark.py --help
 """
 
 from __future__ import annotations

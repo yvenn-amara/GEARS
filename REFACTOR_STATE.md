@@ -3,9 +3,76 @@
 Session 7 complete — 2026-07-31. This is the final gate before merging the full refactor
 to `main`. Read this checklist first; full detail is in the Session 7 section below.
 
+Phase 2 (point-zero renames, GEAR levels, VAE registry, notebook overhaul, translation, CI/health,
+persistence investigation) started 2026-08-02. Phase 2 sessions are numbered from 1 again — see
+the "Phase 2 / Session N" headings below, kept separate from the Phase 1 "Session N" headings
+above them in the file.
+
 ---
 
-## Release checklist (Session 7)
+## Phase 2 / Session 1 — Naming & Architecture Design Proposal (2026-08-02)
+
+**Deliverable, not a code change**: two proposal documents for review, plus four confirmed-stale
+doc/comment fixes. No renames or dispatch mechanism implemented yet — that's Session 2 onward.
+
+### State re-verified independently before starting (not trusted from the briefing doc)
+- `git log` HEAD: `afbaa02` (Session 7 merge) — matches.
+- `ruff check gears/ tests/ --statistics`: 0 errors.
+- `pytest tests/ -q`: 280 passed, 21 skipped (301 total, matching the expected count; more skips
+  than a run with the real `sample_df.pkl`/CSVs present, since this sandbox doesn't have them).
+- Read the actual source (not assumed) for every claimed issue: `get_gmm()`'s four dead
+  parameters, the `NativeGMMRegistry` catalogue's stale "KEY INVARIANT" comment, `GEARSModel`
+  having no `model_type`/`recency`/`gear` parameter anywhere, and the CLI's `--growth-model`
+  only offering `linear`/`s_curve` despite `medium_term.py` fully supporting `bass`. All confirmed
+  as described.
+
+### User decisions (asked, not guessed)
+- **Deprecation policy**: clean break, version bump to **2.0.0** now. No deprecated aliases.
+  Session 2 implements renames directly.
+- **GEAR 2nd sanity check**: its primary `fit` entry point will still take a pandas DataFrame (or
+  a path to one) as its main input, even though internals will differ completely from GEAR 1st.
+  `PROPOSAL_GEAR_ARCHITECTURE.md`'s dispatch design is built around this answer.
+
+### Deliverables
+- `PROPOSAL_NAMING.md` — full rename map (`EVSessionGMM`→`EVSessionModel`, `NativeGMMRegistry`→
+  `NativeSessionModelRegistry`, `gmm_id`→`session_model_id`, `get_gmm()`→`get_session_model()`,
+  `get_sklearn_gmm()`→`get_sklearn_component()`, `departement`/`saison`→`department`/`season`,
+  `gears/data/gmm/`→`gears/data/session_models/`, `scripts/fit_gmm.py`→
+  `scripts/fit_session_model.py`, `gears-fit-gmm`→`gears-fit-session-model`, `list_gmms()`→
+  `list_session_models()`), the `gmm_id`/`model_id` collision resolution (keep
+  `session_model_id` distinct from `ModelRegistry.model_id`), and a recommendation on
+  `get_gmm()`'s dead-parameter bug (narrow the signature rather than wiring the params through).
+- `PROPOSAL_GEAR_ARCHITECTURE.md` — thin gear-dispatching `GEARSModel` facade
+  (`_GEAR_BACKENDS = {1: Gear1Backend}`, `NotImplementedError` for gears 2-5), today's pipeline
+  moved behind `Gear1Backend` unchanged, and `model_type`/`recency`/`half_life_days` folded into
+  `Gear1Backend.__init__` as first-class parameters (closing the gap where VAE/recency were only
+  reachable by bypassing the facade).
+- Four stale-doc fixes applied (doc/comment-only, no behavior change): `registry.py`'s
+  KEY INVARIANT comment now matches the two-entry catalogue; `run_benchmark.py`'s docstring now
+  says `python run_benchmark.py` (repo root, not `scripts/`); `CONTRIBUTING.md`'s install command
+  drops the non-existent `notebooks` extra and its code-style section drops the undeclared
+  `black` dependency in favor of `ruff format`; the CLI's `--growth-model` and
+  `GEARSModel.simulate_medium_term`'s docstring now expose `bass` alongside `linear`/`s_curve`.
+
+### Acceptance criteria — explicit pass/fail
+- [x] `PROPOSAL_NAMING.md` exists with a complete old→new→why→risk table.
+- [x] The `gmm_id`/`model_id` collision is explicitly named and resolved.
+- [x] Deprecation-policy recommendation stated explicitly (asked, answered: clean break, 2.0.0).
+- [x] `PROPOSAL_GEAR_ARCHITECTURE.md` proposes a concrete, minimal dispatch mechanism and
+      justifies why it doesn't lock in `fit()`/`simulate_*()`'s current signatures for future
+      gears.
+- [x] The `GEARSModel.fit()` gap (`model_type`/`recency` unreachable from the facade) documented
+      as a finding, with a proposed fix folded into the gear=1 backend design.
+- [x] The four stale-doc fixes applied and are the only production-file changes in this PR.
+- [x] `ruff` 0 errors; full test suite unchanged and green (280 passed / 21 skipped locally — no
+      regressions from the CLI/docstring/comment edits; targeted re-run of
+      `cli`/`growth`/`medium_term`-related tests also green after the `bass` exposure).
+- [x] The GEAR 2nd sanity-check question was asked (and answered).
+- [ ] PR opened against `main`, CI checked — status recorded below once available.
+
+### CI status
+To be confirmed via the GitHub Actions API after push — see bottom of file / PR for the actual
+run result once CI completes.
 
 **Base-branch caveat, read first**: Session 6's PR ([#4](https://github.com/yvenn-amara/GEARS/pull/4))
 was still open/unmerged when this session started — `main` was still at the Session 5 state.
