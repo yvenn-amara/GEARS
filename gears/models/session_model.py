@@ -356,15 +356,24 @@ class EVSessionModel:
                 self.recent_months, len(df), n_before,
             )
 
-        # Check that all stratify_by columns exist
+        # Check that all stratify_by columns exist. Only the columns that are
+        # actually absent are dropped — a dataset missing just `location_type`
+        # (e.g. a single-site export) still keeps `department` if it has it,
+        # rather than silently collapsing all the way down to
+        # ['day_of_week', 'season']. This is also the one log statement that
+        # reports the *final* stratify_by actually used for fitting, so any
+        # caller logging its own pre-fit summary should treat this message as
+        # authoritative rather than re-deriving (and potentially
+        # contradicting) it independently.
         missing_cols = [c for c in self.stratify_by if c not in df.columns]
         if missing_cols:
+            kept_cols = [c for c in self.stratify_by if c not in missing_cols]
             logger.warning(
                 "Stratification columns %s not in data. "
-                "Falling back to ['day_of_week', 'season'].",
-                missing_cols,
+                "Stratifying by %s instead.",
+                missing_cols, kept_cols,
             )
-            self.stratify_by = ["day_of_week", "season"]
+            self.stratify_by = kept_cols
 
         # Recency-weighted resampling (opt-in) is only implemented for the
         # GMM path; VAE fitting collects raw groups and trains a single

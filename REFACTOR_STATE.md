@@ -1,12 +1,98 @@
 # GEARS Refactor — Running State
 
-Session 7 complete — 2026-07-31. This is the final gate before merging the full refactor
-to `main`. Read this checklist first; full detail is in the Session 7 section below.
+Phase 2 / Session 4 in progress (PR opened, not merged) — 2026-08-03. Session 7 (Phase 1)
+completed the final gate before merging the original refactor to `main`; full Phase 1 detail
+is in the Session 7 section below.
 
 Phase 2 (point-zero renames, GEAR levels, VAE registry, notebook overhaul, translation, CI/health,
 persistence investigation) started 2026-08-02. Phase 2 sessions are numbered from 1 again — see
 the "Phase 2 / Session N" headings below, kept separate from the Phase 1 "Session N" headings
 above them in the file.
+
+---
+
+## Phase 2 / Session 4 — VAE Registry Fix, Fitting Scripts, and Hyperparameters (2026-08-03)
+
+### Verified before touching anything
+- Re-cloned fresh: `main` at `038facf` (Session 3's merge, PR #8). `ruff check gears/ tests/`:
+  0 errors. `pytest tests/ -q`: 291 passed, 21 skipped, 0 failed — matches Session 3's own
+  number exactly.
+- `scripts/fit_session_model.py` already supports `--model-type vae`, `--recency
+  --half-life-days N`, and plain GMM, as the plan document claimed. The actual gap was
+  narrower than "write a fitting script": (a) `gmm_vae_french_sample.joblib` was never fit
+  and committed (out of scope here — needs Yvenn's local machine, see below), (b) a real
+  logging/stratification bug, (c) two flags (`--departments`, `--exclude-last-n-days`) the
+  exact three local commands need that didn't exist yet.
+
+### The bug, reproduced for real (not just read from code)
+Fit `office.csv` (single-site ACN data — has neither `location_type` nor `department`)
+through the unmodified script: it logged `stratify_by=['location_type', 'day_of_week',
+'season']` as what it was about to fit, then `EVSessionModel.fit()` silently re-checked,
+found `location_type` *also* missing, and fell all the way back to `['day_of_week',
+'season']` — a different, uncross-referenced logger. Confirmed this is worse than a
+cosmetic mismatch: the same blanket fallback would have silently dropped a *present*
+`department` column too, on any dataset missing only `location_type`.
+
+**Fix** (`gears/models/session_model.py`, `EVSessionModel.fit()`): only the columns
+actually absent are dropped from `stratify_by` now — `department` survives when only
+`location_type` is missing. This is also now the single place that both decides and logs
+the final `stratify_by`, so a caller's own pre-fit log can no longer diverge from it.
+Simplified `scripts/fit_session_model.py`'s `main()` to match: it no longer pre-computes
+its own has-department fallback (that duplicate logic was the other half of the bug) and
+always passes the full 4-column candidate list, deferring entirely to `EVSessionModel.fit()`.
+
+### New flags
+- `--departments`: comma-separated department codes, filters `df["department"]` before
+  fitting. Errors clearly if the data has no `department` column at all.
+- `--exclude-last-n-days`: drops sessions newer than `max(arrival_time) - N days`, for
+  holdout-style fits.
+- `--output-name` (not in the original plan — found while wiring the plan's own example
+  commands): the registry's `NativeSessionModelRegistry.save()` only accepts the two fixed
+  catalogue ids (`french`, `french_vae_sample`). The plan's recency/holdout example commands
+  used `--output-name gmm_french_recency`/`gmm_french_holdout`, which would have silently
+  collided with each other and with the production `french` bundle without a way to save
+  under an arbitrary name. `--output-name` now saves directly via `EVSessionModel.save()`
+  to `<output-dir>/<output-name>.joblib`, bypassing the catalogue entirely — for exactly
+  these ad-hoc notebook-illustration artifacts, never the registry-managed default bundle.
+
+### Verification
+- `ruff check gears/ tests/ scripts/`: 0 errors (also cleaned up 5 pre-existing scripts/
+  issues found at baseline: an unfixable-until-now `EVSessionModel` forward-ref F821 moved
+  behind a `TYPE_CHECKING` guard, a non-executable shebang, `logger.exception` instead of
+  `.error(..., exc_info=True)`, and two dict-iteration nits).
+- `pytest tests/ -q`: 311 passed (291 baseline + 9 new — 3 in `test_session_model.py`
+  covering the fallback fix directly against `EVSessionModel`, including one asserting a
+  *present* `department` survives a missing `location_type`; 6 in the new
+  `test_fit_session_model_script.py`, running the script as a real subprocess against small
+  synthetic CSVs per this session's own "keep it fast" rule — `--departments` filtering,
+  its error path, `--exclude-last-n-days`, `--output-name`'s registry bypass, and its
+  overwrite guard), 10 skipped, 0 failed. (Skip count dropped from 21→10 between the
+  baseline run and this run without any change on my part — not investigated further since
+  it's strictly fewer skips and nothing failed.)
+- `--help` verified to parse cleanly and lists both new flags plus `--output-name`.
+
+### What this session does NOT do (by design — see plan)
+- Does not run the actual multi-minute VAE/GMM fits against `data/sample_df.pkl` — that
+  needs Yvenn's own machine (15–45 min budget, no GPU required). The three exact commands
+  are in the script's own module docstring/`--help` text now, updated to the script's real
+  flag names (`--max-samples`, not the plan draft's `--max-samples-per-context`), and using
+  `--output-name` for the recency/holdout variants per the fix above.
+- Does not touch `gmm_vae_french_sample.joblib` itself, `PersistenceForecaster`, or any
+  benchmark result — out of scope, per the plan.
+
+### Still open for Yvenn
+- **Action needed**: run the three commands in `scripts/fit_session_model.py`'s docstring
+  locally (registry VAE bundle, GMM-recency, GMM-holdout) and report back the resulting
+  `.joblib` paths + real fit times — Session 11 needs those to integrate.
+- `NativeGMMRegistry.get_gmm()`/`get_sklearn_gmm()` still silently ignoring their
+  `location_type`/`department`/`season`/`day_of_week` arguments is a separate, pre-existing
+  bug (flagged in the plan's appendix) — untouched here, Session 1/2's naming pass already
+  covered the rename; the param-ignoring behavior itself is still open.
+
+### CI
+PR #9 (https://github.com/yvenn-amara/GEARS/pull/9), run 30850908235: 4/4 jobs green
+(`test` on 3.10/3.11/3.12, `build`). Opened, not merged — left for review per the
+established workflow.
 
 ---
 

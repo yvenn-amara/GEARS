@@ -641,3 +641,72 @@ def test_vae_is_sample_flag():
         max_samples_per_context=20,
     ).fit(df, is_sample=True)
     assert model.is_sample_ is True
+
+
+# ── Regression: partial stratify_by fallback (Phase 2 Session 4) -------------
+#
+# Previously, if ANY stratify_by column was missing from the data,
+# EVSessionModel.fit() silently dropped ALL of them down to
+# ['day_of_week', 'season'] — even columns that were actually present. A
+# single-site export missing only `location_type` would also lose a present
+# `department` column with no warning distinguishing the two. Confirmed via a
+# real smoke test on office.csv (which has neither column): the caller's own
+# pre-fit log claimed the full 4-column stratify_by was in use while the
+# model had actually silently fallen back further, with no cross-reference
+# between the two log lines.
+
+def make_df_with_department(n=500, seed=0):
+    """Like make_df(), but with a `department` column and no `location_type` —
+    mirrors a single-site export that has department info but isn't
+    multi-site (the inverse of office.csv, which has neither)."""
+    rng = np.random.default_rng(seed)
+    df = pd.DataFrame({
+        "arrival_time": pd.date_range("2025-01-01", periods=n, freq="1h"),
+        "duration": rng.uniform(0.5, 8, n),
+        "energy": rng.uniform(2, 40, n),
+        "department": rng.choice(["75", "92"], n),
+    })
+    return validate_dataframe(df)
+
+
+def test_partial_stratify_fallback_keeps_present_columns():
+    """Only the missing column(s) should be dropped from stratify_by — a
+    present `department` must survive a missing `location_type`, not be
+    swept away by the old blanket fallback to ['day_of_week', 'season']."""
+    df = make_df_with_department(300)
+    gmm = EVSessionModel(
+        n_components=1,
+        stratify_by=["location_type", "department", "day_of_week", "season"],
+    ).fit(df)
+    assert gmm.stratify_by == ["department", "day_of_week", "season"]
+    assert "location_type" not in gmm.stratify_by
+
+
+def test_full_stratify_fallback_when_all_missing():
+    """When every extra column is missing (e.g. office.csv: neither
+    location_type nor department), stratify_by still collapses to
+    ['day_of_week', 'season'] — same end result as before, just reached via
+    the general "drop what's missing" rule rather than a special case."""
+    df = make_df(300)  # has location_type but not department
+    gmm = EVSessionModel(
+        n_components=1,
+        stratify_by=["location_type", "department", "day_of_week", "season"],
+    ).fit(df)
+    assert gmm.stratify_by == ["location_type", "day_of_week", "season"]
+
+    df_neither = df.drop(columns=["location_type"])
+    gmm2 = EVSessionModel(
+        n_components=1,
+        stratify_by=["location_type", "department", "day_of_week", "season"],
+    ).fit(df_neither)
+    assert gmm2.stratify_by == ["day_of_week", "season"]
+
+
+def test_stratify_fallback_no_missing_columns_unchanged():
+    """When nothing is missing, stratify_by is left untouched (no warning
+    path taken at all)."""
+    df = make_df(300)
+    gmm = EVSessionModel(
+        n_components=1, stratify_by=["location_type", "day_of_week", "season"],
+    ).fit(df)
+    assert gmm.stratify_by == ["location_type", "day_of_week", "season"]
