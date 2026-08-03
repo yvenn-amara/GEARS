@@ -326,7 +326,7 @@ def distribution_comparison(
     real : pd.DataFrame
         Validated real sessions (output of ``load_sessions``).
     simulated : pd.DataFrame
-        Simulated sessions (from ``EVSessionGMM.sample`` or
+        Simulated sessions (from ``EVSessionModel.sample`` or
         ``ShortTermSimulator``).
     features : list of str, optional
         Columns to compare.  Defaults to ``['hour', 'duration', 'energy']``.
@@ -339,9 +339,9 @@ def distribution_comparison(
 
     Examples
     --------
-    >>> from gears import make_demo_data, EVSessionGMM
+    >>> from gears import make_demo_data, EVSessionModel
     >>> real = make_demo_data(n=500)
-    >>> gmm = EVSessionGMM().fit(real)
+    >>> gmm = EVSessionModel().fit(real)
     >>> sim = gmm.sample(500)
     >>> distribution_comparison(real, sim)
     """

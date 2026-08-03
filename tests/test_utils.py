@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from gears.data.loader import make_demo_data
-from gears.models.gmm import EVSessionGMM
+from gears.models.session_model import EVSessionModel
 from gears.utils import (
     distribution_comparison,
     forecast_metrics,
@@ -105,7 +105,7 @@ def test_kl_divergence_nonneg():
 
 def test_distribution_comparison_returns_all_features():
     df = make_demo_data(n=400, seed=0)
-    gmm = EVSessionGMM(n_components=3).fit(df)
+    gmm = EVSessionModel(n_components=3).fit(df)
     synth = gmm.sample(400, seed=0)
     metrics = distribution_comparison(df, synth)
     assert len(metrics) == 3
@@ -116,7 +116,7 @@ def test_distribution_comparison_returns_all_features():
 
 def test_distribution_comparison_custom_features():
     df = make_demo_data(n=300, seed=0)
-    gmm = EVSessionGMM(n_components=3).fit(df)
+    gmm = EVSessionModel(n_components=3).fit(df)
     synth = gmm.sample(300)
     metrics = distribution_comparison(df, synth, features=["hour", "energy"])
     assert len(metrics) == 2

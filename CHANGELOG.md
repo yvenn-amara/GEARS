@@ -5,6 +5,47 @@ not necessarily when it lands on `main` (this repo uses a branch-and-PR workflow
 `REFACTOR_STATE.md` for full session-by-session detail, real measured numbers, and
 honestly-reported gaps behind every line below).
 
+## [2.0.0] — 2026-08 naming consistency pass (Phase 2 / Session 2)
+
+Clean-break rename — no deprecated aliases. See `PROPOSAL_NAMING.md` for the full
+rationale behind every renamed symbol below.
+
+### Breaking changes
+- `EVSessionGMM` → `EVSessionModel` (`gears/models/gmm.py` → `gears/models/session_model.py`)
+- `NativeGMMRegistry` → `NativeSessionModelRegistry`
+- `gmm_id` → `session_model_id` (param, used throughout the registry, CLI, and tests)
+- `get_gmm(location_type, departement, saison, day_of_week)` → `get_session_model(bundle_id="french")`.
+  This is more than a rename: the old signature accepted four arguments and silently ignored
+  all of them, always returning the `"french"` bundle regardless — a real bug, not just a
+  naming issue. The new signature matches what the function actually does; stratum-level
+  lookups now happen afterward via `.get_sklearn_component(context=...)` on the returned object.
+  As a side effect, `get_session_model("french_vae_sample")` now works as a direct shortcut for
+  the VAE bundle too, which the old `get_gmm()` could not do.
+- `get_sklearn_gmm()` → `get_sklearn_component()` (on `EVSessionModel` and on the registry's
+  stratum-level convenience method)
+- `departement`, `saison` → `department`, `season` (params on `get_sklearn_component()`)
+- `gears/data/gmm/` → `gears/data/session_models/` (package data directory; the two shipped
+  `.joblib` bundles were re-pickled under the new class path — the old bundles would not have
+  unpickled under the renamed class)
+- `scripts/fit_gmm.py` → `scripts/fit_session_model.py`
+- `gears-fit-gmm` console script → `gears-fit-session-model`
+- `list_gmms()` / `args.list_gmms` → `list_session_models()` / `args.list_models`
+- `notebooks/4_persistence_vs_gmm_benchmark.ipynb` → `notebooks/4_persistence_vs_session_model_benchmark.ipynb`
+  (notebooks 1–3 keep their filenames — see `PROPOSAL_NAMING.md` for why)
+
+### Fixed
+- `NativeSessionModelRegistry`'s internal `_GMM_DIR` constant and `gmm_dir` constructor
+  parameter (and the same on `GEARSModel.from_native_gmm()`) now consistently point at and
+  are named after the renamed `session_models/` directory.
+- `scripts/fit_session_model.py`'s `--output-dir` default still pointed at the old
+  `gears/data/gmm` path — updated to `gears/data/session_models`.
+
+### Not changed (deliberately, see `PROPOSAL_NAMING.md`)
+- `ModelRegistry` and its `model_id` (the separate, already-generic HF-Hub-backed registry)
+- `GEARSModel.from_native_gmm()`'s own method name and `self.gmm_` attribute — part of the
+  GEAR-level facade, in scope for a later session
+- `n_components` / `--n-components` (GMM-specific by design)
+
 ## [1.1.0] — 2026-07 refactor (Sessions 1–7)
 
 ### Added

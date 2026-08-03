@@ -2,7 +2,7 @@
 """
 validate_vae_competitiveness.py — Session 3 validation script.
 
-Adds a third arm (VAE, via ``EVSessionGMM(model_type="vae")``) to the
+Adds a third arm (VAE, via ``EVSessionModel(model_type="vae")``) to the
 existing rolling-origin methodology from ``gears/evaluation/benchmark.py``,
 WITHOUT modifying that module (its formal 3-arm wiring is Session 4's job,
 per the refactor plan). This mirrors the precedent already set by Session 2's
@@ -15,7 +15,7 @@ per cell, the summary score is the mean of the three Wasserstein distances
 (hour, duration, energy); a method "wins" a cell if its score is lower than
 persistence-bootstrap's.
 
-Runtime note (see notebooks/4_persistence_vs_gmm_benchmark.ipynb's own run
+Runtime note (see notebooks/4_persistence_vs_session_model_benchmark.ipynb's own run
 config note): this sandbox is single-CPU with no torch acceleration, and the
 VAE arm additionally *trains a fresh neural net per cell* (unlike persistence
 and GMM, which are cheap closed-form fits). A literal daily-origin/50-scenario
@@ -39,8 +39,8 @@ import pandas as pd
 
 from gears.evaluation.benchmark import crps_ensemble, eval_window_for
 from gears.evaluation.windowing import sessions_in_last_n_occurrences
-from gears.models.gmm import EVSessionGMM
 from gears.models.persistence_sampler import PersistenceSessionSampler
+from gears.models.session_model import EVSessionModel
 from gears.output.aggregator import _overlap_profile_24h
 from gears.utils import distribution_comparison
 
@@ -50,7 +50,7 @@ logger = logging.getLogger("validate_vae")
 #: Minimum session duration (h) used when deriving mean-power (energy /
 #: duration) for the load-profile reconstruction, matching the floor
 #: already used in ``OutputAggregator.build_load_profiles``'s
-#: ``"mean_power"`` mode and in ``EVSessionGMM._raw_to_sessions``.
+#: ``"mean_power"`` mode and in ``EVSessionModel._raw_to_sessions``.
 _MIN_DURATION_H = 0.08
 
 
@@ -152,7 +152,7 @@ def evaluate_cell(
 
     t0 = time.perf_counter()
     try:
-        gmm = EVSessionGMM(
+        gmm = EVSessionModel(
             n_components=1, stratify_by=["day_of_week"], random_state=random_state,
         ).fit(pool)
         arms.append(("gmm", gmm, time.perf_counter() - t0))
@@ -161,7 +161,7 @@ def evaluate_cell(
 
     t0 = time.perf_counter()
     try:
-        vae = EVSessionGMM(
+        vae = EVSessionModel(
             n_components=1, stratify_by=["day_of_week"], model_type="vae",
             random_state=random_state, **vae_kwargs,
         ).fit(pool)

@@ -4,7 +4,7 @@ Output aggregation utilities for GEARS.
 Provides helpers for:
 - Daily energy totals
 - Hourly load profiles
-- Annual load-profile reconstruction from a fitted EVSessionGMM
+- Annual load-profile reconstruction from a fitted EVSessionModel
 - Exporting to CSV / Parquet / Excel
 """
 
@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
-    from gears.models.gmm import EVSessionGMM
+    from gears.models.session_model import EVSessionModel
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def _overlap_profile_24h(
     corresponding hours of the following day (modulo 24), preserving energy
     conservation across the 24-slot profile.
 
-    The function supports durations up to 48 h (``EVSessionGMM`` hard clip),
+    The function supports durations up to 48 h (``EVSessionModel`` hard clip),
     which means a session can span at most three calendar days.  Contributions
     from each day are folded back onto the 24-slot array.
 
@@ -185,7 +185,7 @@ def _draw_power_levels(
 
 
 def _build_smart_ts(
-    gmm: EVSessionGMM,
+    gmm: EVSessionModel,
     profiles_mw: dict,
     smart_profiles_mw: dict,
     year: int,
@@ -202,7 +202,7 @@ def _build_smart_ts(
 
     Parameters
     ----------
-    gmm : EVSessionGMM
+    gmm : EVSessionModel
         Fitted GMM (used for its ``stratify_by`` metadata).
     profiles_mw : dict
         Baseline (plug-and-charge) profiles
@@ -311,7 +311,7 @@ class OutputAggregator:
     --------
     >>> import gears
     >>> agg = OutputAggregator(resolution_min=60)
-    >>> gmm = gears.get_gmm()
+    >>> gmm = gears.get_session_model()
     >>> result = agg.build_load_profiles(gmm, year=2025, n_days_mc=10)
     >>> result["ts"].plot()
     """
@@ -504,7 +504,7 @@ class OutputAggregator:
 
     def build_load_profiles(
         self,
-        gmm: EVSessionGMM,
+        gmm: EVSessionModel,
         year: int = 2025,
         n_days_mc: int = 10,
         charging_mode: str = "mean_power",
@@ -515,7 +515,7 @@ class OutputAggregator:
         smart_charging_signal: pd.Series | None = None,
     ) -> dict:
         """
-        Reconstruct annual hourly load profiles from a fitted EVSessionGMM.
+        Reconstruct annual hourly load profiles from a fitted EVSessionModel.
 
         Integrates the Monte-Carlo profile-building logic from the
         ``scripts/compare.ipynb`` scratch notebook into the package as a
@@ -525,8 +525,8 @@ class OutputAggregator:
 
         Parameters
         ----------
-        gmm : EVSessionGMM
-            Fitted GMM (e.g. loaded via ``gears.get_gmm()``).
+        gmm : EVSessionModel
+            Fitted GMM (e.g. loaded via ``gears.get_session_model()``).
         year : int
             Calendar year for the annual time series.
         n_days_mc : int
@@ -626,7 +626,7 @@ class OutputAggregator:
         --------
         >>> import gears
         >>> agg = gears.OutputAggregator()
-        >>> gmm = gears.get_gmm()
+        >>> gmm = gears.get_session_model()
         >>> out = agg.build_load_profiles(gmm, year=2025, charging_mode="mean_power")
         >>> out["ts"].resample("W").mean().plot(title="Weekly avg load (MW)")
 
@@ -811,7 +811,7 @@ class OutputAggregator:
 
     def _build_smart_charging_ts(
         self,
-        gmm: EVSessionGMM,
+        gmm: EVSessionModel,
         sk_models: dict,
         stratify: list,
         loc_idx: int | None,
@@ -848,7 +848,7 @@ class OutputAggregator:
 
         Parameters
         ----------
-        gmm : EVSessionGMM
+        gmm : EVSessionModel
         sk_models : dict
         stratify : list
         loc_idx, dow_idx, season_idx : int or None

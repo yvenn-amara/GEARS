@@ -35,9 +35,13 @@ from gears.models.forecaster import (
     TransformerForecaster,
     sessions_to_daily_counts,
 )
-from gears.models.gmm import EVSessionGMM
 from gears.models.persistence_sampler import PersistenceSessionSampler
-from gears.models.registry import ModelRegistry, NativeGMMRegistry, get_gmm
+from gears.models.registry import (
+    ModelRegistry,
+    NativeSessionModelRegistry,
+    get_session_model,
+)
+from gears.models.session_model import EVSessionModel
 from gears.output.aggregator import LOCATION_POWER_PRESETS, OutputAggregator
 from gears.pipeline import GEARSModel
 from gears.simulation.medium_term import (
@@ -51,7 +55,7 @@ from gears.simulation.medium_term import (
 from gears.simulation.short_term import ShortTermSimulator
 from gears.smart_charging.optimizer import SmartChargingOptimizer
 
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 __author__ = "Yvenn Amara-Ouali"
 
 __all__ = [
@@ -60,13 +64,13 @@ __all__ = [
     "LOCATION_POWER_PRESETS",
     "DepartmentForecaster",
     # Models
-    "EVSessionGMM",
+    "EVSessionModel",
     # Pipeline
     "GEARSModel",
     "MediumTermSimulator",
     "ModelRegistry",
     "NHiTSForecaster",
-    "NativeGMMRegistry",
+    "NativeSessionModelRegistry",
     # Output
     "OutputAggregator",
     "PersistenceForecaster",
@@ -81,7 +85,7 @@ __all__ = [
     "bass_diffusion_profile",
     "build_panel",
     "crps_ensemble",
-    "get_gmm",
+    "get_session_model",
     "linear_growth_profile",
     # Data
     "load_sessions",

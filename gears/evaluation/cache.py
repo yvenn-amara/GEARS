@@ -1,7 +1,7 @@
 """
 Config-hashed caching for gears.evaluation.benchmark runs (Session 4).
 
-notebooks/4_persistence_vs_gmm_benchmark.ipynb is the primary consumer: by
+notebooks/4_persistence_vs_session_model_benchmark.ipynb is the primary consumer: by
 default it loads the last cached run matching its exact config instantly
 (``RERUN_BENCHMARK = False``); flipping that one flag re-runs the full
 4-arm harness for real and refreshes the cache. This is what keeps the

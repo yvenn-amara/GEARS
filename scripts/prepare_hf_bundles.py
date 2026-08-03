@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def prepare_demo_bundles(cache_dir: Path) -> None:
     """Generate synthetic demo bundles for all three location types."""
-    from gears.models.registry import ModelRegistry, _CATALOGUE
+    from gears.models.registry import _CATALOGUE, ModelRegistry
 
     registry = ModelRegistry(cache_dir=cache_dir)
 
@@ -63,15 +63,15 @@ def prepare_from_data(
 ) -> Path:
     """Fit a model on real data and save a bundle."""
     from gears.data.loader import load_sessions
-    from gears.models.gmm import EVSessionGMM
     from gears.models.forecaster import SessionForecaster
     from gears.models.registry import ModelRegistry
+    from gears.models.session_model import EVSessionModel
 
     logger.info("Loading data from %s …", data_file)
     df = load_sessions(data_file, verbose=True)
 
     logger.info("Fitting GMM …")
-    gmm = EVSessionGMM(n_components=n_components, random_state=random_state)
+    gmm = EVSessionModel(n_components=n_components, random_state=random_state)
     gmm.fit(df)
     logger.info("  %s", gmm)
 

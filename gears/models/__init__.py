@@ -7,15 +7,15 @@ from gears.models.forecaster import (
     TransformerForecaster,
     sessions_to_daily_counts,
 )
-from gears.models.gmm import EVSessionGMM
 from gears.models.persistence_sampler import PersistenceSessionSampler
-from gears.models.registry import ModelRegistry, NativeGMMRegistry
+from gears.models.registry import ModelRegistry, NativeSessionModelRegistry
+from gears.models.session_model import EVSessionModel
 
 __all__ = [
-    "EVSessionGMM",
+    "EVSessionModel",
     "ModelRegistry",
     "NHiTSForecaster",
-    "NativeGMMRegistry",
+    "NativeSessionModelRegistry",
     "PersistenceForecaster",
     "PersistenceSessionSampler",
     "SessionForecaster",

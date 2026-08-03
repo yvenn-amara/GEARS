@@ -1,5 +1,5 @@
 """
-Standalone validation for EVSessionGMM's recency-weighted fit (Session 2):
+Standalone validation for EVSessionModel's recency-weighted fit (Session 2):
 reproduces the diagnosed negative energy-bias failure mode at long history
 windows (X=52) on real held-out data, and checks whether recency weighting
 actually shrinks it -- plus honest checks at other strata (a required
@@ -28,7 +28,7 @@ import pandas as pd
 
 from gears.data.loader import load_sessions
 from gears.evaluation.windowing import sessions_in_last_n_occurrences
-from gears.models.gmm import EVSessionGMM
+from gears.models.session_model import EVSessionModel
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger("validate_recency_bias")
@@ -89,11 +89,11 @@ def evaluate_config(
             true_energy_total = float(true_sessions["energy"].sum())
 
             try:
-                gmm_plain = EVSessionGMM(
+                gmm_plain = EVSessionModel(
                     n_components=n_components, stratify_by=["day_of_week"],
                     random_state=random_state,
                 ).fit(pool)
-                gmm_recency = EVSessionGMM(
+                gmm_recency = EVSessionModel(
                     n_components=n_components, stratify_by=["day_of_week"],
                     random_state=random_state,
                     recency=True, half_life_days=half_life_days,
@@ -144,7 +144,7 @@ def main() -> None:
     df = load_sessions(args.data, verbose=False)
 
     # (location_type, X, half_life_days) -- half-life values per the
-    # empirical rule of thumb documented on EVSessionGMM.recency:
+    # empirical rule of thumb documented on EVSessionModel.recency:
     # half_life_days ~ 14 at X=8, ~21 at X=52.
     configs = [
         ("home", 52, 21.0),   # primary: diagnosed long-history failure mode

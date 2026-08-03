@@ -10,6 +10,83 @@ above them in the file.
 
 ---
 
+## Phase 2 / Session 2 — Implement the Naming Consistency Pass (2026-08-03)
+
+Implements `PROPOSAL_NAMING.md`'s rename map in full. Clean break, version bump to 2.0.0,
+no deprecated aliases (per the deprecation-policy decision already recorded in Session 1).
+
+### Verified before touching anything (per this session's own ground rules)
+- Re-cloned the repo fresh rather than trusting the plan document: confirmed Session 1
+  (naming/GEAR proposals) was already merged as PR #6 — the plan document was written before
+  that merge, so it undersold how far along the repo already was.
+- Baseline in this sandbox (no torch, no raw data): `ruff check gears/ tests/` 0 errors;
+  `pytest tests/ -q` → 265 passed, 22 skipped, 14 failed (all 14 are
+  `ImportError: torch not installed` on VAE-dependent tests — an environment limitation of
+  this sandbox, not a code issue; confirmed by diffing against the same file on `main` before
+  any change).
+
+### User decisions (asked, not guessed)
+`PROPOSAL_NAMING.md` explicitly flagged two judgment calls for sign-off with no recorded
+answer (unlike the deprecation-policy and GEAR-2nd questions from Session 1, which were
+answered and logged). Asked directly before implementing:
+- Rename `notebooks/4_persistence_vs_gmm_benchmark.ipynb`'s file too, not just notebooks
+  1–3 left alone? → **Yes**, rename it (the proposal's own recommendation).
+- `get_gmm()`'s dead-parameter bug: narrow the signature to match real behavior, or wire the
+  four parameters through to make them real? → **Narrow it** (the proposal's own recommendation).
+
+### What was implemented
+Every item in `PROPOSAL_NAMING.md`'s 13-row rename table, applied across `gears/`, `tests/`,
+`scripts/`, `notebooks/`, `README.md`, and this file/`CHANGELOG.md` (see the CHANGELOG entry
+for the itemized list — not repeated here). Directly-entailed plumbing included in the same
+pass (not a separate judgment call): `_GMM_DIR`/`gmm_dir` renamed to match the directory move,
+and the `native_gmm_id` metadata key on `GEARSModel` renamed to `native_session_model_id`
+(it's literally the `gmm_id` token embedded in a compound name).
+
+Deliberately **not** touched: `GEARSModel.from_native_gmm()`'s own method name and `self.gmm_`
+attribute (GEAR-level facade, next session's territory), `ModelRegistry`/`model_id` (confirmed
+different, already-generic concept), generic prose use of "GMM" as a concept, and French prose/
+column-name aliases in `gears/data/schemas.py` (`insee_code_departement` etc. — real INSEE
+column-name detection, unrelated to the `departement`/`saison` *parameter* rename).
+
+### Real bugs found and fixed along the way (not in the original plan)
+- **Shipped `.joblib` bundles were unpicklable after the rename.** `gmm_french.joblib` and
+  `gmm_french_sample.joblib` were pickled under the old `gears.models.gmm.EVSessionGMM` path;
+  renaming the class/module broke `joblib.load()` on both (`ModuleNotFoundError`). Migrated
+  both files to the new class path (temporary in-memory `sys.modules` alias used only to
+  perform the migration, not committed anywhere) and verified they load cleanly with zero
+  shim afterward.
+- **An unsafe `ruff --fix`** removed the quotes from a forward-reference return annotation
+  (`-> "EVSessionGMM":`) in `scripts/fit_session_model.py`. The class is imported lazily inside
+  the function body (no `from __future__ import annotations` in that file), so the unquoted
+  version raises `NameError` at module import time. Reverted to the quoted form; `ruff` still
+  flags this as `UP037`/`F821` but that pair was already present (and already a false positive)
+  on `main` before this session — confirmed by diffing the original file.
+- `scripts/fit_session_model.py --output-dir`'s default still pointed at `gears/data/gmm`
+  (would silently write to a path nothing else reads from) — updated to `gears/data/session_models`.
+- A handful of live (non-historical) references to the old script/notebook filenames that
+  fell outside the file globs checked first: `gears/evaluation/cache.py`,
+  `gears/models/registry.py`'s user-facing log messages, `scripts/compare_external.ipynb`,
+  `scripts/validate_vae_competitiveness.py`, `tests/test_registry.py`.
+
+### Verification
+- `ruff check gears/ tests/`: 0 errors (unchanged from baseline).
+- `pytest tests/ -q`: 265 passed, 22 skipped, 14 failed — identical counts to baseline; the
+  14 failures are the same pre-existing torch-environment ones, confirmed by test ID diff.
+- Full repo-wide grep for every renamed token, after all changes: clean except one deliberate
+  historical mention in notebook 1 (`"Unlike the pre-Session-2 get_gmm()..."`) and the
+  intentionally-untouched files (`PROPOSAL_NAMING.md`, `PROPOSAL_GEAR_ARCHITECTURE.md`,
+  `AUDIT.md`, this file's own older sections, `CHANGELOG.md`'s pre-2.0.0 entries,
+  `gears/data/schemas.py`, `tests/test_schemas.py`).
+
+### Still open (out of scope for this session)
+- `gmm_vae_french_sample.joblib` vs. the actual on-disk `gmm_french_sample.joblib` filename
+  mismatch in the registry catalogue noticed in passing while migrating the joblib bundles —
+  looks pre-existing and unrelated to naming; flagging for whoever picks up Session 4
+  (VAE registry fix) rather than fixing it here.
+- GEAR-level dispatch (`GEARSModel.from_native_gmm()`'s own name, `self.gmm_`) — Session 3.
+
+---
+
 ## Phase 2 / Session 1 — Naming & Architecture Design Proposal (2026-08-02)
 
 **Deliverable, not a code change**: two proposal documents for review, plus four confirmed-stale

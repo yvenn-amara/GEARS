@@ -274,7 +274,7 @@ def plot_gmm_means(
 
     Parameters
     ----------
-    gmm : EVSessionGMM
+    gmm : EVSessionModel
         Fitted GMM instance.
     feature_idx : int
         Index in the raw feature vector:

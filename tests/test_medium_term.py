@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from gears.data.loader import make_demo_data
-from gears.models.gmm import EVSessionGMM
+from gears.models.session_model import EVSessionModel
 from gears.simulation.medium_term import (
     GROWTH_PROFILES,
     MediumTermSimulator,
@@ -17,7 +17,7 @@ from gears.simulation.medium_term import (
 @pytest.fixture(scope="module")
 def fitted_gmm():
     df = make_demo_data(n=500, seed=0)
-    return EVSessionGMM(n_components=3).fit(df)
+    return EVSessionModel(n_components=3).fit(df)
 
 
 # ── Growth profiles ───────────────────────────────────────────────────────────

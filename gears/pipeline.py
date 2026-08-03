@@ -11,8 +11,8 @@ import pandas as pd
 
 from gears.data.loader import load_sessions
 from gears.models.forecaster import SessionForecaster
-from gears.models.gmm import EVSessionGMM
-from gears.models.registry import ModelRegistry, NativeGMMRegistry
+from gears.models.registry import ModelRegistry, NativeSessionModelRegistry
+from gears.models.session_model import EVSessionModel
 from gears.output.aggregator import OutputAggregator
 from gears.simulation.medium_term import MediumTermSimulator
 from gears.simulation.short_term import ShortTermSimulator
@@ -32,7 +32,7 @@ class GEARSModel:
     Parameters
     ----------
     n_components : int or str
-        GMM components passed to :class:`~gears.models.gmm.EVSessionGMM`.
+        GMM components passed to :class:`~gears.models.session_model.EVSessionModel`.
         Use ``'auto'`` for BIC-based selection.
     stratify_by : list of str, optional
         Context columns for GMM stratification.
@@ -100,7 +100,7 @@ class GEARSModel:
         self.forecaster_country = forecaster_country
         self.random_state = random_state
 
-        self.gmm_: EVSessionGMM | None = None
+        self.gmm_: EVSessionModel | None = None
         self.forecaster_: SessionForecaster | None = None
         self._short_sim: ShortTermSimulator | None = None
         self._medium_sim: MediumTermSimulator | None = None
@@ -163,8 +163,8 @@ class GEARSModel:
     @classmethod
     def from_native_gmm(
         cls,
-        gmm_id: str = "french",
-        gmm_dir: Path | None = None,
+        session_model_id: str = "french",
+        session_model_dir: Path | None = None,
         **kwargs,
     ) -> GEARSModel:
         """
@@ -172,12 +172,12 @@ class GEARSModel:
 
         Parameters
         ----------
-        gmm_id : str
+        session_model_id : str
             Registry bundle ID.  Currently only ``'french'`` is available —
             it contains all location types stratified by
             ``location_type × département × season × day_of_week``.
-        gmm_dir : Path, optional
-            Override the default GMM directory.
+        session_model_dir : Path, optional
+            Override the default session-model directory.
         **kwargs
             Forwarded to the :class:`GEARSModel` constructor.
 
@@ -186,13 +186,13 @@ class GEARSModel:
         GEARSModel
             Fitted instance using the native GMM bundle.
         """
-        reg = NativeGMMRegistry(gmm_dir=gmm_dir)
-        gmm = reg.load(gmm_id)
+        reg = NativeSessionModelRegistry(session_model_dir=session_model_dir)
+        gmm = reg.load(session_model_id)
 
         instance = cls(**kwargs)
         instance.gmm_ = gmm
         instance.forecaster_ = SessionForecaster(method="probabilistic")
-        instance.metadata_ = {"native_gmm_id": gmm_id, **gmm.metadata_}
+        instance.metadata_ = {"native_session_model_id": session_model_id, **gmm.metadata_}
         instance._build_simulators()
         instance.is_fitted_ = True
         return instance
@@ -241,7 +241,7 @@ class GEARSModel:
 
         if verbose:
             print(f"[GEARS] Fitting GMM on {len(df):,} sessions …")
-        self.gmm_ = EVSessionGMM(
+        self.gmm_ = EVSessionModel(
             n_components=self.n_components,
             stratify_by=self.stratify_by,
             max_samples_per_context=self.max_samples_per_context,

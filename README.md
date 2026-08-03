@@ -11,7 +11,7 @@ from a single site to a national fleet.
 ```
 
 Two interchangeable session-generation models are available: a Gaussian-Mixture model
-(`EVSessionGMM`, the default — optionally recency-weighted) and a Conditional VAE
+(`EVSessionModel`, the default — optionally recency-weighted) and a Conditional VAE
 (`model_type="vae"`). Both share the same fit/sample interface and are compared head-to-head
 by the built-in persistence/GMM/VAE benchmark harness (see below).
 
@@ -117,7 +117,7 @@ jupyter lab
 | 1 | `1_gmm_descriptive.ipynb` | Registry API, sklearn access, component weights & means, descriptive stats per stratum, arrival/energy distributions, seasonal & day-of-week breakdowns | 28s |
 | 2 | `2_gmm_forecasting.ipynb` | D−1 split, SARIMA/Persistence evaluation, GMM vs. VAE session simulation, energy forecast, V1G smart charging & regret analysis | 92s |
 | 3 | `3_gmm_scenarios.ipynb` | **A:** département-level SARIMA fan charts (1–3 yr); **B:** EV adoption curves (linear/S-curve/Bass) → national energy trajectories 2025–2040; **C:** plug-and-charge vs. smart-charging load profiles, GMM vs. VAE | 107s |
-| 4 | `4_persistence_vs_gmm_benchmark.ipynb` | 4-arm rolling-origin benchmark (persistence / GMM / recency-GMM / VAE) across 8 public datasets, win-rates, CRPS, cached results | 7s (cached) |
+| 4 | `4_persistence_vs_session_model_benchmark.ipynb` | 4-arm rolling-origin benchmark (persistence / GMM / recency-GMM / VAE) across 8 public datasets, win-rates, CRPS, cached results | 7s (cached) |
 | 5 | `5_generic_dataset_example.ipynb` | Bring-your-own-data walkthrough: load, fit, simulate, forecast, smart-charge on a non-French dataset, plus a schema-portability check on a second dataset | 41s |
 
 All five execute end-to-end via `nbconvert` with zero errors (measured this session, see
@@ -133,7 +133,7 @@ notebook 4 reads the 11 public CSVs under `../data/preprocessed_data/`; notebook
 GEARS ships two pre-fitted native bundles, both stratified by
 **`location_type × département × day_of_week × season`**:
 
-| `gmm_id` | Model | Notes |
+| `session_model_id` | Model | Notes |
 |---|---|---|
 | `"french"` | GMM | 8,008 contexts, fitted on the full French national IRVE dataset. |
 | `"french_vae_sample"` | VAE | Curated bundle not committed to this repo (see caveat below) — falls back to a small synthetic demo (109 contexts, no département dimension) when unavailable. |
@@ -141,9 +141,9 @@ GEARS ships two pre-fitted native bundles, both stratified by
 ### Load a bundle
 
 ```python
-from gears import NativeGMMRegistry
+from gears import NativeSessionModelRegistry
 
-registry = NativeGMMRegistry()
+registry = NativeSessionModelRegistry()
 print(registry.list())        # 'french' and 'french_vae_sample'
 gmm = registry.load("french")
 ```
@@ -161,16 +161,11 @@ gmm = registry.load("french")
 ```python
 import gears
 
-# Primary retrieval API — returns the full EVSessionGMM wrapper
-gmm = gears.get_gmm(
-    location_type="work",    # "work" | "home" | "public" | "heavy"
-    departement="75",        # INSEE département code
-    saison="winter",         # "winter" | "spring" | "summer" | "autumn"
-    day_of_week=0,           # Monday=0, …, Sunday=6
-)
+# Primary retrieval API — returns the full EVSessionModel wrapper
+gmm = gears.get_session_model("french")   # or "french_vae_sample" for the VAE
 
-# Underlying sklearn GaussianMixture for this stratum
-sk_gmm = gmm.get_sklearn_gmm(
+# Underlying sklearn GaussianMixture for a given stratum
+sk_gmm = gmm.get_sklearn_component(
     context={"location_type": "work", "department": "75",
              "season": "winter", "day_of_week": 0}
 )
@@ -189,18 +184,18 @@ sessions = gmm.sample(
 
 ## Recency-weighted GMM and the VAE session model
 
-`EVSessionGMM` supports two opt-in alternatives to the default single-component-per-context fit:
+`EVSessionModel` supports two opt-in alternatives to the default single-component-per-context fit:
 
 ```python
-from gears import EVSessionGMM
+from gears import EVSessionModel
 
 # Recency-weighted: half-life exponential decay + weighted bootstrap resample,
 # since sklearn's GaussianMixture has no sample_weight.
-gmm_recency = EVSessionGMM(stratify_by=["day_of_week"], recency=True, half_life_days=21)
+gmm_recency = EVSessionModel(stratify_by=["day_of_week"], recency=True, half_life_days=21)
 gmm_recency.fit(df)
 
 # Conditional VAE instead of a GMM, same interface.
-vae = EVSessionGMM(stratify_by=["day_of_week"], model_type="vae")
+vae = EVSessionModel(stratify_by=["day_of_week"], model_type="vae")
 vae.fit(df)
 ```
 
@@ -217,29 +212,29 @@ section's summary.
 
 ---
 
-## Fitting your own GMM / VAE bundle with `fit_gmm.py`
+## Fitting your own GMM / VAE bundle with `fit_session_model.py`
 
 ```bash
 # Quickstart — GMM, all defaults
-python scripts/fit_gmm.py --input /path/to/sessions.pkl
+python scripts/fit_session_model.py --input /path/to/sessions.pkl
 
 # CSV with custom BIC range
-python scripts/fit_gmm.py \
+python scripts/fit_session_model.py \
     --input /data/france_ev.csv \
     --year 2025 \
     --max-samples 5000 \
     --n-components auto \
     --max-components 10 \
-    --output-dir gears/data/gmm
+    --output-dir gears/data/session_models
 
 # Recency-weighted GMM
-python scripts/fit_gmm.py --input /path/to/sessions.pkl --recency --half-life-days 21
+python scripts/fit_session_model.py --input /path/to/sessions.pkl --recency --half-life-days 21
 
 # VAE instead of GMM
-python scripts/fit_gmm.py --input /path/to/sessions.pkl --model-type vae
+python scripts/fit_session_model.py --input /path/to/sessions.pkl --model-type vae
 
 # Full option list
-python scripts/fit_gmm.py --help
+python scripts/fit_session_model.py --help
 ```
 
 ### Supported data formats
@@ -351,7 +346,7 @@ See [`data/README.md`](data/README.md) for the 11 public benchmark datasets, the
 ```
 gears/
 ├── data/           loader, schemas, INSEE helpers, pre-fitted GMM/VAE bundles
-├── models/         EVSessionGMM (GMM + VAE + recency), forecasters, registry, get_gmm()
+├── models/         EVSessionModel (GMM + VAE + recency), forecasters, registry, get_session_model()
 ├── evaluation/      benchmark harness (4 arms), results cache, rolling-origin windowing
 ├── simulation/     ShortTermSimulator, MediumTermSimulator (linear/s_curve/bass)
 ├── smart_charging/ SmartChargingOptimizer (V1G)
@@ -360,13 +355,13 @@ gears/
 ├── plotting.py
 └── utils.py
 scripts/
-└── fit_gmm.py      — fit GMM/VAE bundles on your own data
+└── fit_session_model.py — fit GMM/VAE bundles on your own data
 run_benchmark.py    — CLI for the persistence/GMM/recency-GMM/VAE benchmark
 notebooks/
 ├── 1_gmm_descriptive.ipynb
 ├── 2_gmm_forecasting.ipynb
 ├── 3_gmm_scenarios.ipynb
-├── 4_persistence_vs_gmm_benchmark.ipynb
+├── 4_persistence_vs_session_model_benchmark.ipynb
 └── 5_generic_dataset_example.ipynb
 tests/              301 tests (291 passed, 10 skipped)
 ```

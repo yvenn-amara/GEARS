@@ -2,7 +2,7 @@
 Conditional Variational Autoencoder (CVAE) for EV session generation.
 
 Provides a drop-in replacement for sklearn GaussianMixture objects stored in
-EVSessionGMM.models_, with identical duck-type API used by:
+EVSessionModel.models_, with identical duck-type API used by:
   - gears/output/aggregator.py   (sk_gmm.random_state, sk_gmm.sample)
   - gears/plotting.py            (sk_gmm.n_components, sk_gmm.means_, sk_gmm.weights_)
 

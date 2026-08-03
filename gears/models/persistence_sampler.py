@@ -1,7 +1,7 @@
 """
 Non-parametric persistence-bootstrap session generator.
 
-Alternative to :class:`gears.models.gmm.EVSessionGMM`: instead of fitting a
+Alternative to :class:`gears.models.session_model.EVSessionModel`: instead of fitting a
 parametric Gaussian mixture on a pool of historical sessions, this simply
 bootstrap-resamples (with replacement) actual session records from that pool.
 
@@ -15,8 +15,8 @@ end-to-end comparison). ``PersistenceSessionSampler`` instead generates
 from an already-windowed pool -- it does no date filtering or count
 forecasting of its own.
 
-Mirrors :meth:`EVSessionGMM.fit`/:meth:`EVSessionGMM.sample`'s public surface
-closely enough to be a drop-in alternative wherever an ``EVSessionGMM``
+Mirrors :meth:`EVSessionModel.fit`/:meth:`EVSessionModel.sample`'s public surface
+closely enough to be a drop-in alternative wherever an ``EVSessionModel``
 instance is currently expected (``distribution_comparison``,
 ``ShortTermSimulator``, etc.).
 """
@@ -29,12 +29,12 @@ import pandas as pd
 
 class PersistenceSessionSampler:
     """
-    Non-parametric alternative to EVSessionGMM: generates synthetic sessions by
+    Non-parametric alternative to EVSessionModel: generates synthetic sessions by
     bootstrap-resampling (with replacement) from a pool of historical sessions,
     instead of fitting a parametric mixture model on the same pool.
 
-    Mirrors EVSessionGMM's fit()/sample() surface so it can be swapped in wherever
-    an EVSessionGMM is expected. Does NOT do any date filtering itself -- the caller
+    Mirrors EVSessionModel's fit()/sample() surface so it can be swapped in wherever
+    an EVSessionModel is expected. Does NOT do any date filtering itself -- the caller
     (the benchmark harness, via the shared windowing utility in
     ``gears.evaluation.windowing``) is responsible for handing it an
     already-windowed pool, so the exact same pool can be reused for both this
@@ -73,7 +73,7 @@ class PersistenceSessionSampler:
             Must contain ``arrival_hour``, ``duration``, and ``energy``
             columns (extra columns are dropped). This is the same
             already-windowed pool that would be handed to a windowed
-            ``EVSessionGMM.fit()`` call for a controlled comparison.
+            ``EVSessionModel.fit()`` call for a controlled comparison.
 
         Returns
         -------
@@ -111,7 +111,7 @@ class PersistenceSessionSampler:
         """
         Generate synthetic EV sessions by bootstrap-resampling the fitted pool.
 
-        Signature matches :meth:`EVSessionGMM.sample` for interface parity.
+        Signature matches :meth:`EVSessionModel.sample` for interface parity.
 
         Parameters
         ----------
@@ -123,7 +123,7 @@ class PersistenceSessionSampler:
             construction (decided at ``fit()`` time by the caller).
         date : str or Timestamp, optional
             If given, an ``arrival_time`` column is added anchored to this
-            date, exactly as ``EVSessionGMM.sample`` does.
+            date, exactly as ``EVSessionModel.sample`` does.
         seed : int, optional
             Random seed. Falls back to ``self.random_state`` if not given.
 
@@ -132,7 +132,7 @@ class PersistenceSessionSampler:
         pd.DataFrame
             Columns: ``arrival_hour``, ``duration``, ``energy``,
             [``arrival_time``] -- the same column set as
-            ``EVSessionGMM.sample()`` for the same call shape.
+            ``EVSessionModel.sample()`` for the same call shape.
 
         Raises
         ------
