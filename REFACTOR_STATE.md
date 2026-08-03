@@ -85,6 +85,10 @@ column-name detection, unrelated to the `departement`/`saison` *parameter* renam
   (VAE registry fix) rather than fixing it here.
 - GEAR-level dispatch (`GEARSModel.from_native_gmm()`'s own name, `self.gmm_`) — Session 3.
 
+### CI (confirmed, not just assumed)
+PR #7, run 30796786562: 4/4 jobs green (`test` on 3.10/3.11/3.12, `build`). Opened, not merged —
+left for review per the established workflow.
+
 ---
 
 ## Phase 2 / Session 1 — Naming & Architecture Design Proposal (2026-08-02)
