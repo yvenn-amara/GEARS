@@ -34,6 +34,34 @@ Usage
     # Overwrite existing file without confirmation
     python scripts/fit_session_model.py --input /data/france_ev.csv --overwrite
 
+    # 1. The registry bundle (real gmm_vae_french_sample.joblib, top-5 depts)
+    python scripts/fit_session_model.py \\
+        --input data/sample_df.pkl \\
+        --model-type vae \\
+        --departments 92,69,59,78,93 \\
+        --vae-epochs 80 --vae-hidden-dim 256 --vae-latent-dim 16 \\
+        --max-samples 5000 \\
+        --output-dir gears/data/session_models \\
+        --overwrite
+
+    # 2. The GMM-recency artifact (for notebook illustration only — does not
+    #    touch the registry's default 'french' bundle)
+    python scripts/fit_session_model.py \\
+        --input data/sample_df.pkl \\
+        --recency --half-life-days 21 \\
+        --max-samples 5000 \\
+        --output-dir gears/data/session_models \\
+        --output-name gmm_french_recency
+
+    # 3. The holdout GMM, all data except the last 30 days (for notebook
+    #    illustration only — does not touch the registry's default bundle)
+    python scripts/fit_session_model.py \\
+        --input data/sample_df.pkl \\
+        --exclude-last-n-days 30 \\
+        --max-samples 5000 \\
+        --output-dir gears/data/session_models \\
+        --output-name gmm_french_holdout
+
     python scripts/fit_session_model.py --help
 """
 
@@ -44,11 +72,18 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # Allow running from any working directory without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    # Only for the fit_and_save() return-type annotation below — the real,
+    # runtime import stays lazy (inside fit_and_save/list_session_models) so
+    # `--help`/`--list` don't pay the cost of importing gears.models.
+    from gears.models.session_model import EVSessionModel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,6 +120,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--year", type=int, default=None,
         help="If set, filter data to sessions in this calendar year only.",
+    )
+    p.add_argument(
+        "--departments", default=None,
+        help=(
+            "Comma-separated department codes to keep, e.g. '92,69,59,78,93'. "
+            "Requires a 'department' column; applied before fitting/stratifying. "
+            "If omitted, all departments are kept."
+        ),
+    )
+    p.add_argument(
+        "--exclude-last-n-days", type=int, default=None,
+        help=(
+            "If set, drop sessions from the last N days (relative to the "
+            "data's own max arrival_time) before fitting — e.g. to hold out "
+            "a recent window for later evaluation."
+        ),
     )
     p.add_argument(
         "--max-samples", type=int, default=5000,
@@ -151,6 +202,19 @@ def parse_args() -> argparse.Namespace:
             "List all models currently available in the registry "
             "(uses --output-dir as the model directory) and exit. "
             "Does not require --input."
+        ),
+    )
+    p.add_argument(
+        "--output-name", default=None,
+        help=(
+            "Save the fitted model directly as '<output-dir>/<output-name>.joblib' "
+            "instead of through the registry catalogue. Use this for ad-hoc/"
+            "illustration artifacts (e.g. a recency-weighted or holdout variant "
+            "for a notebook) that should NOT overwrite the registry's default "
+            "'french' or 'french_vae_sample' bundle. Without this flag, the "
+            "model is saved through NativeSessionModelRegistry under the "
+            "catalogue id implied by --model-type ('french' or "
+            "'french_vae_sample'), which the registry loads by default."
         ),
     )
     p.add_argument(
@@ -223,12 +287,30 @@ def _validate_dataframe(df: pd.DataFrame) -> None:
 
 # ── Overwrite guard -----------------------------------------------------------
 
-def _check_overwrite(output_dir: Path, session_model_id: str, overwrite: bool) -> None:
+def _check_overwrite(
+    output_dir: Path, session_model_id: str, overwrite: bool, output_name: str | None = None,
+) -> None:
     """
     Abort if the target file already exists and --overwrite was not set.
 
+    When ``output_name`` is given, the target is the direct path
+    ``output_dir / f"{output_name}.joblib"`` (ad-hoc artifact, bypassing the
+    registry catalogue). Otherwise the target is looked up in the registry
+    catalogue via ``session_model_id``, as before.
+
     Raises SystemExit so the caller never needs to re-check.
     """
+    if output_name is not None:
+        target = output_dir / f"{output_name}.joblib"
+        if target.exists() and not overwrite:
+            logger.error(
+                "Target file already exists: %s\n"
+                "  Use --overwrite to replace it, or choose a different --output-name.",
+                target,
+            )
+            sys.exit(1)
+        return
+
     from gears.models.registry import NativeSessionModelRegistry
 
     reg = NativeSessionModelRegistry(session_model_dir=output_dir)
@@ -303,7 +385,8 @@ def fit_and_save(
     vae_lr: float = 3e-3,
     vae_beta: float = 1.0,
     vae_score_n_samples: int = 20,
-) -> "EVSessionModel":
+    output_name: str | None = None,
+) -> EVSessionModel:
     from gears.models.registry import NativeSessionModelRegistry
     from gears.models.session_model import EVSessionModel
 
@@ -370,9 +453,14 @@ def fit_and_save(
         bic_df["n_components"].max(),
     )
 
-    registry   = NativeSessionModelRegistry(session_model_dir=output_dir)
-    saved_path = registry.save(session_model_id, model)
-    logger.info("  Saved → %s", saved_path)
+    registry_id = output_name if output_name is not None else session_model_id
+    if output_name is not None:
+        saved_path = output_dir / f"{output_name}.joblib"
+        model.save(saved_path)
+    else:
+        registry   = NativeSessionModelRegistry(session_model_dir=output_dir)
+        saved_path = registry.save(session_model_id, model)
+    logger.info("  Saved '%s' → %s", registry_id, saved_path)
     return model
 
 
@@ -411,7 +499,7 @@ def main() -> None:
     session_model_id = "french_vae_sample" if args.model_type == "vae" else "french"
 
     # Overwrite guard — abort early before spending time on fitting
-    _check_overwrite(output_dir, session_model_id, args.overwrite)
+    _check_overwrite(output_dir, session_model_id, args.overwrite, output_name=args.output_name)
 
     try:
         df = load_data(input_path, year=args.year, filter_failed=args.filter_failed)
@@ -423,16 +511,54 @@ def main() -> None:
         logger.error("No sessions found after loading/filtering. Exiting.")
         sys.exit(1)
 
-    # Omit 'department' from stratification when only one is present
-    has_dept = "department" in df.columns and df["department"].nunique() > 1
-    if not has_dept:
-        logger.warning(
-            "Column 'department' is missing or has a single unique value. "
-            "Stratifying by ['location_type', 'day_of_week', 'season'] only."
+    if args.departments:
+        wanted = [d.strip() for d in args.departments.split(",") if d.strip()]
+        if "department" not in df.columns:
+            logger.error(
+                "--departments was given but the data has no 'department' column.\n"
+                "  Available columns: %s", df.columns.tolist(),
+            )
+            sys.exit(1)
+        before = len(df)
+        available = sorted(df["department"].astype(str).unique().tolist())
+        df = df[df["department"].astype(str).isin(wanted)].reset_index(drop=True)
+        logger.info(
+            "Filtered to departments %s: %d / %d sessions retained.",
+            wanted, len(df), before,
         )
-        stratify = ["location_type", "day_of_week", "season"]
-    else:
-        stratify = ["location_type", "department", "day_of_week", "season"]
+        if len(df) == 0:
+            raise SystemExit(
+                f"No sessions remain after filtering to departments {wanted}.\n"
+                f"  Available departments: {available}"
+            )
+
+    if args.exclude_last_n_days is not None:
+        cutoff = df["arrival_time"].max() - pd.Timedelta(days=args.exclude_last_n_days)
+        before = len(df)
+        df = df[df["arrival_time"] < cutoff].reset_index(drop=True)
+        logger.info(
+            "Excluded last %d days (cutoff=%s): %d / %d sessions retained.",
+            args.exclude_last_n_days, cutoff.date(), len(df), before,
+        )
+        if len(df) == 0:
+            raise SystemExit(
+                f"No sessions remain after excluding the last {args.exclude_last_n_days} days."
+            )
+
+    # 'department' is dropped from stratification outright when the column is
+    # present but has only one unique value (stratifying on a constant adds
+    # nothing). Any *missing* column (location_type and/or department) is
+    # instead left to EVSessionModel.fit() to drop — it is the single place
+    # that both decides and logs the stratify_by actually used, so the
+    # progress message a user reads always matches what got fit (see its
+    # docstring/comment for why this used to diverge).
+    stratify = ["location_type", "department", "day_of_week", "season"]
+    if "department" in df.columns and df["department"].nunique() <= 1:
+        logger.warning(
+            "Column 'department' has a single unique value; dropping it from "
+            "stratify_by (constant columns add nothing)."
+        )
+        stratify.remove("department")
 
     try:
         model = fit_and_save(
@@ -454,16 +580,25 @@ def main() -> None:
             vae_lr=args.vae_lr,
             vae_beta=args.vae_beta,
             vae_score_n_samples=args.vae_score_n_samples,
+            output_name=args.output_name,
         )
-    except Exception as exc:
-        logger.error("Fitting failed: %s", exc, exc_info=True)
+    except Exception:
+        logger.exception("Fitting failed")
         sys.exit(1)
 
     logger.info("=" * 60)
     logger.info("Done — %d contexts fitted.", len(model.models_))
-    logger.info(
-        "Verify: python -c \"import gears; print(gears.NativeSessionModelRegistry().list())\""
-    )
+    if args.output_name is not None:
+        logger.info(
+            "This was an ad-hoc artifact ('%s'), not registered in the "
+            "catalogue — load it directly, e.g. "
+            "EVSessionModel.load('%s/%s.joblib').",
+            args.output_name, output_dir, args.output_name,
+        )
+    else:
+        logger.info(
+            "Verify: python -c \"import gears; print(gears.NativeSessionModelRegistry().list())\""
+        )
 
 
 if __name__ == "__main__":

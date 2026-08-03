@@ -43,7 +43,7 @@ def prepare_demo_bundles(cache_dir: Path) -> None:
 
     registry = ModelRegistry(cache_dir=cache_dir)
 
-    for model_id, meta in _CATALOGUE.items():
+    for model_id in _CATALOGUE:
         if "demo" not in model_id:
             continue
         logger.info("Preparing demo bundle: %s", model_id)
