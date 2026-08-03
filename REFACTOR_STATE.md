@@ -10,6 +10,117 @@ above them in the file.
 
 ---
 
+## Phase 2 / Session 3 — GEAR-Level Architecture Implementation (2026-08-03)
+
+Implements the approved gear-dispatch design from `PROPOSAL_GEAR_ARCHITECTURE.md` in full.
+
+### Verified before touching anything (per this session's own ground rules)
+- Re-cloned the repo fresh rather than trusting the plan document: confirmed Session 1
+  (naming/GEAR design proposals) and Session 2 (naming pass) were both already merged
+  (PR #6, PR #7 — both showing as `Merge pull request` commits on `origin/main`, contrary
+  to Session 2's own note that PR #7 was "opened, not merged" — it was merged after that
+  note was written).
+- `PROPOSAL_GEAR_ARCHITECTURE.md`'s own three "open items for review" (dict-based dispatch,
+  constructor placement for `model_type`/`recency`/`half_life_days`, module layout) were
+  read; the module-layout question is explicitly delegated to whoever implements this
+  (this session), and the other two are the proposal's own recommendation, adopted as-is —
+  flagging this in the PR description for Yvenn to double-check on review, rather than
+  blocking the session on a synchronous answer that wasn't available in this chat.
+- Baseline in this sandbox (torch installed successfully this time — see "Environment"
+  below): `ruff check gears/ tests/` 0 errors; `pytest tests/ -q` → 280 passed, 21 skipped,
+  0 failed.
+
+### Environment note
+Torch installed cleanly this session (unlike Session 2's sandbox, which lacked it) — the
+CUDA-dependency wheels were already present system-wide, so `pip install torch` inside a
+`--system-site-packages` venv only needed to place the ~1 GB `torch` wheel itself. Disk
+was still tight (`pip cache purge` was needed once, freeing ~2.7 GB, before the install
+would fit in the ~5 GB quota available). This means the VAE path could be tested for real
+in this session, unlike some earlier sandboxes.
+
+### What was implemented
+- **`gears/pipeline_gears/gear1.py`** (new): `Gear1Backend` — the pre-Session-3
+  `GEARSModel` class body, moved essentially as-is behind the gear-dispatch seam.
+  `model_type`, `recency`, and `half_life_days` are new first-class constructor
+  parameters (previously only reachable by constructing `EVSessionModel` directly,
+  bypassing the unified facade), threaded straight through to `EVSessionModel(...)`
+  inside `fit()`.
+- **`gears/pipeline.py`** (rewritten): `GEARSModel` is now a thin facade. `__init__(self,
+  gear=1, **kwargs)` validates `gear` against a plain `_GEAR_BACKENDS = {1: Gear1Backend}`
+  dict and raises `NotImplementedError` naming GEAR 1st as the working alternative for
+  `gear=2..5`. Public methods (`fit`, `simulate_short_term`, `simulate_medium_term`,
+  `smart_charge`, `daily_energy`, `hourly_profile`, `export`, `summary`) are thin
+  `*args`/`**kwargs` dispatchers to `self._backend` — deliberately not fixed to GEAR 1st's
+  exact signatures, since GEAR 2nd's internals are already confirmed to differ
+  structurally (per Session 1's sanity-check answer). `save`/`load` stay on the facade
+  itself (not forwarded) so that `joblib.load()` reconstructs a `GEARSModel`, not a bare
+  backend — `isinstance(obj, GEARSModel)` in `.load()` would otherwise break.
+  `from_pretrained`/`from_native_gmm` build a `Gear1Backend` via its own classmethods and
+  wrap it in a facade instance (bypassing `__init__` via `cls.__new__(cls)`, since these
+  bundles are inherently GEAR 1st and constructing-then-immediately-discarding a second
+  backend would be wasteful).
+- Read-only `@property` forwarding on `GEARSModel` for every attribute that lived directly
+  on the pre-Session-3 class and is read externally (`gmm_`, `forecaster_`, `aggregator_`,
+  `metadata_`, `is_fitted_`, `charger_mix`, `n_components`, `stratify_by`, `n_scenarios`,
+  `resolution_min`, `max_samples_per_context`, `forecaster_method`,
+  `forecaster_use_holidays`, `forecaster_country`, `random_state`, `model_type`, `recency`,
+  `half_life_days`) — confirmed via repo-wide grep that nothing sets these from outside the
+  backend's own `fit()`/`from_pretrained()`/`from_native_gmm()`, so read-only properties
+  (not a full `__getattr__`/`__setattr__` proxy, which has known pickling gotchas) are
+  sufficient and lower-risk.
+- **`gears/cli.py`**: `fit` command gains `--gear` (default 1), `--model-type`
+  (`gmm`/`vae`), `--recency/--no-recency`, and `--half-life-days`. `medium-term`'s
+  `--growth-model` already had `bass` in its choices (a Session 1 stale-doc fix) — verified,
+  not re-done.
+- New tests: `tests/test_pipeline.py` (gear=1 default parity with an explicit `gear=1` call
+  via GMM repr equality on identical seed/data; `gear=2..5` each raise
+  `NotImplementedError` matching `"GEAR 1st"`; a real end-to-end `model_type="vae"` fit +
+  simulate on synthetic data; `recency`/`half_life_days` set via `GEARSModel(...)` directly
+  and confirmed to reach the underlying `EVSessionModel`) and a new `tests/test_cli.py`
+  (default-gear fit round-trip, `model_type`/`recency`/`half_life_days` round-trip through
+  a real saved-and-reloaded model, `gear=2` erroring via `CliRunner`, and `--growth-model
+  bass` through the `medium-term` command).
+
+### Real findings along the way (not in the original plan)
+- Timed a default-hyperparameter (`vae_epochs=50`, `vae_hidden_dim=256`) VAE fit through the
+  new facade on 400 synthetic sessions: ~3.7s. Fast enough to test for real rather than
+  mocking or skipping — no reason to add VAE hyperparameter shortcuts to the constructor
+  just to keep tests fast.
+- `--years` on the `medium-term` CLI command is typed as `int` (inferred from its
+  `default=3`), so `--years 0.1` (used in the equivalent Python-API test) is rejected by
+  click — used `--years 1` in the CLI test instead. Not a bug (the CLI's own help string
+  says "Horizon in years (max 5)", implying whole years), just noting it since it tripped
+  up the first draft of the CLI test.
+
+### Verification
+- `ruff check gears/ tests/`: 0 errors.
+- `pytest tests/ -q`: 291 passed (280 baseline + 11 new — 7 in `test_pipeline.py`,
+  including the 4-way parametrized `NotImplementedError` test; 4 in the new
+  `test_cli.py`), 21 skipped, 0 failed.
+- Every pre-existing test in `test_pipeline.py` and `test_registry.py` passes unmodified
+  against the new facade (ran in isolation first, before the full suite, specifically to
+  catch a facade regression early).
+
+### Still open (out of scope for this session, flagged for Yvenn / later sessions)
+- The two "confirm this is right" open items from `PROPOSAL_GEAR_ARCHITECTURE.md`'s
+  acceptance section (dict-based `_GEAR_BACKENDS`, constructor-placement for
+  `model_type`/`recency`/`half_life_days`) were adopted as the proposal's own recommendation
+  rather than re-confirmed synchronously — worth a quick look on PR review.
+- Saved `.joblib` `GEARSModel` bundles from before this session (if any exist outside this
+  repo, e.g. on a user's machine) will not load correctly under the new facade shape — no
+  such bundles are committed in this repo, and this is consistent with the clean-break
+  2.0.0 policy already applied to renamed symbols in Session 2, but flagging it explicitly
+  since it wasn't an issue for those (dict-based bundles, not pickled `GEARSModel`
+  instances).
+- The `location_type` double-fallback logging bug and `get_gmm()`-adjacent items from the
+  original audit remain Session 4's territory, untouched here.
+
+### CI
+PR opened: see below for URL/run ID once pushed. Not merged — left for review per the
+established workflow.
+
+---
+
 ## Phase 2 / Session 2 — Implement the Naming Consistency Pass (2026-08-03)
 
 Implements `PROPOSAL_NAMING.md`'s rename map in full. Clean break, version bump to 2.0.0,

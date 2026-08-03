@@ -35,21 +35,39 @@ def main():
 @click.argument("data_path", type=click.Path(exists=True))
 @click.option("--output", "-o", default="gears_model.joblib", show_default=True,
               help="Path to save the fitted model.")
+@click.option("--gear", default=1, show_default=True, type=int,
+              help="GEAR level to use. Only GEAR 1 (GMM/VAE + "
+                   "SARIMA/probabilistic pipeline) is implemented today; "
+                   "2-5 raise a clear NotImplementedError.")
 @click.option("--n-components", default="auto", show_default=True,
               help="Number of GMM components ('auto' or integer).")
+@click.option("--model-type", default="gmm", show_default=True,
+              type=click.Choice(["gmm", "vae"]),
+              help="Session-model family: Gaussian mixture or conditional VAE.")
+@click.option("--recency/--no-recency", default=False, show_default=True,
+              help="Fit each context on a recency-weighted bootstrap "
+                   "resample instead of a uniform one (GMM only).")
+@click.option("--half-life-days", default=None, type=float,
+              help="Recency half-life in days (only used with --recency; "
+                   "auto-derived per context group if omitted).")
 @click.option("--forecaster", default="probabilistic", show_default=True,
               type=click.Choice(["sarima", "probabilistic"]),
               help="Session-count forecasting method.")
 @click.option("--scenarios", default=10, show_default=True,
               help="Default number of stochastic scenarios.")
 @click.option("--verbose/--quiet", default=True)
-def fit(data_path, output, n_components, forecaster, scenarios, verbose):
+def fit(data_path, output, gear, n_components, model_type, recency,
+        half_life_days, forecaster, scenarios, verbose):
     """Fit a GEARSModel on DATA_PATH (CSV/Excel/Parquet)."""
     from gears.pipeline import GEARSModel
 
     n_comp = int(n_components) if n_components.isdigit() else n_components
     model = GEARSModel(
+        gear=gear,
         n_components=n_comp,
+        model_type=model_type,
+        recency=recency,
+        half_life_days=half_life_days,
         forecaster_method=forecaster,
         n_scenarios=scenarios,
     )

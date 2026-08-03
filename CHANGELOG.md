@@ -5,6 +5,30 @@ not necessarily when it lands on `main` (this repo uses a branch-and-PR workflow
 `REFACTOR_STATE.md` for full session-by-session detail, real measured numbers, and
 honestly-reported gaps behind every line below).
 
+## [2.0.0] — 2026-08 GEAR-level architecture (Phase 2 / Session 3)
+
+Implements the gear-dispatch design from `PROPOSAL_GEAR_ARCHITECTURE.md`.
+
+### Added
+- `GEARSModel(gear=1, ...)`: `gear` is now an explicit constructor parameter. `1` (the
+  default) is the only implemented GEAR today — the current GMM/VAE session modeling +
+  SARIMA/probabilistic forecasting + simulation + smart-charging pipeline, unchanged in
+  behavior. `gear=2..5` raise `NotImplementedError` naming GEAR 1st as the working
+  alternative, rather than silently doing the wrong thing.
+- `model_type`, `recency`, and `half_life_days` are now first-class `GEARSModel`
+  constructor parameters, forwarded straight through to `EVSessionModel`. Previously these
+  were only reachable by constructing `EVSessionModel` directly, bypassing the unified
+  facade entirely.
+- CLI: `gears fit` gains `--gear`, `--model-type` (`gmm`/`vae`), `--recency/--no-recency`,
+  and `--half-life-days`, for parity with the Python API.
+
+### Internal
+- `GEARSModel` is now a thin, gear-dispatching facade (`gears/pipeline.py`) over
+  `Gear1Backend` (`gears/pipeline_gears/gear1.py`), which is the pre-2.0.0 `GEARSModel`
+  class body moved essentially as-is. No behavior change for any GEAR-1 caller — every
+  pre-existing test in `test_pipeline.py`/`test_registry.py` passes unmodified against the
+  new facade.
+
 ## [2.0.0] — 2026-08 naming consistency pass (Phase 2 / Session 2)
 
 Clean-break rename — no deprecated aliases. See `PROPOSAL_NAMING.md` for the full
