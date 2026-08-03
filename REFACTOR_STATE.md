@@ -90,7 +90,9 @@ always passes the full 4-column candidate list, deferring entirely to `EVSession
   covered the rename; the param-ignoring behavior itself is still open.
 
 ### CI
-PR opened against `main`, not merged — see the PR itself for the live CI run status.
+PR #9 (https://github.com/yvenn-amara/GEARS/pull/9), run 30850908235: 4/4 jobs green
+(`test` on 3.10/3.11/3.12, `build`). Opened, not merged — left for review per the
+established workflow.
 
 ---
 
