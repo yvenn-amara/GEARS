@@ -116,7 +116,8 @@ in this session, unlike some earlier sandboxes.
   original audit remain Session 4's territory, untouched here.
 
 ### CI
-PR opened: see below for URL/run ID once pushed. Not merged — left for review per the
+PR #8 (https://github.com/yvenn-amara/GEARS/pull/8), run 30822682227: 4/4 jobs green
+(`test` on 3.10/3.11/3.12, `build`). Opened, not merged — left for review per the
 established workflow.
 
 ---
