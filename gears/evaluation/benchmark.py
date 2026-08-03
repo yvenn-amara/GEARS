@@ -5,7 +5,7 @@ For each dataset, for a sliding evaluation window near its chronological end,
 for each horizon day (``day_offset`` within ``H in {1, 2, 3}``) and each
 history depth ``X`` (number of most-recent same-weekday occurrences pooled),
 this compares :class:`~gears.models.persistence_sampler.PersistenceSessionSampler`
-against a windowed :class:`~gears.models.gmm.EVSessionGMM` on how well their
+against a windowed :class:`~gears.models.session_model.EVSessionModel` on how well their
 sampled sessions match the truly realized ones -- using the true, known
 session count for both arms (the "oracle-count" design), plus a small
 secondary end-to-end SARIMA sanity check.
@@ -42,8 +42,8 @@ import numpy as np
 import pandas as pd
 
 from gears.evaluation.windowing import sessions_in_last_n_occurrences
-from gears.models.gmm import EVSessionGMM
 from gears.models.persistence_sampler import PersistenceSessionSampler
+from gears.models.session_model import EVSessionModel
 from gears.utils import distribution_comparison, forecast_metrics
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ DEFAULT_X_GRID: list[int] = [1, 2, 3, 4, 8, 16, 52]
 DEFAULT_HORIZONS: list[int] = [1, 2, 3]
 
 #: Minimum pooled sessions required to attempt a fit -- matches
-#: EVSessionGMM's own n<10 convention (Section 1.3), reused rather than
+#: EVSessionModel's own n<10 convention (Section 1.3), reused rather than
 #: inventing a new threshold (Section 0.2, assumption 6).
 MIN_SESSIONS_FOR_FIT: int = 10
 
@@ -110,9 +110,9 @@ SKIP_REASONS: set[str] = {
 }
 
 #: All arms the harness knows how to evaluate (Session 4). "gmm_recency" is
-#: EVSessionGMM(recency=True) -- the half-life-weighted bootstrap variant
-#: from Session 2; "vae" is EVSessionGMM(model_type="vae") -- the shared
-#: ConditionalVAE from Session 3. Both share EVSessionGMM's interface, so
+#: EVSessionModel(recency=True) -- the half-life-weighted bootstrap variant
+#: from Session 2; "vae" is EVSessionModel(model_type="vae") -- the shared
+#: ConditionalVAE from Session 3. Both share EVSessionModel's interface, so
 #: they slot into the harness the same way "gmm" already does.
 ALL_ARMS: tuple[str, ...] = ("persistence", "gmm", "gmm_recency", "vae")
 
@@ -297,7 +297,7 @@ def _evaluate_cell(
             # empty stratify_by list crashes pandas groupby([]).
             # n_components=1, not "auto" -- Section 1.3: the default BIC search
             # (min_components=2) is a poor fit for small windowed pools.
-            gmm = EVSessionGMM(
+            gmm = EVSessionModel(
                 n_components=n_components, stratify_by=["day_of_week"],
                 random_state=random_state,
             ).fit(pool)
@@ -315,8 +315,8 @@ def _evaluate_cell(
             # Same windowed-fit conventions as "gmm" above (stratify_by,
             # n_components), plus recency=True -- Session 2's half-life
             # exponential-decay bootstrap resample. Same interface
-            # (EVSessionGMM), so it fits/samples exactly like "gmm".
-            gmm_recency = EVSessionGMM(
+            # (EVSessionModel), so it fits/samples exactly like "gmm".
+            gmm_recency = EVSessionModel(
                 n_components=n_components, stratify_by=["day_of_week"],
                 random_state=random_state, recency=True,
             ).fit(pool)
@@ -332,12 +332,12 @@ def _evaluate_cell(
     if "vae" in arms:
         try:
             # model_type="vae" -- Session 3's shared ConditionalVAE, same
-            # EVSessionGMM wrapper/interface as the GMM arms above. Note:
+            # EVSessionModel wrapper/interface as the GMM arms above. Note:
             # per-cell VAE fits are far slower than GMM (fresh network
             # training vs. a closed-form fit); callers sweeping the full
             # rolling-origin grid with this arm enabled should expect a
             # materially longer run (see run_benchmark.py's --arms docs).
-            vae = EVSessionGMM(
+            vae = EVSessionModel(
                 stratify_by=["day_of_week"], random_state=random_state,
                 model_type="vae",
             ).fit(pool)
@@ -425,7 +425,7 @@ def run_rolling_origin_benchmark(
         :func:`eval_window_for` (30, or a dataset-specific override).
     min_sessions_for_fit : int
         Minimum pooled sessions to attempt a fit (default 10, matching
-        EVSessionGMM's own convention).
+        EVSessionModel's own convention).
     n_scenarios : int
         Monte Carlo scenario draws per (origin, day_offset, X, method) cell.
     n_components : int

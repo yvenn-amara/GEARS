@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from gears.models.forecaster import SessionForecaster
-from gears.models.gmm import EVSessionGMM
+from gears.models.session_model import EVSessionModel
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class ShortTermSimulator:
 
     Parameters
     ----------
-    gmm : EVSessionGMM
+    gmm : EVSessionModel
         Fitted GMM for sampling session properties.
     forecaster : SessionForecaster, optional
         Fitted count forecaster.  When None, each day falls back to a
@@ -44,7 +44,7 @@ class ShortTermSimulator:
 
     def __init__(
         self,
-        gmm: EVSessionGMM,
+        gmm: EVSessionModel,
         forecaster: SessionForecaster | None = None,
         charger_mix: dict[float, float] | None = None,
         resolution_min: int = 30,

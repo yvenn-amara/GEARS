@@ -289,7 +289,7 @@ class MediumTermSimulator:
 
     Parameters
     ----------
-    gmm : EVSessionGMM
+    gmm : EVSessionModel
         Fitted GMM for session-property sampling.
     base_sessions_per_day : float, optional
         Baseline daily session count. Inferred from gmm if not given.

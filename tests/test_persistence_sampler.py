@@ -5,8 +5,8 @@ import pytest
 
 from gears.data.schemas import validate_dataframe
 from gears.evaluation.windowing import sessions_in_last_n_occurrences
-from gears.models.gmm import EVSessionGMM
 from gears.models.persistence_sampler import PersistenceSessionSampler
+from gears.models.session_model import EVSessionModel
 from gears.utils import distribution_comparison
 
 
@@ -169,7 +169,7 @@ def test_arrival_time_matches_arrival_hour():
 
 
 # ---------------------------------------------------------------------------
-# Interface parity with EVSessionGMM.sample() (Session 2 acceptance criteria)
+# Interface parity with EVSessionModel.sample() (Session 2 acceptance criteria)
 # ---------------------------------------------------------------------------
 
 def test_column_parity_with_gmm_no_date():
@@ -179,7 +179,7 @@ def test_column_parity_with_gmm_no_date():
         "energy": np.random.default_rng(1).uniform(2, 40, 200),
     })
     pool_gmm = validate_dataframe(pool_gmm)
-    gmm = EVSessionGMM(n_components=1, stratify_by=["day_of_week"]).fit(pool_gmm)
+    gmm = EVSessionModel(n_components=1, stratify_by=["day_of_week"]).fit(pool_gmm)
     gmm_out = gmm.sample(25, seed=0)
 
     pool_persist = make_pool(30)
@@ -196,7 +196,7 @@ def test_column_parity_with_gmm_with_date():
         "energy": np.random.default_rng(1).uniform(2, 40, 200),
     })
     pool_gmm = validate_dataframe(pool_gmm)
-    gmm = EVSessionGMM(n_components=1, stratify_by=["day_of_week"]).fit(pool_gmm)
+    gmm = EVSessionModel(n_components=1, stratify_by=["day_of_week"]).fit(pool_gmm)
     gmm_out = gmm.sample(25, date="2025-06-15", seed=0)
 
     pool_persist = make_pool(30)
@@ -208,7 +208,7 @@ def test_column_parity_with_gmm_with_date():
 
 def test_distribution_comparison_runs_unmodified():
     """gears.utils.distribution_comparison must accept the sampler's output
-    exactly like it accepts EVSessionGMM's output, with no modification."""
+    exactly like it accepts EVSessionModel's output, with no modification."""
     real = make_real_df(300)
     pool = pd.DataFrame({
         "arrival_hour": real["hour"].values,

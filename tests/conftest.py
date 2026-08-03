@@ -10,7 +10,7 @@ import pytest
 
 from gears.data.loader import make_demo_data
 from gears.models.forecaster import SessionForecaster
-from gears.models.gmm import EVSessionGMM
+from gears.models.session_model import EVSessionModel
 from gears.pipeline import GEARSModel
 
 # ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ def mixed_sessions(work_sessions, home_sessions, public_sessions):
 @pytest.fixture(scope="session")
 def fitted_gmm(work_sessions):
     """A GMM fitted on workplace sessions."""
-    gmm = EVSessionGMM(n_components=3, random_state=42)
+    gmm = EVSessionModel(n_components=3, random_state=42)
     return gmm.fit(work_sessions)
 
 

@@ -3,9 +3,9 @@ Model registry for GEARS.
 
 Two registries are provided:
 
-1. NativeGMMRegistry
+1. NativeSessionModelRegistry
    Manages GMMs pre-fitted on real French data and shipped with the package.
-   These live in gears/data/gmm/ and are available without raw data.
+   These live in gears/data/session_models/ and are available without raw data.
 
 2. ModelRegistry
    Manages full GEARSModel bundles (GMM + forecaster), optionally hosted
@@ -22,12 +22,12 @@ import joblib
 import pandas as pd
 
 if TYPE_CHECKING:
-    from gears.models.gmm import EVSessionGMM
+    from gears.models.session_model import EVSessionModel
 
 logger = logging.getLogger(__name__)
 
 # Directory where pre-fitted GMMs are stored inside the package
-_GMM_DIR = Path(__file__).parent.parent / "data" / "gmm"
+_SESSION_MODEL_DIR = Path(__file__).parent.parent / "data" / "session_models"
 
 # HF Hub repository for full model bundles
 HF_REPO_ID = "yvenn-amara/GEARS-pretrained"
@@ -38,11 +38,11 @@ _LOCAL_CACHE = Path.home() / ".cache" / "gears" / "models"
 # Native GMM Registry – pre-fitted GMMs shipped with the package
 # ---------------------------------------------------------------------------
 
-class NativeGMMRegistry:
+class NativeSessionModelRegistry:
     """
     Access pre-fitted GMM bundles embedded in the GEARS package.
 
-    Pre-fitted GMMs are stored in gears/data/gmm/ as joblib files.
+    Pre-fitted GMMs are stored in gears/data/session_models/ as joblib files.
     They are fitted on the French national dataset (2025) and are available
     without any raw data.
 
@@ -52,14 +52,14 @@ class NativeGMMRegistry:
       dataset, stratified by
       ``location_type × département × day_of_week × season``.
       This is the canonical bundle used by all GEARS APIs.
-      File: ``gears/data/gmm/gmm_french.joblib`` (8 008 contexts).
+      File: ``gears/data/session_models/gmm_french.joblib`` (8 008 contexts).
 
     Examples
     --------
-    >>> registry = NativeGMMRegistry()
+    >>> registry = NativeSessionModelRegistry()
     >>> registry.list()
     >>> gmm = registry.load("french")
-    >>> sk = gmm.get_sklearn_gmm(context={
+    >>> sk = gmm.get_sklearn_component(context={
     ...     "location_type": "work", "department": "75",
     ...     "season": "winter", "day_of_week": 0,
     ... })
@@ -70,7 +70,7 @@ class NativeGMMRegistry:
     #
     # Two entries as of Session 4:
     #   • "french": the full national GMM (8 008 contexts, is_sample=False).
-    #     get_gmm() currently always resolves to this entry regardless of
+    #     get_session_model() currently always resolves to this entry regardless of
     #     its arguments — see PROPOSAL_NAMING.md for why and what's proposed.
     #   • "french_vae_sample": the shared conditional VAE (top-5 departments,
     #     is_sample=True), added in Session 4.
@@ -78,7 +78,7 @@ class NativeGMMRegistry:
     # The separate CI/dev-only sample bundle (gmm_french_sample.joblib) is
     # NOT in this catalogue, to keep the public API surface unambiguous.
     # Developers who need it can load it directly via:
-    #   EVSessionGMM.load("gears/data/gmm/gmm_french_sample.joblib")
+    #   EVSessionModel.load("gears/data/session_models/gmm_french_sample.joblib")
     # ------------------------------------------------------------------
 
     _CATALOGUE: ClassVar[dict[str, dict]] = {
@@ -106,16 +106,16 @@ class NativeGMMRegistry:
         },
     }
 
-    def __init__(self, gmm_dir: Path | None = None):
+    def __init__(self, session_model_dir: Path | None = None):
         """
         Parameters
         ----------
-        gmm_dir : Path, optional
+        session_model_dir : Path, optional
             Override the default GMM storage directory
-            (``gears/data/gmm/``).  The directory is created if missing.
+            (``gears/data/session_models/``).  The directory is created if missing.
         """
-        self.gmm_dir = Path(gmm_dir) if gmm_dir else _GMM_DIR
-        self.gmm_dir.mkdir(parents=True, exist_ok=True)
+        self.session_model_dir = Path(session_model_dir) if session_model_dir else _SESSION_MODEL_DIR
+        self.session_model_dir.mkdir(parents=True, exist_ok=True)
 
     def list(self) -> pd.DataFrame:
         """Return a DataFrame listing all available native models.
@@ -123,13 +123,13 @@ class NativeGMMRegistry:
         Returns
         -------
         pd.DataFrame
-            Columns: gmm_id, model_type, description, available, is_sample, stratify_by.
+            Columns: session_model_id, model_type, description, available, is_sample, stratify_by.
         """
         rows = []
-        for gmm_id, meta in self._CATALOGUE.items():
-            path = self.gmm_dir / meta["filename"]
+        for session_model_id, meta in self._CATALOGUE.items():
+            path = self.session_model_dir / meta["filename"]
             rows.append({
-                "gmm_id": gmm_id,
+                "session_model_id": session_model_id,
                 "model_type": meta.get("model_type", "gmm"),
                 "description": meta["description"],
                 "available": path.exists(),
@@ -138,57 +138,57 @@ class NativeGMMRegistry:
             })
         return pd.DataFrame(rows)
 
-    def load(self, gmm_id: str) -> EVSessionGMM:
+    def load(self, session_model_id: str) -> EVSessionModel:
         """
         Load a pre-fitted GMM from the package.
 
         Parameters
         ----------
-        gmm_id : str
+        session_model_id : str
             Registry bundle ID.  Currently only ``'french'`` is available —
             the single unified GMM stratified by
             ``location_type × département × season × day_of_week``.
 
         Returns
         -------
-        EVSessionGMM
+        EVSessionModel
             Fitted GMM instance.  Falls back to a synthetic model when the
             joblib file is absent (e.g. in CI without large artefacts).
 
         Raises
         ------
         ValueError
-            If *gmm_id* is not in the catalogue.
+            If *session_model_id* is not in the catalogue.
         TypeError
-            If the file contains an object that is not an ``EVSessionGMM``.
+            If the file contains an object that is not an ``EVSessionModel``.
         """
-        from gears.models.gmm import EVSessionGMM
+        from gears.models.session_model import EVSessionModel
 
-        if gmm_id not in self._CATALOGUE:
+        if session_model_id not in self._CATALOGUE:
             raise ValueError(
-                f"Unknown GMM ID '{gmm_id}'. Available: {list(self._CATALOGUE)}"
+                f"Unknown GMM ID '{session_model_id}'. Available: {list(self._CATALOGUE)}"
             )
 
-        meta = self._CATALOGUE[gmm_id]
-        path = self.gmm_dir / meta["filename"]
+        meta = self._CATALOGUE[session_model_id]
+        path = self.session_model_dir / meta["filename"]
 
         if not path.exists():
             logger.warning(
                 "Native GMM '%s' not found at %s. "
-                "Run `python scripts/fit_gmm.py` to fit GMMs on your data, "
+                "Run `python scripts/fit_session_model.py` to fit GMMs on your data, "
                 "or the package will generate a synthetic fallback.",
-                gmm_id, path,
+                session_model_id, path,
             )
-            return self._generate_fallback(gmm_id)
+            return self._generate_fallback(session_model_id)
 
         gmm = joblib.load(path)
-        if not isinstance(gmm, EVSessionGMM):
-            raise TypeError(f"Expected EVSessionGMM, got {type(gmm)}")
+        if not isinstance(gmm, EVSessionModel):
+            raise TypeError(f"Expected EVSessionModel, got {type(gmm)}")
 
-        logger.info("Loaded native GMM '%s' from %s.", gmm_id, path)
+        logger.info("Loaded native GMM '%s' from %s.", session_model_id, path)
         return gmm
 
-    def _generate_fallback(self, gmm_id: str) -> EVSessionGMM:
+    def _generate_fallback(self, session_model_id: str) -> EVSessionModel:
         """Generate a lightweight synthetic model when the native file is absent.
 
         For ``model_type="gmm"`` (default), fits a small sklearn GMM.
@@ -196,24 +196,24 @@ class NativeGMMRegistry:
 
         Parameters
         ----------
-        gmm_id : str
+        session_model_id : str
             Registry ID used to tag the fallback metadata.
 
         Returns
         -------
-        EVSessionGMM
+        EVSessionModel
             Fitted synthetic model with ``is_sample=True``.
         """
         from gears.data.loader import make_demo_data
-        from gears.models.gmm import EVSessionGMM
+        from gears.models.session_model import EVSessionModel
 
-        meta = self._CATALOGUE.get(gmm_id, {})
+        meta = self._CATALOGUE.get(session_model_id, {})
         model_type = meta.get("model_type", "gmm")
 
         logger.info(
             "Native model '%s' not found — generating synthetic fallback (model_type=%s). "
-            "Run `python scripts/fit_gmm.py --model-type %s --input <data>` to fit on real data.",
-            gmm_id, model_type, model_type,
+            "Run `python scripts/fit_session_model.py --model-type %s --input <data>` to fit on real data.",
+            session_model_id, model_type, model_type,
         )
 
         frames = [
@@ -224,31 +224,31 @@ class NativeGMMRegistry:
         df = pd.concat(frames, ignore_index=True)
 
         if model_type == "vae":
-            model = EVSessionGMM(
+            model = EVSessionModel(
                 model_type="vae",
                 stratify_by=["location_type", "day_of_week", "season"],
                 vae_epochs=5,
                 vae_hidden_dim=64,
                 vae_latent_dim=8,
-            ).fit(df, is_sample=True, metadata={"synthetic_fallback": True, "gmm_id": gmm_id})
+            ).fit(df, is_sample=True, metadata={"synthetic_fallback": True, "session_model_id": session_model_id})
         else:
-            model = EVSessionGMM(
+            model = EVSessionModel(
                 n_components="auto",
                 max_components=5,
                 stratify_by=["location_type", "day_of_week", "season"],
-            ).fit(df, is_sample=True, metadata={"synthetic_fallback": True, "gmm_id": gmm_id})
+            ).fit(df, is_sample=True, metadata={"synthetic_fallback": True, "session_model_id": session_model_id})
 
         return model
 
-    def save(self, gmm_id: str, gmm) -> Path:
+    def save(self, session_model_id: str, gmm) -> Path:
         """
         Save a fitted GMM to the package GMM directory.
 
         Parameters
         ----------
-        gmm_id : str
+        session_model_id : str
             Registry ID to save under.
-        gmm : EVSessionGMM
+        gmm : EVSessionModel
             Fitted GMM to save.
 
         Returns
@@ -259,22 +259,22 @@ class NativeGMMRegistry:
         Raises
         ------
         ValueError
-            If *gmm_id* is not in the catalogue.
+            If *session_model_id* is not in the catalogue.
         """
-        if gmm_id not in self._CATALOGUE:
-            raise ValueError(f"Unknown GMM ID '{gmm_id}'. Available: {list(self._CATALOGUE)}")
-        path = self.gmm_dir / self._CATALOGUE[gmm_id]["filename"]
+        if session_model_id not in self._CATALOGUE:
+            raise ValueError(f"Unknown GMM ID '{session_model_id}'. Available: {list(self._CATALOGUE)}")
+        path = self.session_model_dir / self._CATALOGUE[session_model_id]["filename"]
         joblib.dump(gmm, path)
-        logger.info("Saved GMM '%s' to %s.", gmm_id, path)
+        logger.info("Saved GMM '%s' to %s.", session_model_id, path)
         return path
 
-    def get_sklearn_gmm(
+    def get_sklearn_component(
         self,
         location_type: str,
-        departement: str,
-        saison: str,
+        department: str,
+        season: str,
         day_of_week: int,
-        gmm_id: str = "french",
+        session_model_id: str = "french",
     ):
         """
         Return the underlying sklearn GaussianMixture for a specific stratum
@@ -284,13 +284,13 @@ class NativeGMMRegistry:
         ----------
         location_type : str
             Charging location: ``'work'``, ``'home'``, ``'public'``, or ``'heavy'``.
-        departement : str
-            INSEE département code, e.g. ``'75'``, ``'69'``, ``'13'``.
-        saison : str
+        department : str
+            INSEE department code, e.g. ``'75'``, ``'69'``, ``'13'``.
+        season : str
             Season: ``'winter'``, ``'spring'``, ``'summer'``, ``'autumn'``.
         day_of_week : int
             Monday = 0, …, Sunday = 6.
-        gmm_id : str, optional
+        session_model_id : str, optional
             Registry bundle ID (default ``'french'``).
 
         Returns
@@ -298,12 +298,12 @@ class NativeGMMRegistry:
         sklearn.mixture.GaussianMixture
             Fitted GaussianMixture for the requested stratum.
         """
-        gmm = self.load(gmm_id)
-        return gmm.get_sklearn_gmm(
+        gmm = self.load(session_model_id)
+        return gmm.get_sklearn_component(
             context={
                 "location_type": location_type,
-                "department":    departement,
-                "season":        saison,
+                "department":    department,
+                "season":        season,
                 "day_of_week":   day_of_week,
             }
         )
@@ -311,12 +311,12 @@ class NativeGMMRegistry:
     def __repr__(self) -> str:
         n_available = sum(
             1 for meta in self._CATALOGUE.values()
-            if (self.gmm_dir / meta["filename"]).exists()
+            if (self.session_model_dir / meta["filename"]).exists()
         )
         return (
-            f"NativeGMMRegistry("
+            f"NativeSessionModelRegistry("
             f"{n_available}/{len(self._CATALOGUE)} GMMs available, "
-            f"dir={self.gmm_dir})"
+            f"dir={self.session_model_dir})"
         )
 
 
@@ -431,7 +431,7 @@ class ModelRegistry:
         ----------
         model_id : str
             Identifier used as the filename stem.
-        gmm : EVSessionGMM
+        gmm : EVSessionModel
             Fitted GMM to include in the bundle.
         forecaster : optional
             Fitted forecaster object, or None.
@@ -538,7 +538,7 @@ class ModelRegistry:
         """
         from gears.data.loader import make_demo_data
         from gears.models.forecaster import SessionForecaster
-        from gears.models.gmm import EVSessionGMM
+        from gears.models.session_model import EVSessionModel
 
         meta = _CATALOGUE[model_id]
         loc = meta.get("location_type", "work")
@@ -547,7 +547,7 @@ class ModelRegistry:
         logger.info("Generating synthetic demo bundle for '%s'.", model_id)
         df = make_demo_data(n=n, location_type=loc, seed=42)
 
-        gmm = EVSessionGMM(
+        gmm = EVSessionModel(
             n_components="auto",
             max_components=6,
             stratify_by=["day_of_week", "season"],
@@ -570,55 +570,52 @@ class ModelRegistry:
 _default_registry = None
 
 
-def _get_default_registry() -> NativeGMMRegistry:
-    """Return the module-level singleton ``NativeGMMRegistry``.
+def _get_default_registry() -> NativeSessionModelRegistry:
+    """Return the module-level singleton ``NativeSessionModelRegistry``.
 
     The registry is instantiated lazily on first call and reused thereafter
-    so that the GMM joblib file is not reloaded for every ``get_gmm()``
+    so that the GMM joblib file is not reloaded for every ``get_session_model()``
     invocation within the same Python session.
 
     Returns
     -------
-    NativeGMMRegistry
+    NativeSessionModelRegistry
     """
     global _default_registry
     if _default_registry is None:
-        _default_registry = NativeGMMRegistry()
+        _default_registry = NativeSessionModelRegistry()
     return _default_registry
 
 
-def get_gmm(
-    location_type: str,
-    departement: str,
-    saison: str,
-    day_of_week: int,
-) -> EVSessionGMM:
+def get_session_model(bundle_id: str = "french") -> EVSessionModel:
     """
-    Retrieve the pre-fitted French EVSessionGMM for a given stratum.
+    Retrieve a pre-fitted native ``EVSessionModel`` bundle by ID.
 
-    This is the primary retrieval API for the GEARS registry. The unified
-    ``'french'`` bundle contains a single ``EVSessionGMM`` fitted on the French
-    national dataset, stratified by
-    **(location_type × département × saison × day_of_week)**.
+    This is the primary retrieval API for the GEARS registry. It resolves at
+    the *bundle* level — ``'french'`` (the unified national GMM) or
+    ``'french_vae_sample'`` (the shared conditional VAE) — and returns the
+    whole fitted wrapper. Stratum-level lookups (by location type, department,
+    season, day of week) happen afterward, on the returned object, via
+    ``.get_sklearn_component(context=...)``.
+
+    Note: prior to Session 2, this function took
+    ``(location_type, departement, saison, day_of_week)`` and silently ignored
+    all four, always returning the ``'french'`` bundle — a real bug, not just
+    a naming issue. The signature below was narrowed to match what the
+    function actually does; see ``PROPOSAL_NAMING.md`` for the full rationale.
 
     Parameters
     ----------
-    location_type : str
-        Charging location type: ``'work'``, ``'home'``, ``'public'``, or ``'heavy'``.
-    departement : str
-        INSEE département code, e.g. ``'75'`` (Paris), ``'69'`` (Rhône),
-        ``'13'`` (Bouches-du-Rhône).
-    saison : str
-        Season: ``'winter'``, ``'spring'``, ``'summer'``, ``'autumn'``.
-    day_of_week : int
-        Day-of-week (Monday = 0, Tuesday = 1, …, Sunday = 6).
+    bundle_id : str, optional
+        Registry bundle ID (default ``'french'``). See
+        ``NativeSessionModelRegistry.list()`` for all available bundles.
 
     Returns
     -------
-    EVSessionGMM
+    EVSessionModel
         Fitted wrapper exposing:
 
-        - ``.get_sklearn_gmm(context=...)`` → raw ``sklearn.mixture.GaussianMixture``
+        - ``.get_sklearn_component(context=...)`` → raw ``sklearn.mixture.GaussianMixture``
         - ``.sample(n, context=...)`` → synthetic sessions DataFrame
         - ``.list_contexts()`` → all fitted (loc, dept, season, dow) tuples
         - ``.bic_summary()`` → BIC / n_components per stratum
@@ -626,19 +623,19 @@ def get_gmm(
     Examples
     --------
     >>> import gears
-    >>> gmm = gears.get_gmm("work", "75", "winter", 0)
-    >>> # underlying sklearn object
-    >>> sk = gmm.get_sklearn_gmm(
+    >>> model = gears.get_session_model("french")
+    >>> # underlying sklearn object for one stratum
+    >>> sk = model.get_sklearn_component(
     ...     context={"location_type": "work", "department": "75",
     ...              "season": "winter", "day_of_week": 0}
     ... )
     >>> print(sk.means_)   # [arrival_hour, log1p(duration_h), log1p(energy_kWh)]
     >>> # sample 50 synthetic sessions
-    >>> sessions = gmm.sample(
+    >>> sessions = model.sample(
     ...     50,
     ...     context={"location_type": "work", "department": "75",
     ...              "season": "winter", "day_of_week": 0},
     ... )
     """
     registry = _get_default_registry()
-    return registry.load("french")
+    return registry.load(bundle_id)

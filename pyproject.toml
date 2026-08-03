@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gears-ev"
-version = "1.1.0"
+version = "2.0.0"
 description = "Generating Electric vehicle recharging Sessions – simulation, forecasting and smart charging"
 readme = "README.md"
 license = {text = "MIT"}
@@ -59,14 +59,14 @@ all = ["gears-ev[dl,vae,hub,dev]"]
 
 [project.scripts]
 gears = "gears.cli:main"
-gears-fit-gmm = "scripts.fit_gmm:main"
+gears-fit-session-model = "scripts.fit_session_model:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["gears*", "scripts*"]
 
 [tool.setuptools.package-data]
-"gears.data.gmm" = ["*.joblib"]
+"gears.data.session_models" = ["*.joblib"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
