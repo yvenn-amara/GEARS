@@ -18,6 +18,8 @@ Optional extras
 - Deep-learning forecasters (PatchTST, NHiTS):  uv pip install "gears-ev[dl]"
 """
 
+from ._fetch_models import ensure_models
+ensure_models()
 from gears.data.insee import DepartmentForecaster, aggregate_by_department, build_panel
 from gears.data.loader import load_sessions, make_demo_data
 from gears.evaluation.benchmark import (
@@ -54,8 +56,6 @@ from gears.simulation.medium_term import (
 )
 from gears.simulation.short_term import ShortTermSimulator
 from gears.smart_charging.optimizer import SmartChargingOptimizer
-from ._fetch_models import ensure_models
-ensure_models()
 
 __version__ = "2.0.0"
 __author__ = "Yvenn Amara-Ouali"
