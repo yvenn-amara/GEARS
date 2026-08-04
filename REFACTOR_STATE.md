@@ -1,6 +1,6 @@
 # GEARS Refactor — Running State
 
-Phase 2 / Session 4 in progress (PR opened, not merged) — 2026-08-03. Session 7 (Phase 1)
+Phase 2 / Session 5 in progress (PR opened, not merged) — 2026-08-03. Session 7 (Phase 1)
 completed the final gate before merging the original refactor to `main`; full Phase 1 detail
 is in the Session 7 section below.
 
@@ -8,6 +8,107 @@ Phase 2 (point-zero renames, GEAR levels, VAE registry, notebook overhaul, trans
 persistence investigation) started 2026-08-02. Phase 2 sessions are numbered from 1 again — see
 the "Phase 2 / Session N" headings below, kept separate from the Phase 1 "Session N" headings
 above them in the file.
+
+---
+
+## Phase 2 / Session 5 — README Rewrite (2026-08-03)
+
+Scope: rewrite `README.md` to remove refactor/session-perspective narration, add a "GEAR
+levels" section documenting Session 3's `gear=` dispatch, update every code example to the
+Session 2/3 renamed API, and fix the two remaining stale items in `CONTRIBUTING.md`.
+
+### Verified before touching anything
+- Re-cloned fresh: `main` at `7c1bd70` (Session 4's merge, PR #9). No open branches, nothing
+  else in flight.
+- Baseline in this sandbox (no torch/pyarrow initially — installed both from plain PyPI, no
+  CUDA-index access needed this time): `ruff check gears/ tests/` → 0 errors; `pytest tests/ -q`
+  → **300 passed, 21 skipped, 0 failed** with no local data present.
+- The user supplied `sample_df.zip`/`preprocessed_data.zip` this round (unprompted, mid-session)
+  — unzipped into `data/`. With real data present: `pytest tests/ -q` → **311 passed, 10 skipped,
+  0 failed**, matching Session 4's exact skip-count note (21→10, the 11 real-CSV-load tests
+  running instead of skipping). `load_sessions("data/sample_df.pkl")` gives 2,748,855 sessions
+  after quality filtering; top-5 departments by volume are **92, 69, 59, 78, 93** — reconfirms
+  the plan document's own independently-checked number.
+- Read `README.md` as it actually stands (not the plan's summary of it): Session 2 already
+  mechanically renamed every API reference in it (`EVSessionModel`, `get_session_model()`,
+  `fit_session_model.py`, etc.), but Session 3's `gear=`/`model_type`/`recency` facade-level
+  API was never added, and session-log phrasing (`"this session"`, `"this sandbox"`, `"this
+  refactor"`, `REFACTOR_STATE.md`/`AUDIT.md` references) was still present in several sections
+  (Command line, Registry API, Recency/VAE, Notebooks, Benchmark).
+
+### What was done
+- **New "GEAR levels" section**, placed right after Quick Start per the task: explains
+  `GEARSModel(gear=1..5, ...)`, that GEAR 1st is the default/only implemented backend, and
+  shows the real `NotImplementedError` text for `gear=2` verbatim (captured by actually calling
+  it). Doesn't claim anything about what GEAR 2nd–5th will do.
+- Every snippet in the README was re-run for real this pass and its actual output (or a
+  faithful excerpt) is what's shown, using real data where practical:
+  - Quick Start: run against a real 42,278-session French home-charging slice (department 92,
+    the top department by volume) — real `[GEARS] Loaded ...` log lines and real
+    `simulated.head()` output.
+  - GEAR levels: real `NotImplementedError` message from `GEARSModel(gear=2)`.
+  - CLI (`fit`/`simulate`/`medium-term` incl. `--growth-model bass`/`smart-charge`/
+    `list-models`): all run for real against a saved real model; `list-models`' output table
+    re-captured.
+  - Registry API / retrieve-a-stratum: run against the real, committed `"french"` bundle
+    (8,008 contexts, confirmed) and the synthetic `"french_vae_sample"` fallback (109 contexts,
+    confirmed) — numbers match what's already documented, nothing changed here.
+  - `fit_session_model.py`: plain GMM, `--departments`, `--recency`, `--model-type vae` all run
+    for real against both a ~209k-session department slice and the full 2.7M-session national
+    pickle (`--departments 92,69` end-to-end: 220 contexts fit in 92.5s). `--help` output
+    diffed against the README's flag list — matches exactly.
+  - Smart charging Python snippet and `run_benchmark.py --dataset office --quick` both re-run
+    for real (office.csv: 110 ok rows / 25 skipped in 1.1s).
+- Removed every "this session"/"this sandbox"/"this refactor"/bare "Session N" reference and
+  every in-body `REFACTOR_STATE.md`/`AUDIT.md` pointer from `README.md`'s main sections,
+  replacing each with a plain present-tense statement of the capability or limit (e.g. the
+  recency-weighting and VAE-vs-persistence caveats are now stated as findings, not narrated as
+  "Session 2"/"Session 4" write-ups). Kept a single footer pointer to `CHANGELOG.md` (which
+  itself points to this file), matching the one exception the task allows.
+- Updated the "Tests" section to report both real numbers honestly rather than picking one:
+  **300 passed / 21 skipped** on a fresh clone with no `data/`, **311 passed / 10 skipped** once
+  `data/` is populated — both are real, both are correct, they just depend on whether the two
+  reference archives are present.
+- `CONTRIBUTING.md`: fixed two stale items found while cross-checking — `pytest
+  tests/test_gmm.py` (the file was renamed to `test_session_model.py` in Session 2, this
+  reference was missed) → `tests/test_session_model.py`; "All 260+ existing tests still pass"
+  → "All 300+" (current baseline is 300, not 260). The two items Session 1 already flagged and
+  fixed (`notebooks` extra, `black` dependency) were re-checked and are indeed already correct
+  — not touched again.
+- `data/README.md`: checked for stale renamed-API references — none found, no changes needed.
+
+### Real findings along the way (not in the original plan)
+- `.gitignore`'s bottom section still has `!gears/data/gmm/` and `!gears/data/gmm/*.joblib`
+  exception rules referencing the pre-Session-1 directory name (`gears/data/gmm/` →
+  `gears/data/session_models/`). These are dead rules, not active bugs — the top-level
+  `data/**` ignore block they were presumably meant to carve an exception into doesn't actually
+  cover `gears/data/`, so the real committed `.joblib` bundles (`git ls-files
+  gears/data/session_models/` confirms both are tracked) were never at risk. Flagging as a
+  stale-comment cleanup opportunity for whichever session next touches `.gitignore` — out of
+  this session's scope (README/CONTRIBUTING/data-README only).
+- The `gears fit`/`medium-term` CLI examples in the pre-existing README didn't demonstrate
+  `--gear`/`--model-type`/`--recency`/`--half-life-days` or `--growth-model bass` at all, even
+  though Session 3/Session 1 had already implemented/exposed them — added a real example of
+  each.
+
+### Verification
+- `ruff check gears/ tests/ scripts/`: 0 errors (docs-only change; no `.py` files touched).
+- `pytest tests/ -q`: unchanged from baseline in both configurations above (0 failed either
+  way) — this session made no code changes, so no new tests were needed.
+- `git diff --stat`: only `README.md` and `CONTRIBUTING.md` modified.
+
+### Explicitly not done this session (out of scope / flagged, not silently skipped)
+- The `.gitignore` stale-rule cleanup noted above.
+- No fix attempted for `NativeGMMRegistry.get_gmm()`/`get_sklearn_gmm()`'s still-open
+  param-ignoring behavior (Session 1/2's territory, already flagged there) — the naming pass
+  is done, the behavior question is still open per Session 4's own note.
+- Real `gmm_vae_french_sample.joblib` still not fit/committed — unchanged, still Session 11's
+  job pending Yvenn's local run.
+
+### CI status — confirmed
+All 4 GitHub Actions checks passed on the PR branch: `build`, `test (3.10)`, `test (3.11)`,
+`test (3.12)` — all `completed` / `success`. PR #10:
+https://github.com/yvenn-amara/GEARS/pull/10
 
 ---
 
