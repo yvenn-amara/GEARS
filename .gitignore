@@ -96,11 +96,8 @@ ehthumbs.db
 Desktop.ini
 
 # =============================================================================
-# RÈGLE CRITIQUE — Modèles pré-entraînés du package (toujours versionner)
-# Ces fichiers .joblib sont des artefacts indispensables au fonctionnement du
-# package et doivent être inclus dans le repo quelles que soient les règles
-# ci-dessus.
+# RÈGLE CRITIQUE — Modèles pré-entraînés du package
+# Ces fichiers .joblib sont des artefacts utiles au fonctionnement du
+# package et doivent être récupérer via GitHub release et ne sont pas versionés
 # =============================================================================
-!gears/data/
-!gears/data/gmm/
-!gears/data/gmm/*.joblib
+gears/data/session_models/*.joblib
