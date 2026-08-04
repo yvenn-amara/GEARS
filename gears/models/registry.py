@@ -94,7 +94,7 @@ class NativeSessionModelRegistry:
             "model_type": "gmm",
         },
         "french_vae_sample": {
-            "filename": "gmm_vae_french_sample.joblib",
+            "filename": "vae_french_sample.joblib",
             "description": (
                 "French EV sample dataset — shared conditional VAE stratified by "
                 "location_type × département × season × day_of_week "
