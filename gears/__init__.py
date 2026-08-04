@@ -54,6 +54,8 @@ from gears.simulation.medium_term import (
 )
 from gears.simulation.short_term import ShortTermSimulator
 from gears.smart_charging.optimizer import SmartChargingOptimizer
+from ._fetch_models import ensure_models
+ensure_models()
 
 __version__ = "2.0.0"
 __author__ = "Yvenn Amara-Ouali"
