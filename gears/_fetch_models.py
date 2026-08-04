@@ -1,7 +1,7 @@
 import requests
 from pathlib import Path
 
-MODELS_DIR = Path(__file__).parent / "session_models"
+MODELS_DIR = Path(__file__).parent / "data" / "session_models"
 RELEASE_TAG = "models-v1"
 REPO = "yvenn-amara/GEARS"
 FILES = [
