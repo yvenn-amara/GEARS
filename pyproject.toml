@@ -27,6 +27,7 @@ dependencies = [
     "tqdm>=4.66",
     "pmdarima>=2.0",
     "holidays>=0.46",
+    "requests>=2.31",
     # CLI entry point (gears fit / gears simulate / etc.)
     "click>=8.0",
 ]
