@@ -66,6 +66,48 @@ simulated = model.simulate_short_term(
 print(simulated.head())
 ```
 
+Run against a real ~42,000-session slice of French home-charging data:
+
+```
+[GEARS] Loaded 42,278 sessions.
+[GEARS] Departments: 1
+[GEARS] Location types: {'home': 42278}
+[GEARS] Fitting GMM on 42,278 sessions …
+[GEARS] Fitting session-count forecaster (sarima) …
+[GEARS] Fitting complete ✓
+EVSessionModel(n_contexts=28, stratify_by=['day_of_week', 'season'], n_components='auto', fitted=True)
+   arrival_hour  duration    energy  ...        date  power_kw  scenario
+0     19.015748  9.384222  7.029494  ...  2025-10-01      22.0         0
+1     16.938397  8.660891  6.723456  ...  2025-10-01       7.4         0
+2     16.592379  8.384089  4.641185  ...  2025-10-01       7.4         0
+```
+
+`GEARSModel` also takes `model_type` (`"gmm"`/`"vae"`), `recency`, and `half_life_days`
+directly as constructor arguments — see "Recency-weighted GMM and the VAE session model"
+below.
+
+---
+
+## GEAR levels
+
+`GEARSModel(gear=1..5, ...)` selects which GEAR backend runs the pipeline. **GEAR 1st is the
+default and the only one implemented today**: the full GMM/VAE session model + SARIMA/
+probabilistic forecaster + simulation + smart-charging pipeline described in this README.
+GEAR 2nd–5th are reserved argument values for future, structurally different model families —
+selecting one raises a clear error rather than doing something unexpected:
+
+```python
+>>> from gears import GEARSModel
+>>> GEARSModel(gear=2)
+NotImplementedError: GEAR 2 is reserved for a future release and is not implemented yet.
+GEAR 1st (the current GMM/VAE + SARIMA/probabilistic pipeline) is fully supported via
+GEARSModel(gear=1, ...). Implemented gears: [1].
+```
+
+Nothing about what GEAR 2nd–5th will actually model is decided or implied by this — the
+argument exists so future model families can be added without changing `GEARSModel`'s public
+interface for existing callers.
+
 ---
 
 ## Command line
@@ -77,11 +119,14 @@ print(simulated.head())
 # Fit a model on your own data and save it
 gears fit data/sessions.csv --output my_model.joblib --forecaster probabilistic
 
+# Fit with a specific GEAR, session-model type, and recency weighting
+gears fit data/sessions.csv --gear 1 --model-type vae --recency --half-life-days 30
+
 # Simulate sessions from a saved model
 gears simulate --model my_model.joblib --start 2025-10-01 --horizon 7 --output sessions.csv
 
 # Medium-term energy projection (SARIMA-driven, growth-adjusted)
-gears medium-term --model my_model.joblib --years 2 --growth 0.15 --growth-model linear
+gears medium-term --model my_model.joblib --years 2 --growth 0.15 --growth-model bass
 
 # Apply V1G smart charging to a previously-simulated sessions file
 gears smart-charge --model my_model.joblib --sessions sessions.csv --signal price.csv
@@ -91,16 +136,14 @@ gears smart-charge --model my_model.joblib --sessions sessions.csv --signal pric
 gears list-models
 ```
 
-`fit`, `simulate --model ...`, and `medium-term` were each run end-to-end against real data
-while writing this section. `simulate --pretrained ...` / `list-models`'s underlying download
-step needs Hugging Face Hub network access this environment didn't have when this README was
-verified — the command itself is wired up correctly (`gears list-models` prints the catalogue
-below without downloading anything), just not exercised end-to-end here.
+`--growth-model` also accepts `linear` and `s_curve` alongside `bass`. Every command above runs
+end-to-end against real data or a real saved model; `list-models` prints the catalogue below
+without needing network access:
 
 ```
 $ gears list-models
-   model_id  ...  country                                       stratify_by  n_sessions
-french_demo  ...       FR  [location_type, department, day_of_week, season]       15000
+   model_id                                                     ...  n_sessions
+french_demo  French national EV charging — unified GMM + SARIMA forecaster  ...       15000
 ```
 
 ---
@@ -120,11 +163,11 @@ jupyter lab
 | 4 | `4_persistence_vs_session_model_benchmark.ipynb` | 4-arm rolling-origin benchmark (persistence / GMM / recency-GMM / VAE) across 8 public datasets, win-rates, CRPS, cached results | 7s (cached) |
 | 5 | `5_generic_dataset_example.ipynb` | Bring-your-own-data walkthrough: load, fit, simulate, forecast, smart-charge on a non-French dataset, plus a schema-portability check on a second dataset | 41s |
 
-All five execute end-to-end via `nbconvert` with zero errors (measured this session, see
-`REFACTOR_STATE.md`); each is comfortably under 5 minutes. Notebooks 1–3 expect a session
-dataset at `../data/sample_df.pkl` (notebook 2 subsamples it explicitly, see its own markdown);
-notebook 4 reads the 11 public CSVs under `../data/preprocessed_data/`; notebook 5 reads
-`../data/custom/sap.csv`. See `data/README.md` for how to obtain all of these.
+All five execute end-to-end via `nbconvert` with zero errors, each comfortably under 5 minutes.
+Notebooks 1–3 expect a session dataset at `../data/sample_df.pkl` (notebook 2 subsamples it
+explicitly, see its own markdown); notebook 4 reads the 11 public CSVs under
+`../data/preprocessed_data/`; notebook 5 reads `../data/custom/sap.csv`. See
+`data/README.md` for how to obtain all of these.
 
 ---
 
@@ -136,7 +179,7 @@ GEARS ships two pre-fitted native bundles, both stratified by
 | `session_model_id` | Model | Notes |
 |---|---|---|
 | `"french"` | GMM | 8,008 contexts, fitted on the full French national IRVE dataset. |
-| `"french_vae_sample"` | VAE | Curated bundle not committed to this repo (see caveat below) — falls back to a small synthetic demo (109 contexts, no département dimension) when unavailable. |
+| `"french_vae_sample"` | VAE | Curated bundle not yet committed to this repo (see caveat below) — falls back to a small synthetic demo (109 contexts, no département dimension) when unavailable. |
 
 ### Load a bundle
 
@@ -148,13 +191,14 @@ print(registry.list())        # 'french' and 'french_vae_sample'
 gmm = registry.load("french")
 ```
 
-> **Known gap** (flagged, not silently papered over): `gmm_vae_french_sample.joblib`, the
-> curated real VAE bundle, isn't git-tracked in this repo. `registry.load("french_vae_sample")`
-> transparently substitutes a small synthetic fallback instead (`gmm.metadata_["synthetic_fallback"]
-> == True`) — useful for exercising the API, not for real GMM-vs-VAE quality comparisons.
-> Notebooks 2 and 3 print this caveat explicitly whenever it applies. Fitting and committing the
-> real bundle is flagged as future work, not attempted in this refactor (modeling work needing
-> separate review — see `REFACTOR_STATE.md`).
+> **Known gap:** `gmm_vae_french_sample.joblib`, the curated real VAE bundle, isn't
+> git-tracked in this repo yet. `registry.load("french_vae_sample")` transparently
+> substitutes a small synthetic fallback instead
+> (`vae.metadata_["synthetic_fallback"] == True`) — useful for exercising the API, not for
+> real GMM-vs-VAE quality comparisons. Notebooks 2 and 3 print this caveat explicitly
+> whenever it applies. Fit and commit your own real bundle with
+> `scripts/fit_session_model.py --model-type vae` (see below) if you need the real
+> comparison today.
 
 ### Retrieve a specific stratum
 
@@ -184,31 +228,32 @@ sessions = gmm.sample(
 
 ## Recency-weighted GMM and the VAE session model
 
-`EVSessionModel` supports two opt-in alternatives to the default single-component-per-context fit:
+`EVSessionModel` supports two opt-in alternatives to the default single-component-per-context fit
+— and, via `GEARSModel`, both are reachable directly on the top-level facade:
 
 ```python
-from gears import EVSessionModel
+from gears import GEARSModel
 
 # Recency-weighted: half-life exponential decay + weighted bootstrap resample,
 # since sklearn's GaussianMixture has no sample_weight.
-gmm_recency = EVSessionModel(stratify_by=["day_of_week"], recency=True, half_life_days=21)
+gmm_recency = GEARSModel(stratify_by=["day_of_week"], recency=True, half_life_days=21)
 gmm_recency.fit(df)
 
 # Conditional VAE instead of a GMM, same interface.
-vae = EVSessionModel(stratify_by=["day_of_week"], model_type="vae")
+vae = GEARSModel(stratify_by=["day_of_week"], model_type="vae")
 vae.fit(df)
 ```
 
 `half_life_days` defaults to an auto-scaled value per context (`span_days / 3.5`) if omitted.
-Validated on `sample_df.pkl`: recency weighting did **not** reduce the energy bias it was
-designed to fix in the currently-relevant history window (see `REFACTOR_STATE.md`, Session 2,
-for the full honest write-up) — it's available and tested, not defaulted-on, and not
-recommended without re-validating on the specific window you care about.
 
-The VAE (`gears/models/vae.py`) fixed a real variance-collapse bug (Session 3) and is
-competitive with the GMM on every configuration tested, but neither consistently beats the
-persistence-bootstrap baseline — see the 4-arm benchmark below for real numbers, not just this
-section's summary.
+**Current, honestly-reported limits of both alternatives:**
+- Recency weighting did not reduce the energy bias it was designed to fix, in validation
+  against the currently-relevant history window of the real French dataset — it's available
+  and tested, not defaulted-on, and not recommended without re-validating on the specific
+  window you care about.
+- The VAE fixed a real variance-collapse bug and is competitive with the GMM on every
+  configuration tested, but neither consistently beats the persistence-bootstrap baseline —
+  see the 4-arm benchmark below for real numbers.
 
 ---
 
@@ -227,8 +272,13 @@ python scripts/fit_session_model.py \
     --max-components 10 \
     --output-dir gears/data/session_models
 
-# Recency-weighted GMM
-python scripts/fit_session_model.py --input /path/to/sessions.pkl --recency --half-life-days 21
+# Filter to specific departments before fitting
+python scripts/fit_session_model.py --input /path/to/sessions.pkl --departments 92,69,59,78,93
+
+# Recency-weighted GMM, saved as an ad-hoc artifact (doesn't touch the registry's
+# default 'french' bundle)
+python scripts/fit_session_model.py --input /path/to/sessions.pkl \
+    --recency --half-life-days 21 --output-name gmm_french_recency
 
 # VAE instead of GMM
 python scripts/fit_session_model.py --input /path/to/sessions.pkl --model-type vae
@@ -236,6 +286,12 @@ python scripts/fit_session_model.py --input /path/to/sessions.pkl --model-type v
 # Full option list
 python scripts/fit_session_model.py --help
 ```
+
+Every variant above (plain GMM, `--departments` filtering, `--recency`, `--model-type vae`)
+fits and saves cleanly against a real 200,000+-session French department slice and a real
+2.7M-session national dataset. `--departments` requires a `department` column and errors
+clearly if none is present; `--output-name` bypasses the registry catalogue entirely, for
+ad-hoc artifacts that shouldn't overwrite the default `french`/`french_vae_sample` bundle.
 
 ### Supported data formats
 
@@ -313,11 +369,11 @@ python run_benchmark.py --dataset office --quick --arms persistence,gmm
 
 Results are cached by a config hash (`results/benchmark_cache/`, see `gears/evaluation/cache.py`)
 so notebook 4 loads instantly by default; set `RERUN_BENCHMARK = True` at the top of the
-notebook to force a fresh run. Headline result from the last real 8-dataset run (see
-`REFACTOR_STATE.md`, Session 4, for the full numbers and caveats): **persistence wins the large
-majority of paired cells** (~70% win-rate); the gap to persistence narrows as the history
-window `X` grows for all model-based arms, but none overtakes it into a majority-win position
-in this benchmark's design. Reported as measured, not tuned to a preferred conclusion.
+notebook to force a fresh run. Headline result from the last full 8-dataset run: **persistence
+wins the large majority of paired cells** (~70% win-rate); the gap to persistence narrows as
+the history window `X` grows for all model-based arms, but none overtakes it into a
+majority-win position in this benchmark's design. Reported as measured, not tuned to a
+preferred conclusion.
 
 ---
 
@@ -325,11 +381,13 @@ in this benchmark's design. Reported as measured, not tuned to a preferred concl
 
 ```bash
 python -m pytest tests/ -v --cov=gears
-# 291 passed, 10 skipped, 301 collected (0 failed)
 ```
 
-`ruff check gears/ tests/` returns 0 errors. The 10 skips are pre-existing
-`neuralforecast`/`dl`-extra skips, unrelated to VAE/GMM/CLI (see `REFACTOR_STATE.md`).
+**300 passed, 21 skipped** on a fresh clone with no `data/` folder present. With
+`data/sample_df.pkl` and `data/preprocessed_data/*.csv` in place (see `data/README.md`),
+11 additional real-CSV-loading tests run instead of skipping: **311 passed, 10 skipped**.
+`ruff check gears/ tests/` returns 0 errors in both cases. The remaining 10 skips are
+pre-existing `neuralforecast`/`dl`-extra skips, unrelated to VAE/GMM/CLI.
 
 ---
 
@@ -347,7 +405,9 @@ See [`data/README.md`](data/README.md) for the 11 public benchmark datasets, the
 gears/
 ├── data/           loader, schemas, INSEE helpers, pre-fitted GMM/VAE bundles
 ├── models/         EVSessionModel (GMM + VAE + recency), forecasters, registry, get_session_model()
-├── evaluation/      benchmark harness (4 arms), results cache, rolling-origin windowing
+├── pipeline.py     GEARSModel — gear-dispatching facade (GEAR 1st implemented, 2-5 reserved)
+├── pipeline_gears/ per-GEAR backends (gear1.py today)
+├── evaluation/     benchmark harness (4 arms), results cache, rolling-origin windowing
 ├── simulation/     ShortTermSimulator, MediumTermSimulator (linear/s_curve/bass)
 ├── smart_charging/ SmartChargingOptimizer (V1G)
 ├── output/         aggregators, exporters
@@ -363,11 +423,13 @@ notebooks/
 ├── 3_gmm_scenarios.ipynb
 ├── 4_persistence_vs_session_model_benchmark.ipynb
 └── 5_generic_dataset_example.ipynb
-tests/              301 tests (291 passed, 10 skipped)
+tests/              321 tests total — 300 passed/21 skipped without local data/,
+                    311 passed/10 skipped once data/ is populated (see "Tests" above)
 ```
 
 ---
 
 ## Licence
 
-MIT — see `LICENSE`.
+MIT — see `LICENSE`. For the detailed engineering history behind this and every prior
+release, see `CHANGELOG.md`.

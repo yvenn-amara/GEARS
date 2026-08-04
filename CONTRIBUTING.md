@@ -22,7 +22,7 @@ pytest tests/ -v
 pytest tests/ --cov=gears --cov-report=term-missing
 
 # One module only
-pytest tests/test_gmm.py -v
+pytest tests/test_session_model.py -v
 ```
 
 ## Code style
@@ -44,7 +44,7 @@ mypy gears/ --ignore-missing-imports  # type hints (non-blocking)
 ## Pull Request checklist
 
 - [ ] Tests added / updated for new functionality
-- [ ] All 260+ existing tests still pass
+- [ ] All 300+ existing tests still pass
 - [ ] Docstrings updated
 - [ ] `CHANGELOG.md` entry added under `[Unreleased]`
 - [ ] `ruff check` and `ruff format --check` pass with no errors
