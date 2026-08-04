@@ -105,7 +105,10 @@ Session 2/3 renamed API, and fix the two remaining stale items in `CONTRIBUTING.
 - Real `gmm_vae_french_sample.joblib` still not fit/committed — unchanged, still Session 11's
   job pending Yvenn's local run.
 
-### CI status — to confirm via the GitHub Actions API after push (see below)
+### CI status — confirmed
+All 4 GitHub Actions checks passed on the PR branch: `build`, `test (3.10)`, `test (3.11)`,
+`test (3.12)` — all `completed` / `success`. PR #10:
+https://github.com/yvenn-amara/GEARS/pull/10
 
 ---
 
