@@ -108,7 +108,18 @@ the plotting-label edits introduced no regressions. `ruff check gears/ tests/`: 
 
 ### CI status — confirmed via the GitHub Actions API, not assumed from the local pass
 
-<!-- CI_STATUS_PLACEHOLDER_SESSION_7_PHASE2 -->
+PR #12 (`phase2/session-7-notebook3-translation` → `main`), pushed 2026-08-05. All 4 checks
+green:
+- `test (3.10)` — success
+- `test (3.11)` — success
+- `test (3.12)` — success
+- `build` — success
+
+Confirmed via `GET /repos/yvenn-amara/GEARS/commits/{branch}/check-runs` (not inferred from
+the local `ruff`/`pytest` pass, which used this sandbox's own CPU-only-but-CUDA-lib-heavy
+`torch` install — CI installs the proper `torch --index-url .../whl/cpu` wheel per its own
+workflow, so this is an independent confirmation, not a duplicate of the local run). PR left
+open, not merged, per the ground rules.
 
 ### Explicitly not done this session (out of scope / flagged, not silently skipped)
 - `gears/plotting.py`'s `plot_mt_national_aggregate()` (a **third** function, distinct from the
