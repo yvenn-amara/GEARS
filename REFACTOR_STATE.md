@@ -1,6 +1,6 @@
 # GEARS Refactor — Running State
 
-Phase 2 / Session 5 in progress (PR opened, not merged) — 2026-08-03. Session 7 (Phase 1)
+Phase 2 / Session 6 in progress (PR opened, not merged) — 2026-08-05. Session 7 (Phase 1)
 completed the final gate before merging the original refactor to `main`; full Phase 1 detail
 is in the Session 7 section below.
 
@@ -8,6 +8,116 @@ Phase 2 (point-zero renames, GEAR levels, VAE registry, notebook overhaul, trans
 persistence investigation) started 2026-08-02. Phase 2 sessions are numbered from 1 again — see
 the "Phase 2 / Session N" headings below, kept separate from the Phase 1 "Session N" headings
 above them in the file.
+
+---
+
+## Phase 2 / Session 6 — Notebooks 1 & 2 Overhaul (2026-08-05)
+
+Scope: plot-quality pass on notebooks 1 (`1_gmm_descriptive.ipynb`) and 2
+(`2_gmm_forecasting.ipynb`) — titles/labels/legends, consistent GMM-vs-VAE colors across every
+comparison chart, updated renamed-API references, re-run end-to-end, plus fixing whatever was
+blocking CI's test step (flagged by Yvenn, not yet diagnosed at session start).
+
+### Verified before touching anything
+- Re-cloned fresh: `main` at `7a98319`, three commits ahead of Session 5's PR #10 merge
+  (`60ca003`/`2f3c3a2`/`94b9e9f`/`c275c53`/`8c289c8`/`7a98319` — Yvenn's own direct commits,
+  not session-numbered, adding `gears/_fetch_models.py` and switching the release `.joblib`
+  bundles to fetch-on-import rather than being committed to git).
+- **CI was failing on every run since 2026-08-04T22:36Z** (6 straight failures, after a run of
+  successes right before). Checked the job steps directly rather than guessing: the `Lint with
+  ruff` step failed and `Run tests with coverage` never ran at all — so "tests not running" was
+  literally true in CI, even though nothing was wrong with the tests themselves.
+  `ruff check gears/ tests/` locally reproduced it: 2 `I001` (unsorted-imports) errors, both in
+  Yvenn's un-linted direct commits (`gears/__init__.py`, `gears/_fetch_models.py`).
+  `pytest tests/ -q` run directly (bypassing the lint gate): **300 passed, 21 skipped, 0
+  failed** — confirms the tests themselves were never broken, only unreachable in CI.
+- Unzipped the `sample_df.zip`/`preprocessed_data.zip` Yvenn supplied into `data/`. With real
+  data present: **312 passed, 10 skipped** (matching prior sessions' 21→10 skip-count pattern).
+- Confirmed via `curl` against the GitHub API that the `models-v1` release has all 5 `.joblib`
+  assets Yvenn described, and that `import gears` (via the new `ensure_models()`) really does
+  fetch and cache all 5 into `gears/data/session_models/` on first import, ~505MB total.
+- **Real finding, updates the plan's own assumption**: loaded `french_vae_sample` via the
+  registry and checked `metadata_.get("synthetic_fallback")` directly — it's `None`. The real,
+  non-synthetic VAE bundle (`vae_french_sample.joblib`, 469MB, real département stratification)
+  is already live in the release. The plan expected this might still be pending until Session
+  11; it isn't — Yvenn fit and published it already. Both notebooks' GMM-vs-VAE sections ran
+  against the real bundle this session, not the 109-context synthetic fallback.
+
+### What was done
+- **Fixed the CI-blocking lint errors**: `ruff check --fix` on `gears/__init__.py` (blank line
+  between the `ensure_models` import and the call — cosmetic, doesn't change execution order)
+  and `gears/_fetch_models.py` (stdlib-before-third-party import order). `ruff check gears/
+  tests/` now 0 errors.
+- **Real bug fixed**: `EVSessionModel.plot_marginals()` — shared by both GMM and VAE instances
+  — hardcoded `color="#2E86AB"` (GMM blue) for the "Simulated" series and hardcoded
+  `"GMM marginal distributions"` in the title, regardless of which instance called it. A
+  `vae.plot_marginals(...)` call rendered a GMM-blue, GMM-titled figure; notebook 1's cell only
+  looked correct because it overrides `fig.suptitle(...)` afterward, but the color bug wasn't
+  worked around by anything. Fixed to key off `self.model_type`: GMM → `#2E86AB`/"GMM", VAE →
+  `#F4A261`/"VAE" — the same pairing already used in every bar-chart comparison. Verified
+  visually (rendered PNGs, not just code review): GMM marginals now render blue, VAE now render
+  orange, both with correct titles.
+- **Second real bug found while verifying the fix above**: re-running notebook 1 after the
+  `plot_marginals()` fix immediately hit `AttributeError: 'EVSessionModel' object has no
+  attribute 'model_type'` on the *GMM* call. Inspected all 5 release bundles' unpickled
+  `__dict__` directly (`joblib.load` + `.__dict__`) rather than guessing: `gmm_french.joblib`
+  and `gmm_french_sample.joblib` — the two oldest bundles — were pickled before `model_type`
+  existed as an attribute at all; the three newer bundles (`gmm_french_holdout.joblib`,
+  `gmm_french_recency.joblib`, `vae_french_sample.joblib`) all already have it correctly set.
+  Same class of bug Session 2 already hit and fixed for the `recency`-era attributes via
+  `__setstate__`'s backfill-with-`__init__`-defaults pattern — extended that same `defaults`
+  dict with `"model_type": "gmm"` (every bundle old enough to be missing it predates the VAE
+  path, so `"gmm"` is unambiguously correct, and matches `__init__`'s own default).
+- **Notebook 2, cell "8.2 distribution comparison — GMM vs VAE"**: the two KDE lines (GMM
+  dashed, VAE dotted) shared one `color` variable per subplot — i.e. GMM and VAE were drawn in
+  the *same* color, distinguished only by linestyle, inconsistent with the blue/orange
+  convention used in every bar-chart comparison elsewhere in both notebooks. Changed to the
+  standard `#2E86AB` (GMM) / `#F4A261` (VAE) pairing in every subplot. Verified visually — the
+  three subplots now clearly separate GMM (blue dashed) from VAE (orange dotted). Applied the
+  same color unification (real-vs-GMM only, no VAE line) to the adjacent single-model KDE cell
+  for consistency, relabeling its legend "GEARS sim. (GMM)" for clarity.
+- Fixed two stale `gmm_vae_french_sample.joblib` filename references (notebook 1's "département
+  alignment" comment, notebook 2's `synthetic_fallback` note) — the real filename after Yvenn's
+  rename is `vae_french_sample.joblib`; also updated the surrounding prose since the file is no
+  longer "committed" but fetched from the release on import.
+- Added 2 regression tests in `tests/test_session_model.py`, same
+  strip-attribute-then-pickle-round-trip style as the existing recency backfill test:
+  `test_plot_marginals_uses_model_type_color_and_title` (asserts GMM/VAE title + hex facecolor)
+  and `test_unpickling_old_bundle_backfills_model_type`.
+- Re-ran both notebooks end-to-end via `jupyter nbconvert --execute` against real data:
+  notebook 1 in **44s**, notebook 2 in **149s** — both well under the 5-minute target, 0 cell
+  errors.
+
+### Real findings along the way (not in the original plan)
+- Both bugs above (`plot_marginals()`'s hardcoded color/title, the missing-`model_type` old
+  bundles) were latent — nothing before this session exercised `self.model_type` on a *loaded*
+  (as opposed to freshly-fitted) instance. Neither would have been caught by a code-only review;
+  both surfaced only by actually executing the notebooks against the real release bundles.
+- Flagging, not fixing (out of this session's scope — notebook/CI-gate only): `gears/__init__.py`
+  now runs a blocking network call (`ensure_models()`, up to ~505MB) as a side effect of every
+  `import gears`, with no offline/opt-out flag, retry, or progress indication. Worked fine here,
+  but is worth a deliberate decision (env var to skip, lazy per-model fetch, etc.) rather than
+  leaving it as an unreviewed side effect of `import`.
+
+### Verification
+- `ruff check gears/ tests/`: 0 errors (was 2, both fixed).
+- `pytest tests/ -q`: **313 passed, 10 skipped, 0 failed** (was 300/21 baseline with no data,
+  312/10 with data before this session's 2 new tests).
+- Both notebooks executed cleanly end-to-end, outputs inspected visually (not just "no
+  exception raised") for the specific charts this session touched.
+- `git diff --stat`: `gears/__init__.py`, `gears/_fetch_models.py`,
+  `gears/models/session_model.py`, `notebooks/1_gmm_descriptive.ipynb`,
+  `notebooks/2_gmm_forecasting.ipynb`, `tests/test_session_model.py`.
+
+### Explicitly not done this session (out of scope / flagged, not silently skipped)
+- The `import gears`-triggers-a-505MB-download design question flagged above — Yvenn's call.
+- No further plot-quality changes beyond the GMM/VAE color-consistency and stale-reference
+  fixes above — both notebooks' titles/axis-labels/legends were already in good shape from
+  Session 5 and earlier; this session didn't re-litigate anything that was already correct.
+- Notebook 3 (translation, notebooks 4/5, `compare_external.ipynb`) — Sessions 7/8's scope.
+
+### CI status
+PR opened; CI check not yet confirmed at time of writing — see the PR link for current status.
 
 ---
 

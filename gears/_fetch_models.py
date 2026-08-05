@@ -1,5 +1,6 @@
-import requests
 from pathlib import Path
+
+import requests
 
 MODELS_DIR = Path(__file__).parent / "data" / "session_models"
 RELEASE_TAG = "models-v1"
