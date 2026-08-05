@@ -299,6 +299,18 @@ class EVSessionModel:
         ``get_session_model()`` call. Backfilling with the same defaults ``__init__``
         uses keeps old bundles loadable under the current code without
         needing to refit and re-commit them.
+
+        ``model_type`` has the same problem: the two oldest release bundles
+        (``gmm_french.joblib``, ``gmm_french_sample.joblib``) were pickled
+        before that attribute existed at all (confirmed by inspecting their
+        unpickled ``__dict__`` directly — the three newer bundles,
+        ``gmm_french_holdout.joblib``, ``gmm_french_recency.joblib``, and
+        ``vae_french_sample.joblib``, all already have it). Surfaced by
+        Session 6's ``plot_marginals()`` fix, which reads ``self.model_type``
+        to pick GMM- vs VAE-consistent plot colors and raised
+        ``AttributeError`` on the old GMM bundles. Every bundle predating this
+        attribute is a GMM (the VAE path didn't exist yet), so ``"gmm"`` is
+        the correct backfill default — it's also ``__init__``'s own default.
         """
         defaults = {
             "recency": None,
@@ -308,6 +320,7 @@ class EVSessionModel:
             "recency_halflife_divisor": DEFAULT_RECENCY_HALFLIFE_DIVISOR,
             "half_life_days_used_": {},
             "recency_reference_date_used_": None,
+            "model_type": "gmm",
         }
         for key, default in defaults.items():
             state.setdefault(key, default)
@@ -1000,6 +1013,14 @@ class EVSessionModel:
         self._check_fitted()
         synth = self.sample(n_samples, context=context, date=date)
 
+        # Consistent model-identity color pairing used throughout the notebooks:
+        # GMM = "#2E86AB" (blue), VAE = "#F4A261" (orange). Picking the color from
+        # self.model_type (rather than hardcoding blue) keeps GMM-vs-VAE comparison
+        # charts visually consistent regardless of which instance calls this method.
+        is_vae = self.model_type == "vae"
+        sim_color = "#F4A261" if is_vae else "#2E86AB"
+        model_label = "VAE" if is_vae else "GMM"
+
         fig, axes = plt.subplots(1, 3, figsize=figsize)
         pairs = [
             ("arrival_hour", "Arrival hour"),
@@ -1009,7 +1030,7 @@ class EVSessionModel:
 
         for ax, (col, label) in zip(axes, pairs):
             ax.hist(synth[col], bins=bins, alpha=0.6, label="Simulated", density=True,
-                    color="#2E86AB")
+                    color=sim_color)
             if df is not None:
                 real_col = "hour" if col == "arrival_hour" and "hour" in df.columns else col
                 if real_col in df.columns:
@@ -1021,7 +1042,7 @@ class EVSessionModel:
             ax.grid(True, alpha=0.3)
 
         ctx_tuple = self._resolve_context(context, date)
-        fig.suptitle(f"GMM marginal distributions – context {ctx_tuple}")
+        fig.suptitle(f"{model_label} marginal distributions – context {ctx_tuple}")
         fig.tight_layout()
         return fig
 

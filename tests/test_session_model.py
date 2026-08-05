@@ -444,6 +444,29 @@ def test_unpickling_old_bundle_backfills_recency_attrs():
     assert "EVSessionModel" in repr(loaded)
 
 
+def test_unpickling_old_bundle_backfills_model_type():
+    """Regression test for the bug Session 6's plot_marginals() fix surfaced.
+
+    ``gmm_french.joblib`` and ``gmm_french_sample.joblib`` (the models-v1
+    release's two oldest bundles) were pickled before ``model_type`` existed
+    as an attribute at all — confirmed by inspecting their unpickled
+    ``__dict__`` directly, unlike the newer bundles which all have it.
+    ``plot_marginals()`` reading ``self.model_type`` to pick a GMM/VAE-
+    consistent color raised ``AttributeError`` on these. Same
+    strip-then-round-trip approach as the recency backfill test above.
+    """
+    import pickle
+
+    gmm = EVSessionModel(n_components=2, stratify_by=["day_of_week"]).fit(make_df(200))
+    del gmm.model_type
+
+    loaded = pickle.loads(pickle.dumps(gmm))
+
+    assert loaded.model_type == "gmm"
+    fig = loaded.plot_marginals(n_samples=20)
+    assert "GMM" in fig._suptitle.get_text()
+
+
 def test_recency_repr_flag():
     df = make_df_regime_shift()
     gmm = EVSessionModel(
@@ -641,6 +664,34 @@ def test_vae_is_sample_flag():
         max_samples_per_context=20,
     ).fit(df, is_sample=True)
     assert model.is_sample_ is True
+
+
+# ── Regression: plot_marginals() color/title consistency (Session 6) --------
+#
+# plot_marginals() is shared by GMM and VAE EVSessionModel instances but used
+# to hardcode blue ("#2E86AB") for the "Simulated" series and the string "GMM"
+# in the figure title regardless of which instance called it — so a VAE call
+# rendered a plot both mislabeled and using the GMM color, breaking the
+# notebooks' "same color for GMM everywhere, same color for VAE everywhere"
+# convention. Fixed to key off self.model_type.
+
+def test_plot_marginals_uses_model_type_color_and_title():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.colors as mcolors
+
+    gmm = EVSessionModel(n_components=2, stratify_by=["location_type"]).fit(make_df(300))
+    fig_gmm = gmm.plot_marginals(n_samples=50)
+    assert "GMM" in fig_gmm._suptitle.get_text()
+    # First histogram patch drawn is the "Simulated" series — should be GMM blue.
+    assert mcolors.to_hex(fig_gmm.axes[0].patches[0].get_facecolor()) == "#2e86ab"
+
+    vae, _ = _fit_tiny_vae()
+    fig_vae = vae.plot_marginals(n_samples=50)
+    assert "VAE" in fig_vae._suptitle.get_text()
+    assert "GMM" not in fig_vae._suptitle.get_text()
+    # Same series for a VAE instance should be VAE orange, not GMM blue.
+    assert mcolors.to_hex(fig_vae.axes[0].patches[0].get_facecolor()) == "#f4a261"
 
 
 # ── Regression: partial stratify_by fallback (Phase 2 Session 4) -------------

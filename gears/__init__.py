@@ -19,6 +19,7 @@ Optional extras
 """
 
 from ._fetch_models import ensure_models
+
 ensure_models()
 from gears.data.insee import DepartmentForecaster, aggregate_by_department, build_panel
 from gears.data.loader import load_sessions, make_demo_data
