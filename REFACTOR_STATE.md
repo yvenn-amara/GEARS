@@ -116,7 +116,19 @@ fully-rewritten notebook, zero `gears/` source changes) introduced a regression.
 `ruff check gears/ tests/`: 0 errors.
 
 ### CI status — confirmed via the GitHub Actions API, not assumed from the local pass
-PR opened (see below); CI status filled in once checks complete.
+
+PR #13 (`phase2/session-8-notebooks-4-5-final-translation` → `main`), pushed 2026-08-05. All 4
+checks green:
+- `test (3.10)` — success
+- `test (3.11)` — success
+- `test (3.12)` — success
+- `build` — success
+
+Confirmed via `GET /repos/yvenn-amara/GEARS/commits/{branch}/check-runs` — CI installs the
+proper `torch --index-url .../whl/cpu` wheel per its own workflow, so the 17 VAE tests that
+failed in this sandbox (no `torch`) ran for real in CI and passed; this is an independent
+confirmation, not a duplicate of the local sandbox run. PR left open, not merged, per the
+ground rules.
 
 ### Explicitly not done this session (out of scope / flagged, not silently skipped)
 - Did not attempt to install `torch` a second time or find a workaround to get the CPU-only
