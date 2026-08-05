@@ -4,8 +4,8 @@ Shared windowing utility for the persistence-bootstrap vs. GMM benchmark.
 Used by both :class:`gears.models.persistence_sampler.PersistenceSessionSampler`
 and a windowed :class:`gears.models.session_model.EVSessionModel` fit, so that the exact
 same historical pool feeds both arms of the comparison (see Section 1,
-assumption 2, of the benchmark prompt: "Pour le GMM il faudra prendre les
-mêmes historiques.").
+assumption 2, of the benchmark prompt: "For the GMM, we'll need to use the
+same historical data.").
 """
 
 from __future__ import annotations
