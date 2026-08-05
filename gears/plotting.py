@@ -625,17 +625,17 @@ def plot_mt_fan_charts(
         ax.plot(
             hist_tail.index, hist_tail.values,
             color=HIST_COLOR, linewidth=1.8, zorder=4,
-            label="Données observées",
+            label="Observed data",
         )
         ax.fill_between(
             pivot.index, lo, hi,
             alpha=0.15, color=sarima_color, linewidth=0,
-            label="Enveloppe 80 % (P10–P90)",
+            label="80% envelope (P10–P90)",
         )
         ax.plot(
             pivot.index, med,
             color=sarima_color, linewidth=2.0, zorder=3,
-            label="Prévision médiane",
+            label="Median forecast",
         )
 
         if metrics_df is not None:
@@ -654,7 +654,7 @@ def plot_mt_fan_charts(
 
         _apply_pub_style(
             ax,
-            ylabel="Énergie (kWh/jour)",
+            ylabel="Energy (kWh/day)",
             title=f"Département {dept}",
         )
         ax.legend(fontsize=7, loc="lower right")
@@ -905,7 +905,7 @@ def plot_lt_trajectories(
 
     legend_handles = [
         _Line2D([0], [0], color=HIST_COLOR, linewidth=1.8,
-                label="Données observées (moy. mensuelle)"),
+                label="Observed data (monthly avg.)"),
     ]
 
     ax_main.plot(
@@ -967,15 +967,15 @@ def plot_lt_trajectories(
     )
     ax_main.text(
         _mdates2.date2num(sim_start.to_pydatetime()), 0.97,
-        " Aujourd'hui",
+        " Today",
         transform=_blend,
         ha="left", va="top", fontsize=8, color="#555555", rotation=90,
     )
 
     _apply_pub_style(
         ax_main,
-        ylabel="Énergie (MWh/jour)",
-        title=title or "Trajectoires long terme — scénarios adoption VE (moy. mensuelle)",
+        ylabel="Energy (MWh/day)",
+        title=title or "Long-term trajectories — EV adoption scenarios (monthly avg.)",
     )
     ax_main.legend(
         handles=legend_handles,
@@ -1029,7 +1029,7 @@ def plot_lt_trajectories(
     ax_zoom.axvline(sim_start, color="#888888", linewidth=1.2,
                     linestyle="--", zorder=6)
     ax_zoom.set_xlim(zoom_start, zoom_end)
-    ax_zoom.set_title(f"Zoom ±{zoom_days} j\nautour de t₀", fontsize=9)
+    ax_zoom.set_title(f"Zoom ±{zoom_days} d\naround t₀", fontsize=9)
     ax_zoom.grid(True, alpha=0.3, linestyle="--", linewidth=0.6)
     ax_zoom.tick_params(axis="x", rotation=45, labelsize=7)
     ax_zoom.tick_params(axis="y", labelsize=7)

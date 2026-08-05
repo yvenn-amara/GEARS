@@ -1,13 +1,131 @@
 # GEARS Refactor — Running State
 
-Phase 2 / Session 6 in progress (PR opened, not merged) — 2026-08-05. Session 7 (Phase 1)
-completed the final gate before merging the original refactor to `main`; full Phase 1 detail
-is in the Session 7 section below.
+Phase 2 / Session 7 in progress (PR opened, not merged) — 2026-08-05. Session 6 merged as
+PR #11. Session 7 (Phase 1) completed the final gate before merging the original refactor to
+`main`; full Phase 1 detail is in the "Session 7" (no "Phase 2 /" prefix) section further
+below — not to be confused with this Phase 2 / Session 7.
 
 Phase 2 (point-zero renames, GEAR levels, VAE registry, notebook overhaul, translation, CI/health,
 persistence investigation) started 2026-08-02. Phase 2 sessions are numbered from 1 again — see
 the "Phase 2 / Session N" headings below, kept separate from the Phase 1 "Session N" headings
 above them in the file.
+
+---
+
+## Phase 2 / Session 7 — Notebook 3 Overhaul + Translation (2026-08-05)
+
+Scope: translate every piece of French prose in `notebooks/3_gmm_scenarios.ipynb` into English
+(title, section headers, markdown, code comments, print messages), re-verify the two Session 6
+plotting fixes (fan-chart noise scale, 10x trajectory clip) are still intact, re-run the notebook
+via `nbconvert`, and open a PR — matching the Phase 2 plan's Session 7 scope exactly.
+
+### Verified before touching anything
+- Fresh clone: `main` at `a61d10f` (PR #11 merged — Phase 2 / Session 6's notebooks 1 & 2
+  overhaul). No open PRs (`GET /repos/.../pulls?state=open` → 0), so branched straight from
+  `main` rather than a stale prior-session branch.
+- Baseline `ruff check gears/ tests/`: 0 errors. Baseline `pytest tests/ -q` (with the user's
+  real `sample_df.pkl`/`preprocessed_data/*.csv` unzipped into `data/`): **313 passed, 10
+  skipped, 0 failed** — same skip pattern as Session 6 (11 CSV-load tests skip if `data/`
+  isn't populated; it was).
+- `notebooks/3_gmm_scenarios.ipynb` (22 cells) was still substantially French, exactly as the
+  plan described: title, both "Bilan" headers, most markdown prose, and French comments/print
+  strings across the majority of code cells.
+
+### What was done
+- **Environment**: this sandbox had no `torch`, and the plain-PyPI wheel pulls the full CUDA
+  dependency stack (no `download.pytorch.org` CPU index reachable from this network
+  allowlist — same constraint Session 3 hit). First attempt ran the sandbox out of disk mid-
+  install; recovered by purging the pip cache, keeping the already-downloaded `nvidia-*` CUDA
+  libs (2.7 GB, already satisfied), and re-running `pip install torch` so it only needed to
+  fetch the `torch` wheel itself. `torch==2.13.0+cu130` imports and runs fine on CPU
+  (`cuda.is_available() == False`, irrelevant for this notebook's use).
+- **Translated notebook 3 in full** — title, both "Bilan" sections (now "Summary" /
+  "Summary (GMM vs VAE complement)"), Section C's intro markdown, all code comments and
+  `print()` strings, via targeted substring replacement (not a full cell rewrite) to keep the
+  surrounding code byte-identical and lower the risk of a transcription slip. Kept
+  `département`/INSEE codes as data values and in the one place they're a real column-name
+  dependency (see next bullet) — not translated as prose, per the plan's own carve-out.
+- **Real bug found and worked around, not silently papered over**: translating the notebook's
+  local `metrics_df` dict key from `"Département"` to `"Department"` broke
+  `gears/plotting.py`'s `plot_mt_fan_charts()`, which hardcodes `metrics_df["Département"]`
+  internally (`KeyError` on first re-run). Reverted that one dict key to match the existing,
+  documented API contract rather than editing the function's contract mid-translation-session;
+  the mismatch is a real, separate finding (see "Explicitly not done" below).
+- **Bigger finding, fixed in-scope**: the notebook's own rendered plots (Section A's fan
+  charts, Section B's trajectories figure) were *still fully French* after the notebook-source
+  translation, because `plot_mt_fan_charts()` and `plot_lt_trajectories()` in
+  `gears/plotting.py` hardcode their axis labels/legends/titles in French ("Données
+  observées", "Enveloppe 80 % (P10–P90)", "Prévision médiane", "Énergie (kWh/jour)",
+  "Aujourd'hui", "Zoom ±N j\nautour de t₀"). Confirmed via `grep` that **notebook 3 is the
+  only notebook that calls either function** and that **no test asserts on these label
+  strings**, so translating them is a pure display-string change with zero blast radius
+  outside this notebook — did it, rather than leaving the notebook's acceptance criterion
+  ("zero French-language prose remains anywhere in the notebook") technically unmet by its own
+  rendered output. `département`/`Département` kept as-is in chart titles and the
+  `metrics_df` column key (domain vocabulary, matches the plan's carve-out and the existing
+  API contract above).
+- Re-ran `notebooks/3_gmm_scenarios.ipynb` via `nbconvert --execute --inplace` three times
+  (after the initial translation, after the `Département`-key revert, after the plotting.py
+  label fixes) — final run: **0 errors, 140s** (well under the 5-minute budget, and faster
+  than Session 6's reported 107s baseline was for the pre-translation version, likely just
+  run-to-run variance).
+- **Visually confirmed** (not just "code ran") both flagged plots by extracting the embedded
+  PNGs from the executed notebook:
+  - Fan chart (Section A): 80% band is clearly visible on all 3 departments (measured mean
+    width printed as 170.3% of the median this run — real historical volatility on this
+    3-department/45-day slice, not a fixed number, but unambiguously not a hairline) — the
+    Session 6 noise-scale fix is intact.
+  - Long-term trajectories (Section B): central and ambitious scenarios visibly keep growing
+    all the way to the 2040 right edge, no flattening — the Session 6 10x-anchor clip removal
+    is intact.
+- Section C's VAE-bundle status: `vae.metadata_.get("synthetic_fallback")` is falsy in this
+  environment (matches Session 6's finding — the real 469MB `vae_french_sample.joblib` is
+  live), so the notebook's own conditional print does **not** emit the synthetic-fallback
+  caveat — confirms the real bundle is what Section C's numbers reflect, satisfying the
+  acceptance criterion via the notebook's existing conditional (unchanged this session).
+
+### A real finding, not chased further (out of scope for a translation session)
+Section C.1's full-bundle "plug-and-charge" reconstruction shows an implausible GMM-vs-VAE gap:
+GMM peak 50 kW / mean 17 kW vs. VAE peak 1 kW / mean 0 kW on the same national reconstruction.
+Sanity-checked whether this is a sampling bug: drew 10 raw sessions directly from a matched
+GMM/VAE context pair (`.sample()`, bypassing `OutputAggregator` entirely) — both returned
+plausible, comparable duration/energy distributions (VAE mean energy ≈ 208 kWh vs. GMM ≈ 120
+kWh for that context; same order of magnitude, VAE not degenerate). So the per-session VAE
+model itself looks fine; the bug, if any, is somewhere in how `OutputAggregator.
+build_load_profiles()` aggregates across the VAE's 516-context bundle into an annual hourly
+series — plausibly the same class of issue as the already-documented `n_sessions_per_day_`
+undercount bug on the VAE path (see earlier VAE sessions' notes), resurfacing here in a
+different code path. Not investigated further or fixed — debugging `OutputAggregator`'s VAE
+aggregation path is a different-shaped task than this session's translation/verification scope,
+and the plan's own ground rules ask to flag rather than guess. Worth a dedicated look in a
+future session (Session 8 or a new diagnostic session) before anyone cites Section C's VAE
+power figures for real.
+
+### Tests
+`pytest tests/ -q` after all changes (translation + the two `gears/plotting.py` label fixes):
+**313 passed, 10 skipped, 0 failed** — identical to this session's own pre-change baseline, so
+the plotting-label edits introduced no regressions. `ruff check gears/ tests/`: 0 errors.
+
+### CI status — confirmed via the GitHub Actions API, not assumed from the local pass
+
+<!-- CI_STATUS_PLACEHOLDER_SESSION_7_PHASE2 -->
+
+### Explicitly not done this session (out of scope / flagged, not silently skipped)
+- `gears/plotting.py`'s `plot_mt_national_aggregate()` (a **third** function, distinct from the
+  two notebook 3 uses) has the same class of hardcoded French labels ("Données observées",
+  "SARIMA — enveloppe 80 %", "SARIMA — médiane", "NHiTS — médiane", "Énergie (MWh/jour)") — not
+  touched this session because **no notebook currently calls it**, so it was out of this
+  session's verifiable blast radius. Worth batching into whichever session next touches
+  `plotting.py`, so the whole module is consistent rather than 2/3 of its public plotting
+  functions being English and one still French.
+- The `metrics_df["Département"]`/`gears/plotting.py` naming mismatch flagged above — not
+  resolved, just avoided by keeping the notebook's key in sync with the existing function
+  contract. Whether `plot_mt_fan_charts()` should itself be renamed to accept `"Department"`
+  (and whether that's a point-0/Session-1-style public-API change needing its own
+  deprecation-policy answer) is Yvenn's call, not something to guess at mid-translation-pass.
+- Section C.1's GMM-vs-VAE power gap (see finding above) — flagged, not debugged.
+- No other notebook, README, or non-notebook-3 file touched this session — Session 8 (notebooks
+  4/5 + `compare_external.ipynb` + final translation sweep) still owns those.
 
 ---
 
