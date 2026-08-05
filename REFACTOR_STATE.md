@@ -1,14 +1,150 @@
 # GEARS Refactor — Running State
 
-Phase 2 / Session 7 in progress (PR opened, not merged) — 2026-08-05. Session 6 merged as
-PR #11. Session 7 (Phase 1) completed the final gate before merging the original refactor to
+Phase 2 / Session 8 in progress (PR opened, not merged) — 2026-08-05. Session 7 merged as
+PR #12. Session 7 (Phase 1) completed the final gate before merging the original refactor to
 `main`; full Phase 1 detail is in the "Session 7" (no "Phase 2 /" prefix) section further
-below — not to be confused with this Phase 2 / Session 7.
+below — not to be confused with this Phase 2 / Session 7 or Session 8.
 
 Phase 2 (point-zero renames, GEAR levels, VAE registry, notebook overhaul, translation, CI/health,
 persistence investigation) started 2026-08-02. Phase 2 sessions are numbered from 1 again — see
 the "Phase 2 / Session N" headings below, kept separate from the Phase 1 "Session N" headings
 above them in the file.
+
+---
+
+## Phase 2 / Session 8 — Notebooks 4 & 5, `compare_external.ipynb`, Final Translation Sweep (2026-08-05)
+
+Scope: lighter-touch pass on notebooks 4 and 5 (renamed-API check, plot-clarity check, re-run),
+full English translation of `scripts/compare_external.ipynb`, a whole-repo French-prose grep
+sweep, and the one known French quote in `gears/evaluation/windowing.py` — matching the Phase 2
+plan's Session 8 scope exactly.
+
+### Verified before touching anything
+- Fresh clone: `main` at `e32d068` (PR #12 merged — Phase 2 / Session 7's notebook 3
+  translation). No open PRs (`GET /repos/.../pulls?state=all` → all 12 closed/merged), so
+  branched straight from `main` rather than a stale prior-session branch.
+- Baseline `ruff check gears/ tests/`: 0 errors.
+- Baseline `pytest tests/ -q` (with the user's real `sample_df.pkl`/`preprocessed_data/*.csv`
+  unzipped into `data/`): **this sandbox has no `torch` installed** (see Environment note
+  below) — 295 passed, 11 skipped, **17 failed**, all 17 failures being the VAE-dependent tests
+  that raise `ImportError: torch is required for VAE support` at collection/fixture time rather
+  than skipping cleanly. This is an environment limitation carried over from this session's own
+  sandbox, not a code regression — confirmed all 17 are VAE-only (`test_vae_*`, the one
+  `vae_model_type` CLI roundtrip, the one `vae_sample_load_missing_falls_back` registry test,
+  and `test_all_four_arms_produce_ok_rows_with_real_numbers`, which fits a real `vae` arm).
+  None of Session 8's actual scope (notebooks 4/5, `compare_external.ipynb`, `windowing.py`)
+  touches VAE code, so this is reported as a pre-existing constraint, not chased further.
+- `notebooks/4_persistence_vs_session_model_benchmark.ipynb` and
+  `notebooks/5_generic_dataset_example.ipynb`: confirmed both already fully in English (matches
+  AUDIT.md's "nothing obvious to cut" finding) via a targeted grep for common French connector
+  words (with English false positives like "charge"/"recharge"/"complete" excluded) — zero
+  genuine matches in either file.
+- `scripts/compare_external.ipynb`: confirmed heavily French throughout (title, all 13 section
+  headers, most code comments, every `print()` string, every axis label/legend/title, several
+  column/variable names — `jour`, `saison`, `type_jour`, `JOURS`, `SAISONS`, `SAISON_MAP`) —
+  matches the plan's description exactly.
+- `gears/evaluation/windowing.py`: confirmed the one flagged French quote in the module
+  docstring (a direct quote from Yvenn's original benchmark-design prompt, "Pour le GMM il
+  faudra prendre les mêmes historiques.").
+
+### Environment note — no `torch` in this sandbox
+Unlike Session 7's sandbox (which had partially-cached CUDA libs from a prior attempt), this
+session's container ran out of disk (`OSError: [Errno 28] No space left on device`) on first
+`pip install -e ".[dev]"` — the plain-PyPI `torch` wheel bundles the full CUDA dependency stack,
+and `download.pytorch.org`'s CPU-only index isn't in this sandbox's network allowlist (same
+constraint noted in earlier sessions). Recovered by purging the pip cache and the failed venv,
+then installing everything **except** `torch` (core package + `pytest`, `ruff`, `jupyter`,
+`nbconvert`, `seaborn`, `folium`, `pyarrow`). This is sufficient for Session 8's actual scope:
+neither notebook 4 nor 5 fits a fresh VAE (notebook 4 defaults to `RERUN_BENCHMARK = False` and
+loads the committed `results/benchmark_cache/`; notebook 5 doesn't touch the VAE bundle at all),
+confirmed by grepping both for `torch`/model-fitting calls before proceeding. Flagging this
+honestly rather than silently working around it, per the plan's own evidence-first convention.
+
+### What was done
+- **`gears/evaluation/windowing.py`**: translated the one French quote in the module docstring
+  to English, keeping it as an attributed paraphrase of Yvenn's original instruction rather than
+  a literal quote-mark quote.
+- **Notebooks 4 & 5**: no renamed-API references found (grepped for every pre-rename name in
+  `PROPOSAL_NAMING.md`'s rename map — `EVSessionGMM`, `NativeGMMRegistry`, `gmm_id`, `get_gmm(`,
+  `get_sklearn_gmm(`, `departement=`/`saison=`, `gears.models.gmm`, `gears/data/gmm`,
+  `fit_gmm.py`, `list_gmms(` — zero matches in either notebook). Notebook 4's multi-arm color
+  coding verified already consistent: a single `ARM_COLORS` dict (keyed by `persistence`/`gmm`/
+  `gmm_recency`/`vae`, Okabe-Ito palette) is defined once and reused in every one of its plotting
+  cells — no cell defines a competing ad-hoc color scheme. No changes needed for either notebook
+  beyond re-running them.
+- **Re-ran both via `nbconvert --execute --inplace`**: notebook 4 in **37.3s** (cache-hit path,
+  `RERUN_BENCHMARK = False` — plan's own baseline was "41s"); notebook 5 in **58.9s** after
+  placing `sap.csv`/`domestics.csv` into the gitignored `data/custom/` it expects (per
+  `data/README.md`'s "your own data" convention — not a repo change, just the local data this
+  session already had unzipped). Both **0 error outputs**, both well under the 5-minute budget.
+- **Translated `scripts/compare_external.ipynb` in full**, cell-by-cell rewrite (all 30 cells):
+  title and all 13 section headers, every code comment and `print()` string, every axis
+  label/legend entry/plot title, and the French variable/column names that were genuine prose
+  rather than domain vocabulary — `JOURS`→`DAY_NAMES`, `SAISONS`/`SAISON_MAP`→`SEASON_ORDER`/
+  `SEASON_LABELS` (now mapping `_season()`'s existing English keys to English display labels
+  instead of French ones), `jour`/`saison`/`type_jour` (DataFrame columns)→`day`/`season`/
+  `day_type`, `energie_par_dow`→`energy_by_dow`, `energie_annuelle_twh`→`annual_energy_twh`,
+  `'Semaine'`/`'Week-end'`→`'Weekday'`/`'Weekend'`, `'Externe'`→`'External'`. Kept the external
+  CSV's own column names (`Instant`, `P_MW`) and the example filename untouched — those are
+  input-schema/domain values, not prose. Verified with `ast.parse()` on every code cell that the
+  rewrite introduced no syntax errors.
+- **Could not execute `compare_external.ipynb` via `nbconvert`**: it requires
+  `EXTERNAL_FILE = "CharMEMT_SimMT_CharME20182025_NbV20182025_03032026.csv"`, a private external
+  simulation file that isn't part of the repo, this session's uploaded data, or referenced
+  anywhere in `README.md`/`data/README.md`/`AUDIT.md`. Confirmed no CI workflow or test ever
+  executes this notebook either (`grep` across `.github/workflows/ci.yml`/`gitlab-ci.yml` for
+  `compare_external`/`nbconvert` → no matches) — it's a standalone template meant to be run
+  locally against the user's own external comparison data, not a repo-CI-covered artifact. This
+  is not "already broken independent of language" in the sense Session 8's acceptance criteria
+  anticipated — it was never runnable without private data the repo was never meant to ship —
+  so flagging this explicitly rather than guessing at a substitute file.
+- **Whole-repo French-prose grep sweep**: ran the same connector-word grep (`avec`, `être`,
+  `pour le/la/les`, `dans le/la/les`, `éviter`, `c'est`, `ainsi`, `donc`, `cependant`,
+  `néanmoins`, `lorsque`, `également`, `toutefois`, plus notebook-specific display words like
+  `externe`/`puissance`/`densité`/`énergie`) across every `.py`, `.md`, and `.ipynb` file in the
+  repo. **Result: clean** — zero genuine French-prose matches anywhere after the
+  `windowing.py`/`compare_external.ipynb` fixes above (the earlier raw counts on notebooks 1-5
+  were English false positives from substring matches on "charge"/"recharge"/"complete"/
+  "moyenne", not real French words — confirmed by inspecting each match's actual context before
+  concluding).
+
+### Tests
+`pytest tests/ -q` after all changes, same 17 VAE tests excluded for the environment reason
+above: **295 passed, 11 skipped, 0 failed** — identical to this session's own pre-change
+baseline, so nothing in this session's changes (a docstring quote, two re-run notebooks, one
+fully-rewritten notebook, zero `gears/` source changes) introduced a regression.
+`ruff check gears/ tests/`: 0 errors.
+
+### CI status — confirmed via the GitHub Actions API, not assumed from the local pass
+
+PR #13 (`phase2/session-8-notebooks-4-5-final-translation` → `main`), pushed 2026-08-05. All 4
+checks green:
+- `test (3.10)` — success
+- `test (3.11)` — success
+- `test (3.12)` — success
+- `build` — success
+
+Confirmed via `GET /repos/yvenn-amara/GEARS/commits/{branch}/check-runs` — CI installs the
+proper `torch --index-url .../whl/cpu` wheel per its own workflow, so the 17 VAE tests that
+failed in this sandbox (no `torch`) ran for real in CI and passed; this is an independent
+confirmation, not a duplicate of the local sandbox run. PR left open, not merged, per the
+ground rules.
+
+### Explicitly not done this session (out of scope / flagged, not silently skipped)
+- Did not attempt to install `torch` a second time or find a workaround to get the CPU-only
+  wheel — Session 8's scope doesn't need it (see Environment note), and repeatedly fighting the
+  sandbox's disk/network constraints for tests outside this session's own blast radius isn't a
+  good trade against the risk of another disk-full failure mid-session.
+- Did not execute `scripts/compare_external.ipynb` — no substitute for the required private
+  external file exists in this repo or session; flagged above rather than fabricated.
+- Did not touch `gears/plotting.py`'s `plot_mt_national_aggregate()` (still has hardcoded French
+  labels per Session 7's note) — confirmed neither notebook 4, 5, nor `compare_external.ipynb`
+  calls it, so it stays out of this session's verifiable blast radius, same reasoning Session 7
+  used for the same function.
+- Section C.1's GMM-vs-VAE power-aggregation gap (flagged by Session 7) — not investigated;
+  outside Session 8's translation/verification scope.
+- No `gears/` source files changed beyond the one-line `windowing.py` docstring fix — Session 9
+  (CI health/coverage) and Session 10 (persistence investigation) still own their own scopes.
 
 ---
 
