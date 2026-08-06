@@ -1,4 +1,7 @@
-"""Tests for smart charging optimizer — including Section 7 regression tests."""
+"""Tests for smart charging optimizer — including Section 7 regression tests
+and the R3 compute_regret() scalar-value regression guards (relocated here
+from tests/test_regression.py per AUDIT.md §g; see test_compute_regret_basic
+for the bug this guards against)."""
 import pytest
 
 from gears.data.loader import make_demo_data
@@ -98,17 +101,29 @@ def test_invalid_signal_type():
 # ── Regret analysis ───────────────────────────────────────────────────────────
 
 def test_compute_regret_basic():
+    """R3: compute_regret()'s dict values must all be Python float scalars.
+    The old bug used double-bracket indexing (oracle_opt[["cost_smart"]],
+    a one-column DataFrame) instead of oracle_opt["cost_smart"] (a Series);
+    .sum() on the former returns a Series, not a scalar, so downstream
+    arithmetic raised KeyError: 0."""
     oracle = make_sessions(20, seed=0)
     predicted = make_sessions(20, seed=1)
     signal = make_signal()
     opt = SmartChargingOptimizer(signal_type="price")
     regret = opt.compute_regret(oracle, predicted, signal)
-    for key in ["cost_oracle_smart", "cost_predicted_smart",
-                "cost_predicted_plug", "value_of_smart_charging"]:
-        assert key in regret
+    expected_keys = {
+        "cost_oracle_smart", "cost_predicted_smart", "cost_predicted_plug",
+        "regret_smart_vs_oracle", "regret_plug_vs_oracle", "value_of_smart_charging",
+    }
+    assert expected_keys <= set(regret.keys())
+    for key in expected_keys:
+        assert isinstance(regret[key], float), (
+            f"compute_regret['{key}'] is {type(regret[key]).__name__} — R3 regressed."
+        )
 
 
 def test_compute_regret_with_persistence():
+    """R3: same scalar check, for the extra persistence_sessions branch."""
     oracle = make_sessions(20, seed=0)
     predicted = make_sessions(20, seed=1)
     persistence = make_sessions(20, seed=2)
@@ -116,18 +131,31 @@ def test_compute_regret_with_persistence():
     opt = SmartChargingOptimizer(signal_type="price")
     regret = opt.compute_regret(oracle, predicted, signal,
                                 persistence_sessions=persistence)
-    assert "cost_persistence_smart" in regret
-    assert "value_of_forecast_vs_persistence" in regret
+    for key in ("cost_persistence_smart", "value_of_forecast_vs_persistence"):
+        assert key in regret
+        assert isinstance(regret[key], float)
+
+
+def test_compute_regret_same_sessions_zero_regret():
+    """R3: when oracle == predicted, regret must be ~0 as a scalar float,
+    not an empty/misshapen array from the double-bracket bug."""
+    sessions = make_sessions(25, seed=5)
+    signal = make_signal()
+    opt = SmartChargingOptimizer(signal_type="price")
+    regret = opt.compute_regret(sessions, sessions, signal)
+    assert isinstance(regret["regret_smart_vs_oracle"], float)
+    assert abs(regret["regret_smart_vs_oracle"]) < 1e-3
 
 
 def test_v1g_ordering():
-    """Oracle ≤ GEARS+V1G ≤ GEARS+Plug must hold."""
+    """Oracle <= GEARS+V1G <= GEARS+Plug must hold (R3: also confirms the
+    arithmetic doesn't raise on the fixed scalar values)."""
     oracle = make_sessions(40, seed=0)
     predicted = make_sessions(40, seed=1)
     signal = make_signal()
     opt = SmartChargingOptimizer(signal_type="price")
     regret = opt.compute_regret(oracle, predicted, signal)
-    assert regret["value_of_smart_charging"] >= -1e-3   # smart ≤ plug
+    assert regret["value_of_smart_charging"] >= -1e-3   # smart <= plug
 
 
 def test_savings_nonnegative():
