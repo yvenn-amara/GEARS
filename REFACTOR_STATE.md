@@ -177,7 +177,18 @@ Session 9 regression — CI's own coverage run, with real `torch`, will read hig
 
 ### CI status — confirmed via the GitHub Actions API, not assumed from the local pass
 
-<!-- CI_STATUS_PLACEHOLDER_SESSION_9 -->
+PR #14 (`phase2/session-9-ci-health-coverage` -> `main`), pushed 2026-08-06. All 4 checks green:
+- `test (3.10)` — success
+- `test (3.11)` — success
+- `test (3.12)` — success
+- `build` — success
+
+Confirmed via `GET /repos/yvenn-amara/GEARS/commits/{branch}/check-runs`. CI installs the real
+`torch --index-url .../whl/cpu` wheel per its own workflow, so the 17 tests that failed on
+`ImportError` in this sandbox ran for real against the actual VAE code path in CI and passed —
+independent confirmation that this session's changes introduced no regression there either,
+not just in the paths this sandbox could exercise directly. PR left open, not merged, per the
+ground rules.
 
 ### Explicitly not done this session (out of scope / flagged, not silently skipped)
 
