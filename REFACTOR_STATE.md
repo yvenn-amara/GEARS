@@ -1,14 +1,213 @@
 # GEARS Refactor — Running State
 
-Phase 2 / Session 8 in progress (PR opened, not merged) — 2026-08-05. Session 7 merged as
-PR #12. Session 7 (Phase 1) completed the final gate before merging the original refactor to
+Phase 2 / Session 9 in progress (PR opened, not merged) — 2026-08-06. Session 8 merged as
+PR #13. Session 7 (Phase 1) completed the final gate before merging the original refactor to
 `main`; full Phase 1 detail is in the "Session 7" (no "Phase 2 /" prefix) section further
-below — not to be confused with this Phase 2 / Session 7 or Session 8.
+below — not to be confused with this Phase 2 / Session 7, Session 8, or Session 9.
 
 Phase 2 (point-zero renames, GEAR levels, VAE registry, notebook overhaul, translation, CI/health,
 persistence investigation) started 2026-08-02. Phase 2 sessions are numbered from 1 again — see
 the "Phase 2 / Session N" headings below, kept separate from the Phase 1 "Session N" headings
 above them in the file.
+
+---
+
+## Phase 2 / Session 9 — CI Health, Coverage, and Remaining Small Gaps (2026-08-06)
+
+Scope: `tests/test_cli.py`/`tests/test_fit_session_model_script.py` coverage gaps, raising
+`gears/output/aggregator.py` and `gears/plotting.py` coverage, restructuring
+`tests/test_regression.py` per AUDIT.md §g, and confirming Session 3's gear=2-5 fit/CLI
+coverage — matching the Phase 2 plan's Session 9 scope, adjusted for what sessions 1-8 had
+already done by the time this session started (see "Re-verification" below).
+
+### Re-verification before touching anything (the plan document was stale)
+
+Fresh clone: `main` at `4878c0b` (PR #13 merged — Phase 2 / Session 8). No open PRs. Per this
+session's own ground rules ("re-verify state for itself rather than trusting the plan
+blindly"), checked the plan's claimed gaps against the actual repo **before** starting, and
+found the plan document (written before sessions 1-8 ran) was outdated in two ways that
+changed this session's actual scope:
+
+- `tests/test_cli.py` and `tests/test_fit_session_model_script.py` **already existed** — the
+  plan's item 1/2 ("no test imports scripts/ at all", "no test_cli.py exists") was already
+  false. `test_cli.py` already covered `fit`/`medium-term`/`--gear`/`--model-type`/`--recency`;
+  it did **not** cover `simulate`, `smart-charge`, or `list-models` — that's the real remaining
+  gap, and this session's actual item 2.
+- `scripts/fit_gmm.py` has been renamed `scripts/fit_session_model.py` (Session 2) and already
+  has a dedicated test file; the other three `scripts/*.py` files
+  (`prepare_hf_bundles.py`, `validate_recency_bias.py`, `validate_vae_competitiveness.py`) had
+  **no** smoke test at all — that's the real remaining item 1.
+- Confirmed via `grep` that Session 3's gear=2-5 coverage is **not** a gap: it's already
+  covered by `tests/test_pipeline.py::test_unimplemented_gears_raise_not_implemented_error`
+  (parametrized over `gear=[2,3,4,5]`) and `tests/test_cli.py`'s `--gear` flag test. Nothing to
+  add here — confirmed, not assumed.
+
+### Baseline (before any change)
+
+`ruff check gears/ tests/`: 0 errors.
+
+`pytest tests/ -q` (with the user's real `sample_df.pkl`/`preprocessed_data/*.csv` placed in
+`data/`, per `data/README.md`): **295 passed, 11 skipped, 17 failed** — every one of the 17
+failures a `torch`-ImportError from the VAE path (same 17 test names, same root cause Session 8
+already documented: `test_vae_*`, the `vae_model_type` CLI roundtrip, the
+`vae_sample_load_missing_falls_back` registry test, `test_plot_marginals_uses_model_type_...`,
+and the 4-arm benchmark's VAE arm). This sandbox instance independently reproduced **exactly**
+Session 8's own recorded baseline (295/11/17) byte-for-byte on the pass/skip/fail counts — a
+useful cross-session consistency check, not just an assertion.
+
+### Environment: `torch` could not be installed in this sandbox
+
+Tried three approaches, in order, before accepting the constraint:
+1. `pip install torch --index-url https://download.pytorch.org/whl/cpu` — `download.pytorch.org`
+   is not on this sandbox's network allowlist (same finding Session 2/3 already recorded).
+2. `pip install torch` (plain PyPI) — pulls ~5+ GB of bundled `nvidia-*` CUDA runtime packages;
+   exceeded the sandbox's disk quota mid-install (confirmed via `df -h`), had to clean up and
+   abort.
+3. `pip download torch --no-deps` then `pip install --no-deps <wheel>` (the workaround Session
+   2's own notes suggested) — the wheel installs (526 MB, fits), but this specific PyPI build
+   (`torch==2.13.0`) requires the CUDA runtime shared libraries **even for `import torch`
+   itself** (confirmed: `import torch` raised a missing-`.so` error), unlike some older torch
+   releases where CPU-only usage doesn't touch the CUDA libs at import time. Uninstalled and
+   cleaned up.
+
+Net effect: identical to Session 8's environment — the 17 VAE-path tests fail here on
+`ImportError` rather than skip cleanly, which is a sandbox limitation (CI installs the correct
+CPU wheel per its own workflow and this has been independently confirmed green there every
+prior session). Every coverage/test number below excludes these 17 by name-diff against the
+baseline, not by assumption.
+
+### What was done
+
+**1. `scripts/` smoke tests** (new file `tests/test_scripts_smoke.py`): parametrized `--help`
+subprocess test over every file in `scripts/*.py` (stronger than a bare `import` — exercises
+the full module body including argparse construction, without needing real data or network).
+Confirmed none of the three previously-untested scripts import `torch` at module level (all
+lazy-load it inside functions, same pattern as `gears/models/vae.py`), so `--help` works
+standalone in this sandbox. 8 tests, all passing.
+
+**2. `tests/test_cli.py`**: added end-to-end tests for `simulate` (default forecaster path,
+`--n-sessions` fixed-count path, and the `_load_model` "provide --model or --pretrained" error
+path), `smart-charge` (fits a model, runs a real `SmartChargingOptimizer.optimise()` via the
+CLI on sessions aligned with a `make_price_signal` day/night signal, checks the expected output
+columns), and `list-models` (checks the local, non-network `ModelRegistry` catalogue prints).
+`gears/cli.py` coverage: 78% -> 98% (the 2 remaining lines are the `if __name__ == "__main__"`
+guard and one `_load_model` branch already exercised only via direct Python call, not CLI).
+
+**3. `gears/output/aggregator.py` coverage: 26% -> 86%.** This function had essentially zero
+direct coverage before (only reached indirectly via other tests). Added: unit tests for the
+four previously-fully-untested private helpers (`_overlap_profile_24h` — including an explicit
+midnight-wraparound energy-conservation check and a 47h-duration multi-day-overflow check;
+`_draw_power_levels`; `_reconstruct_smart_profile_hourly`; `_build_smart_ts`, including its
+baseline-fallback branch when a `(dow, season)` key is absent from `smart_profiles_mw`), plus a
+`build_load_profiles()` integration suite (new `fitted_gmm_for_load_profiles` fixture, fit with
+`location_type` in `stratify_by` so all three `charging_mode` branches are reachable) covering
+all four `ValueError` branches, all three charging modes (`mean_power`/`fixed_power`/
+`by_location`), leap-year-length verification, and one end-to-end smart-charging-signal test
+(confirmed fast — the optimizer is a greedy scheduler, not an LP solve, so this runs in ~1s).
+Remaining gap (694-695, 904-962): a low-volume-context skip branch and part of the deeper
+smart-charging reconstruction path — judged not worth the additional fixture complexity for
+the coverage gained; flagged rather than silently left implicit.
+
+**4. `gears/plotting.py` coverage: 34% -> 97%.** Before this session, only
+`plot_lt_trajectories` had any test coverage; the other 9 top-level functions
+(`plot_arrival_distribution`, `plot_session_heatmap`, `plot_energy_distribution`,
+`plot_daily_energy`, `plot_gmm_means`, `plot_regret_comparison`, `plot_forecast_vs_actual`,
+`plot_mt_fan_charts`, `plot_mt_national_aggregate`) had none. Added real tests for all of them
+(happy paths, key branch conditions like `ci=True`/`group_by`/missing-column fallbacks, and the
+`nhits_forecast`-without-`nhits_mean_kwh` `ValueError` guard), plus an autouse
+`plt.close("all")` fixture so the suite doesn't trip matplotlib's open-figure-count warning.
+
+**5. Found and fixed: `plot_mt_national_aggregate()` still had 6 hardcoded French plot labels**
+("Données observées", "SARIMA — enveloppe 80 % (P10-P90)", "SARIMA — médiane", "NHiTS —
+médiane (prévision centrale)", "Énergie (MWh/jour)", "Agrégat national — prévision moyen
+terme"). This is the exact function Session 7 first flagged and Session 8 explicitly listed as
+"not touched... stays out of this session's verifiable blast radius" (neither notebook 4, 5,
+nor `compare_external.ipynb` calls it, so Session 8's translation-verification scope never
+reached it). Found here purely as a byproduct of writing this function's coverage test — fixed
+inline (English labels, same meaning, no other logic touched) since it's a one-function,
+mechanical, same-pattern fix Session 7 already made once elsewhere in this exact file, and
+added a regression test (`TestPlotMtNationalAggregate::test_basic_aggregate`) that asserts none
+of the six French strings appear in the rendered legend/axis text, so this doesn't silently
+regress a third time. Confirmed via `grep` that no other French prose remains in `gears/*.py`
+outside notebooks (Session 8's scope already covered those).
+
+**6. Restructured `tests/test_regression.py` per AUDIT.md §g.** The 28 R1-R4 bug-guard tests
+were moved into the subject files they structurally overlapped with, keeping the "R<n>" label
+and bug-guard docstring at each test's new location rather than a comment-free relocation:
+- R1 (`PersistenceForecaster` zero-day-drop) and R2 (`sessions_to_daily_counts` 1970-epoch
+  date bug) -> `tests/test_forecaster.py`, next to the existing `PersistenceForecaster`/
+  `sessions_to_daily_counts` tests.
+- R4 (`NHiTSForecaster` `input_size`/`scaler_type` defaults) -> `tests/test_forecaster.py`,
+  next to the existing `TransformerForecaster` tests. This was a real gap fill, not just
+  dedup: `test_forecaster.py` tested `TransformerForecaster` but had **zero** coverage of the
+  separate `NHiTSForecaster` class before this move.
+- R3 (`compute_regret()` double-bracket/DataFrame-vs-Series bug) -> merged into
+  `tests/test_smart_charging.py`'s existing `test_compute_regret_basic`/
+  `test_compute_regret_with_persistence`/`test_v1g_ordering`, which were confirmed (per
+  AUDIT.md's own finding) to be strictly weaker duplicates of `test_regression.py`'s versions
+  (key-presence-only vs. key-presence-and-scalar-float-type); replaced the weaker assertions
+  with the stronger R3 ones rather than keeping both, and kept
+  `test_regret_same_sessions_zero_regret` (genuinely new, no prior duplicate).
+- One test from the original R1 set (`test_predict_uses_carry_forward_not_mean_when_gap`) was
+  **not** carried over — on inspection it was a fixture-sanity check (confirming
+  `mean_daily_` is pulled down by the gap) rather than a direct guard on the zero-drop bug
+  itself, which the other three relocated R1 tests already cover directly. Flagged here rather
+  than silently dropped.
+- `tests/test_regression.py` deleted after migration (`git rm`), per AUDIT.md §g's
+  recommendation against "maintaining a fully parallel file with duplicated fixtures."
+
+### Tests (after all changes)
+
+`pytest tests/ -q`: **350 passed, 9 skipped, 17 failed** — same 17 test names as the baseline
+(diffed explicitly, not just counted), all still the pre-existing torch-ImportError class, zero
+new failures. Net +55 passing tests despite removing all 28 from `tests/test_regression.py`
+(i.e. this session added more than it removed, once the R1-R4 relocations are counted as
+"moved, not lost"). The 2 fewer skips vs. baseline (11 -> 9) come from the R4 relocation no
+longer double-counting `TransformerForecaster`'s and `NHiTSForecaster`'s skip-gated classes
+across two files.
+
+`ruff check gears/ tests/`: 0 errors (one `RUF059 unused-unpacked-variable` introduced and
+fixed during this session's own test-writing, in `tests/test_plotting.py`).
+
+Coverage (whole package, `-k "not vae"` to exclude the sandbox-only torch gap, otherwise
+unfiltered): **`gears/output/aggregator.py` 26% -> 86%**, **`gears/plotting.py` 34% -> 97%**,
+**`gears/cli.py` 78% -> 98%**. Whole-package total 74% in this sandbox run (artificially
+depressed by `gears/models/vae.py` sitting at 26% for the environment reasons above, not a
+Session 9 regression — CI's own coverage run, with real `torch`, will read higher on that file).
+
+### CI status — confirmed via the GitHub Actions API, not assumed from the local pass
+
+PR #14 (`phase2/session-9-ci-health-coverage` -> `main`), pushed 2026-08-06. All 4 checks green:
+- `test (3.10)` — success
+- `test (3.11)` — success
+- `test (3.12)` — success
+- `build` — success
+
+Confirmed via `GET /repos/yvenn-amara/GEARS/commits/{branch}/check-runs`. CI installs the real
+`torch --index-url .../whl/cpu` wheel per its own workflow, so the 17 tests that failed on
+`ImportError` in this sandbox ran for real against the actual VAE code path in CI and passed —
+independent confirmation that this session's changes introduced no regression there either,
+not just in the paths this sandbox could exercise directly. PR left open, not merged, per the
+ground rules.
+
+### Explicitly not done this session (out of scope / flagged, not silently skipped)
+
+- Did not attempt a fourth workaround to get `torch` running in this sandbox after three
+  genuine attempts (CPU-wheel index unreachable, plain-PyPI CUDA deps too large, `--no-deps`
+  wheel needs the CUDA runtime libs at import time anyway) — CI's own environment already
+  installs the correct CPU wheel and has passed on every prior session; further fighting this
+  sandbox's constraints was judged a poor trade against this session's actual scope.
+- Did not chase `gears/output/aggregator.py` lines 694-695/904-962 or any remaining
+  single-digit-percent gaps in `plotting.py` (492-493, 605-606, 669, 807, 898-899, 1013, 1045)
+  to 100% — judged the marginal fixture complexity not worth it once the "meaningfully higher"
+  bar from this session's own acceptance criteria was clearly met (86%/97%).
+- Did not investigate or touch the "why persistence-bootstrap keeps outperforming parametric
+  models" question, or the GEAR 2nd-fit interface shape, or the deprecation-policy question for
+  renamed public APIs — all explicitly other sessions' scope per the Phase 2 plan.
+- No notebook, no `gears/models/`, `gears/simulation/`, `gears/smart_charging/optimizer.py`, or
+  `gears/data/` source file was touched — this session's only `gears/` source change is the
+  6-label French-to-English fix in `gears/plotting.py`'s `plot_mt_national_aggregate()`,
+  documented above.
 
 ---
 

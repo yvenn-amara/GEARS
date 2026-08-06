@@ -760,17 +760,17 @@ def plot_mt_national_aggregate(
     ax.plot(
         hist_tail.index, hist_tail.values / 1e3,
         color=HIST_COLOR, linewidth=1.8, zorder=4,
-        label=f"Données observées ({len(avail)} dépts, MWh/jour)",
+        label=f"Observed data ({len(avail)} depts, MWh/day)",
     )
     ax.fill_between(
         pivot.index, lo / 1e3, hi / 1e3,
         alpha=0.15, color=sarima_color, linewidth=0,
-        label="SARIMA — enveloppe 80 % (P10–P90)",
+        label="SARIMA — 80% envelope (P10–P90)",
     )
     ax.plot(
         pivot.index, med / 1e3,
         color=sarima_color, linewidth=2.2, zorder=3,
-        label="SARIMA — médiane",
+        label="SARIMA — median",
     )
 
     if nhits_forecast is not None:
@@ -791,14 +791,14 @@ def plot_mt_national_aggregate(
         ax.plot(
             nhits_median.index, nhits_median.values / 1e3,
             color=nhits_color, linewidth=1.8, linestyle=":",
-            zorder=3, label="NHiTS — médiane (prévision centrale)",
+            zorder=3, label="NHiTS — median (central forecast)",
         )
 
     _apply_pub_style(
         ax,
-        ylabel="Énergie (MWh/jour)",
+        ylabel="Energy (MWh/day)",
         title=(title or
-               f"Agrégat national — prévision moyen terme ({len(avail)} départements)"),
+               f"National aggregate — medium-term forecast ({len(avail)} departments)"),
     )
     ax.legend(fontsize=9, framealpha=0.9)
     fig.tight_layout()
