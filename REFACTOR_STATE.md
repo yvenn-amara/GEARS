@@ -106,6 +106,17 @@ finding (fix, add to an ignore list, or leave since it's outside CI's scope); th
 Session 10 persistence-investigation follow-up and the "should this repo be public"
 question (carried since Phase 1) both also remain open.
 
+**CI note:** PR #16's first run failed on `test (3.11)` only (`3.10`/`3.12` both green) —
+`ruff`/`mypy` passed, only the pytest-with-coverage step failed, with no reproducible cause
+found from the check-run's annotations (the actual job log sits behind a blob-storage
+redirect this sandbox's network allowlist blocks, and Python 3.11 wasn't installable here
+to reproduce locally — no upper bounds are pinned on `numpy`/`scipy`/`scikit-learn`/etc. in
+`pyproject.toml`, so a version-specific wheel resolution is one plausible cause, not
+confirmed). Re-ran via the API's job-rerun endpoint: all three versions passed clean on the
+same commit with no code change, indicating a transient/flaky runner issue rather than a
+real 3.11-specific regression. Flagging as-is rather than asserting a root cause I couldn't
+verify.
+
 ---
 
 ## Phase 2 / Session 10 — Persistence Investigation: Does a Shared VAE Close the Gap? (2026-08-06)
