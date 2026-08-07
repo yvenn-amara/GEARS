@@ -1,14 +1,63 @@
 # GEARS Refactor — Running State
 
-Phase 2 / Session 9 in progress (PR opened, not merged) — 2026-08-06. Session 8 merged as
-PR #13. Session 7 (Phase 1) completed the final gate before merging the original refactor to
-`main`; full Phase 1 detail is in the "Session 7" (no "Phase 2 /" prefix) section further
-below — not to be confused with this Phase 2 / Session 7, Session 8, or Session 9.
+Phase 2 / Session 10 in progress (PR opened, not merged) — 2026-08-06. Session 9 merged as
+PR #14. Session 8 merged as PR #13. Session 7 (Phase 1) completed the final gate before
+merging the original refactor to `main`; full Phase 1 detail is in the "Session 7" (no
+"Phase 2 /" prefix) section further below — not to be confused with this Phase 2 /
+Session 7, Session 8, Session 9, or Session 10.
 
 Phase 2 (point-zero renames, GEAR levels, VAE registry, notebook overhaul, translation, CI/health,
 persistence investigation) started 2026-08-02. Phase 2 sessions are numbered from 1 again — see
 the "Phase 2 / Session N" headings below, kept separate from the Phase 1 "Session N" headings
 above them in the file.
+
+---
+
+## Phase 2 / Session 10 — Persistence Investigation: Does a Shared VAE Close the Gap? (2026-08-06)
+
+**Scope (from the plan doc, "persistence investigation"):** test, don't assume, the
+Phase 1 Session 3 hypothesis that the benchmark's per-cell VAE retrain (fresh tiny
+network per cell) discards the VAE's real advantage — a shared network across
+contexts — and that this, not an inherent VAE weakness, is why persistence keeps
+winning. Full write-up: `INVESTIGATION_PERSISTENCE_GAP.md`. New script:
+`scripts/validate_shared_vae_hypothesis.py` (does not touch `benchmark.py`, its
+committed results, or any model default — same precedent as Sessions 2/3's
+validation scripts).
+
+**Result, in one line: partially confirmed.** Fitting one shared VAE per rolling
+origin beats the existing per-cell VAE arm on 65.6% of cells (32 paired cells,
+4 datasets: office/sap/boulder/sample_df home-dept92) and shows a much bigger win
+on profile-NRMSE (34.4% vs. persistence, vs. 6.2% for the per-cell arm) — but it
+does not overtake persistence on the primary Wasserstein metric (18.8% win rate,
+barely above the per-cell arm's 15.6%), and it costs *more* total compute than the
+per-cell design, not less (a correction to this script's own starting assumption —
+per-fit cost scales with full-history size, and fitting fewer times doesn't win
+that back). Every number, table, and caveat is in the investigation doc; not
+duplicated here.
+
+**Also found, unrelated to this session's own result:** the plan doc's cited
+"committed 4-arm `all_results.parquet`" (persistence 69.5%, vae 13.0%, gmm 9.7%,
+gmm_recency 7.8%) does not match the file as currently committed — it holds only
+`persistence`/`gmm` (gmm win rate 9.9%, matching the plan's 9.7% for that pair).
+Flagged for Yvenn in the investigation doc; not investigated further or changed
+(out of this session's scope).
+
+**Explicitly not done this session** (per the plan's own scope + acceptance
+criteria): `benchmark.py`'s core logic, `results/benchmark/all_results.parquet`,
+and every model's shipped default hyperparameters are all unchanged. No formal
+harness integration (a 5th `vae_shared` arm in `benchmark.py` itself) — that's a
+later session's job if Yvenn wants to pursue this further, mirroring how Session
+3's ad-hoc VAE arm became Session 4's formal wiring. The shared-arm epoch/hidden-dim
+tuning suggested in the doc's "next steps" (untried: fewer epochs for the shared
+arm specifically, since it sees far more data per epoch) is proposed, not
+implemented.
+
+**For Session 11:** depends entirely on what Yvenn decides after reading
+`INVESTIGATION_PERSISTENCE_GAP.md` — a full-grid confirmatory run on `sap`
+specifically (this session's clearest signal, thinnest sample), a cost-reduction
+pass on the shared-fit config, formal harness integration, or a different
+direction entirely. Also carrying over: resolve the `all_results.parquet`
+4-arm/2-arm discrepancy noted above.
 
 ---
 
