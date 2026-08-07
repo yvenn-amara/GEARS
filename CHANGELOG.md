@@ -5,6 +5,31 @@ not necessarily when it lands on `main` (this repo uses a branch-and-PR workflow
 `REFACTOR_STATE.md` for full session-by-session detail, real measured numbers, and
 honestly-reported gaps behind every line below).
 
+## [2.0.0] — 2026-08 real bundle integration + Phase 2 close-out (Session 11)
+
+### Added
+- `notebooks/2_gmm_forecasting.ipynb` §7.3: wires `gmm_french_recency.joblib` and
+  `gmm_french_holdout.joblib` (previously unreferenced anywhere in the codebase) into a
+  worked example, loaded via `EVSessionModel.load(path)` and scored against `eval_df`
+  alongside the production `french` GMM.
+
+### Verified (no code change, confirmed by direct inspection)
+- The real, curated `vae_french_sample.joblib` (691,157 sessions, 516 contexts, departments
+  59/69/78/92/93) is live on the `models-v1` GitHub Release and used by default —
+  `NativeSessionModelRegistry` no longer falls back to the synthetic demo bundle. This
+  closes the last "known gap" carried in the `[1.1.0]` entry below.
+- Full test suite (369 passed / 8 skipped, `[dl]`-extra only / 0 failed) and all 5 notebooks
+  (96s/191s/198s/40s/41s, 0 errors) re-run end-to-end against real data.
+
+### Found, documented, not fixed this session
+- `gmm_french_recency.joblib` is not actually recency-weighted (`.recency=False`,
+  `.half_life_days=None` on the loaded object) despite its name — the local fit that
+  produced this specific file appears not to have had `--recency` passed. See
+  `REFACTOR_STATE.md`, Session 11.
+- A newer `ruff` flags a pre-existing notebook-schema issue in
+  `scripts/compare_external.ipynb`; outside CI's linted path (`gears/ tests/`), not
+  introduced this session.
+
 ## [2.0.0] — 2026-08 GEAR-level architecture (Phase 2 / Session 3)
 
 Implements the gear-dispatch design from `PROPOSAL_GEAR_ARCHITECTURE.md`.
