@@ -5,6 +5,64 @@ not necessarily when it lands on `main` (this repo uses a branch-and-PR workflow
 `REFACTOR_STATE.md` for full session-by-session detail, real measured numbers, and
 honestly-reported gaps behind every line below).
 
+## [2.0.0] — 2026-08 Phase 2 complete: GEAR architecture, naming, VAE integration, notebook overhaul, CI health
+
+Release-note-level summary of the full Phase 2 arc (11 sessions, 2026-08-02 → 2026-08-07).
+Per-session detail with real measured numbers is in the dated sub-entries below and in
+`REFACTOR_STATE.md`; this section is the rollup a new user or reviewer should read first.
+
+### Architecture and naming
+- `GEARSModel(gear=1..5)`: explicit gear-dispatch facade over a new `Gear1Backend`, with
+  GEAR 2nd–5th reserved (raise `NotImplementedError` by name, not silently wrong). See the
+  `[2.0.0] GEAR-level architecture` entry below for the full rename list.
+- Clean-break naming pass across the public API (`EVSessionGMM`→`EVSessionModel`,
+  `NativeGMMRegistry`→`NativeSessionModelRegistry`, `get_gmm()`→`get_session_model()` — the
+  latter also fixed a real bug where the old function silently ignored all four of its
+  arguments). Full list in the `[2.0.0] naming consistency pass` entry below.
+
+### Model integration
+- The real, curated VAE bundle (`vae_french_sample.joblib`, 691,157 sessions, 516 contexts,
+  departments 59/69/78/92/93) is confirmed live on the `models-v1` GitHub Release and used
+  by default — closes the `[1.1.0]` release's last known gap (previously a synthetic
+  fallback with no département dimension).
+- Recency-weighted and holdout-variant GMM fitting scripts (`--recency`, `--half-life-days`,
+  `--exclude-last-n-days`) wired into a worked notebook example. One caveat carried
+  forward, not silently hidden: the specific `gmm_french_recency.joblib` artifact currently
+  on the release doesn't actually have recency weighting applied (see Session 11 below) —
+  the recency *feature* itself is implemented and tested, but this one fitted artifact
+  needs re-running.
+- Recency weighting, once validated on real data, did not reduce the targeted energy bias
+  in the tested history window — implemented, tested, and available, not defaulted on.
+- 4-arm benchmark (persistence / GMM / recency-GMM / VAE): persistence remains the
+  strongest arm on the primary Wasserstein metric; a follow-up investigation into whether a
+  shared (not per-cell) VAE closes the gap found a partial result — real wins on
+  profile-NRMSE, not on the primary metric, and at higher compute cost, not lower. Full
+  numbers in `INVESTIGATION_PERSISTENCE_GAP.md`.
+
+### Notebooks and documentation
+- All 5 notebooks rebuilt or overhauled to run end-to-end in well under 5 minutes each
+  against real data, with consistent GMM/VAE color-coding, department-matched comparisons
+  where population scale matters, and neutral (non-comparative) language.
+- Full French-to-English translation pass across notebooks and the workshop-adjacent
+  scripts.
+- README rewritten against the actual current package, every snippet executed before being
+  written down, with a new "GEAR levels" section.
+
+### CI and quality
+- `ruff check gears/ tests/`: 0 errors (from 274 at the pre-refactor baseline).
+- Test suite: 377 collected, 369 passing, 8 skipped (optional `[dl]` extra only) against
+  real data and the real release-fetched model bundles. Coverage materially improved on
+  previously weak modules (`cli.py`, `aggregator.py`, `plotting.py`).
+
+### Known, deliberately-not-resolved-here
+- The persistence-vs-model-family investigation above is informative, not conclusive;
+  formal harness integration of a shared-VAE arm is a future session's call.
+- `gmm_french_recency.joblib` needs re-fitting with `--recency` actually passed to be a
+  correct illustration of the feature it's named for.
+- Whether this repo should be public remains an open decision, carried since Phase 1.
+
+---
+
 ## [2.0.0] — 2026-08 real bundle integration + Phase 2 close-out (Session 11)
 
 ### Added
