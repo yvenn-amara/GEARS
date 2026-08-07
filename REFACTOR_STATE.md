@@ -1,15 +1,121 @@
 # GEARS Refactor — Running State
 
-Phase 2 / Session 10 in progress (PR opened, not merged) — 2026-08-06. Session 9 merged as
-PR #14. Session 8 merged as PR #13. Session 7 (Phase 1) completed the final gate before
-merging the original refactor to `main`; full Phase 1 detail is in the "Session 7" (no
-"Phase 2 /" prefix) section further below — not to be confused with this Phase 2 /
-Session 7, Session 8, Session 9, or Session 10.
+Phase 2 / Session 11 in progress (PR opened, not merged) — 2026-08-07. Session 10 merged as
+PR #15. Session 9 merged as PR #14. Session 8 merged as PR #13. Session 7 (Phase 1) completed
+the final gate before merging the original refactor to `main`; full Phase 1 detail is in the
+"Session 7" (no "Phase 2 /" prefix) section further below — not to be confused with this
+Phase 2 / Session 7, Session 8, Session 9, Session 10, or Session 11.
 
 Phase 2 (point-zero renames, GEAR levels, VAE registry, notebook overhaul, translation, CI/health,
 persistence investigation) started 2026-08-02. Phase 2 sessions are numbered from 1 again — see
 the "Phase 2 / Session N" headings below, kept separate from the Phase 1 "Session N" headings
 above them in the file.
+
+---
+
+## Phase 2 / Session 11 — Integrate Real Local Fits, Final QA, Release Gate (2026-08-07)
+
+**Scope (from the plan doc):** wire the real `.joblib` bundles from Yvenn's local Session 4
+fit round-trip into the notebooks, do a final full-repo QA pass, and open the closing PR
+for Phase 2. Real data (`preprocessed_data.zip`, `sample_df.zip`) and a fine-grained PAT
+were provided this session; torch installed from plain PyPI (no CUDA-free wheel reachable
+from this sandbox's network allowlist — works fine, just larger than the `+cpu` build).
+
+**First finding — the plan's own prerequisite was already satisfied, just not the way it
+expected.** All 5 `.joblib` bundles, including the real 469 MB `vae_french_sample.joblib`
+(691,157 training sessions, 516 contexts, departments `59/69/78/92/93` — confirmed by
+loading the object directly, not assumed), are already live on the `models-v1` GitHub
+Release and auto-fetched by `ensure_models()` on `import gears`. Session 6 already
+discovered and documented this. The plan's instruction to "commit the real bundle to
+`gears/data/session_models/`" is stale against that (better) architecture — nothing was
+committed; `EVSessionModel.load()` and the registry both already resolve to the real
+bundle, re-verified fresh this session.
+
+**Real work actually remaining: wiring `gmm_french_recency.joblib` and
+`gmm_french_holdout.joblib`.** Neither was referenced anywhere in the codebase before this
+session (`grep` across `.py`/`.ipynb`/`.md` returned nothing). Added a new §7.3 to
+`notebooks/2_gmm_forecasting.ipynb`, loading both directly via `EVSessionModel.load(path)`
+(the documented pattern for artifacts outside the two-entry registry catalogue) and scoring
+them against `eval_df` alongside the production `french` GMM.
+
+**Real finding, checked directly against the loaded objects, not assumed:**
+`gmm_french_recency.joblib`'s own `.recency`/`.half_life_days` attributes are `False`/`None`
+— this bundle is not actually recency-weighted, despite its name and the
+`--recency --half-life-days 21` command documented in the README. Traced through
+`EVSessionModel.__init__`/`.fit()`: `self.recency` is set once from the constructor arg and
+never rewritten, so the package's own wiring isn't the cause — this points to the `--recency`
+flag not having been passed on the actual local run that produced this specific file. Left
+as-is and flagged in the notebook markdown rather than silently relabeling or re-deriving it;
+re-running the documented command locally would produce a genuinely recency-weighted
+artifact if Yvenn wants this illustration to work as originally intended. By contrast, the
+holdout bundle checks out: 6,836 of 6,858 recency-bundle contexts are shared with holdout,
+means/weights are identical on most shared contexts and genuinely differ on ones affected
+by the excluded days — consistent with a real `--exclude-last-n-days` fit, not a duplicate.
+
+**Notebook 3 Section C visual QA — investigated, no change needed.** The first Section-C
+plot (national 8,008-context GMM vs. the VAE's 516-context/5-department bundle) shows the
+VAE as a near-flat line at national power scale. Confirmed by direct inspection this is a
+~70x population-size mismatch (568,034 vs. 8,119 sessions/day), not a bug — and it's already
+handled correctly one cell later: §C.2's `reduce_gmm_contexts()` restricts both models to
+the same location+department subset for the actual apples-to-apples smart-charging
+comparison, and that plot (re-inspected as a rendered image, not just "did it run") shows
+both arms tracking the same daily pattern with a real, visible V1G shift. No code changed
+in notebook 3 this session.
+
+**Full verification, run for real, not assumed:**
+- `ruff check gears/ tests/` (CI's exact scope): 0 errors.
+- `pytest tests/` with real data and real release bundles present, run file-by-file to stay
+  under this sandbox's per-command time limit: **369 passed, 8 skipped, 0 failed** across
+  all 377 collected tests. The 8 skips are `neuralforecast`/`torch` `[dl]`-extra gates
+  (`[dl]` not installed this session — separate from the `[vae]` extra, which was), not
+  regressions.
+- All 5 notebooks re-executed end-to-end via `jupyter nbconvert --execute` against real
+  data: notebook 1 96s, notebook 2 191s, notebook 3 198s, notebook 4 40s, notebook 5 41s —
+  all well under the 5-minute target, 0 execution errors. Notebook 5 initially failed
+  (`FileNotFoundError: data/custom/sap.csv`) purely because that gitignored local file
+  wasn't populated yet this session — not a code issue; `data/custom/` is the correct,
+  already-documented path (README.md, `data/README.md`, Session 5's own writeup all agree).
+  Populated it from the uploaded `preprocessed_data.zip` and re-ran clean.
+- Visual QA: extracted and directly viewed every VAE-related plot's rendered PNG across
+  notebooks 1–3 (11 images), not just checked for exceptions. GMM/VAE color-coding
+  (blue/orange) and titling confirmed consistent and correct throughout, including the
+  Session 6 `plot_marginals()` fix.
+
+**Also found, unrelated to this session's own scope:** `ruff check` on `scripts/` (not part
+of CI's linted path, which is `gears/ tests/` only) fails on `scripts/compare_external.ipynb`
+— a notebook-schema error (`unknown field 'outputs'`), most likely a stricter newer `ruff`
+version than whatever was last used to verify that file. Not introduced this session (file
+has zero diff), not blocking (CI doesn't lint `scripts/`). Flagged for Yvenn; not fixed.
+
+**Version:** kept at `2.0.0` — nothing this session changes a public API or breaks a prior
+contract, consistent with how Sessions 2/3 both landed under the same version header.
+CHANGELOG entry added under the existing `[2.0.0]` heading rather than bumping further.
+
+**Explicitly not done this session:** did not re-fit `gmm_french_recency.joblib` (the raw
+full-national dataset behind that specific local run isn't part of what's available in this
+sandbox — only `sample_df.zip`/`preprocessed_data.zip`, which is what the notebooks
+themselves use); did not touch the `scripts/compare_external.ipynb` ruff finding above; did
+not add `french_recency`/`french_holdout` to `NativeSessionModelRegistry`'s catalogue —
+kept as direct `EVSessionModel.load(path)` calls, consistent with how the sample bundle
+(`gmm_french_sample.joblib`) is already documented as living outside the catalogue; whether
+either ad-hoc bundle deserves a permanent catalogue entry is Yvenn's call, not decided here.
+
+**For whoever picks this up next:** re-run the recency fit locally with `--recency` actually
+passed, if the illustration mattering to you; decide the `compare_external.ipynb` ruff
+finding (fix, add to an ignore list, or leave since it's outside CI's scope); the
+Session 10 persistence-investigation follow-up and the "should this repo be public"
+question (carried since Phase 1) both also remain open.
+
+**CI note:** PR #16's first run failed on `test (3.11)` only (`3.10`/`3.12` both green) —
+`ruff`/`mypy` passed, only the pytest-with-coverage step failed, with no reproducible cause
+found from the check-run's annotations (the actual job log sits behind a blob-storage
+redirect this sandbox's network allowlist blocks, and Python 3.11 wasn't installable here
+to reproduce locally — no upper bounds are pinned on `numpy`/`scipy`/`scikit-learn`/etc. in
+`pyproject.toml`, so a version-specific wheel resolution is one plausible cause, not
+confirmed). Re-ran via the API's job-rerun endpoint: all three versions passed clean on the
+same commit with no code change, indicating a transient/flaky runner issue rather than a
+real 3.11-specific regression. Flagging as-is rather than asserting a root cause I couldn't
+verify.
 
 ---
 
