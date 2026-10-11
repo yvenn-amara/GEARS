@@ -103,10 +103,12 @@ def test_gear_defaults_to_one_and_is_backward_compatible():
     assert repr(implicit.gmm_) == repr(explicit.gmm_)
 
 
-@pytest.mark.parametrize("gear", [2, 3, 4, 5])
-def test_unimplemented_gears_raise_not_implemented_error(gear):
-    with pytest.raises(NotImplementedError, match="GEAR 1st"):
+@pytest.mark.parametrize("gear", [0, 2, 3])
+def test_unimplemented_gears_raise_short_not_implemented_error(gear):
+    with pytest.raises(NotImplementedError, match=rf"GEAR {gear} is not implemented") as exc:
         GEARSModel(gear=gear)
+    assert "[1]" in str(exc.value)
+    assert len(str(exc.value)) < 100
 
 
 def test_gear1_supports_vae_model_type_end_to_end():

@@ -1,17 +1,11 @@
 """
 GEARSModel – thin, gear-dispatching facade over per-gear backends.
 
-GEAR 1st (today's GMM/VAE session modeling + SARIMA/probabilistic forecasting
-+ simulation + smart charging pipeline) is the only fully-implemented gear.
-GEAR 2nd-5th are reserved for future, structurally different model families
-and raise ``NotImplementedError`` until implemented.
-
-``GEARSModel``'s public methods are thin, signature-agnostic dispatchers to
-the active gear's backend object (see ``gears/pipeline_gears/``) — this is a
-deliberate design choice, not an oversight: future gears are not forced into
-GEAR 1st's ``fit()``/``simulate_*()`` signatures, since GEAR 2nd's internals
-are confirmed to differ structurally. See ``PROPOSAL_GEAR_ARCHITECTURE.md``
-at the repo root for the full design rationale this implements.
+GEAR 1st (GMM/VAE session modeling + SARIMA/probabilistic forecasting +
+simulation + smart charging) is the only gear implemented today; GEAR 2nd is
+planned. ``GEARSModel``'s public methods are thin dispatchers to the active
+gear's backend (see ``gears/pipeline_gears/``), so a future gear is free to
+define its own ``fit()``/``simulate_*()`` signatures.
 """
 
 from __future__ import annotations
@@ -23,9 +17,7 @@ from gears.pipeline_gears.gear1 import Gear1Backend
 
 logger = logging.getLogger(__name__)
 
-# Gears 2-5 simply aren't in this dict yet, which is what produces the
-# friendly NotImplementedError below — no separate "if gear == 2: raise ..."
-# branch to maintain per future gear.
+# Gears that are not in this dict yet raise the NotImplementedError below.
 _GEAR_BACKENDS: dict[int, type] = {1: Gear1Backend}
 _IMPLEMENTED_GEARS = sorted(_GEAR_BACKENDS)
 
@@ -36,19 +28,17 @@ class GEARSModel:
 
     Combines GMM/VAE session modeling, session-count forecasting, short- and
     medium-term simulation, V1G smart charging, and output aggregation behind
-    a single facade. Only GEAR 1st is implemented today; ``gear=2..5`` are
-    reserved for future, structurally different model families and raise
-    ``NotImplementedError`` until implemented.
+    a single facade.
 
     Parameters
     ----------
     gear : int
         Which GEAR backend to use. Only ``1`` (the default) is implemented
-        today. ``2``-``5`` raise ``NotImplementedError``.
+        today; any other value raises ``NotImplementedError``.
     **kwargs
         Forwarded to the selected gear's backend constructor. For GEAR 1st,
         see :class:`gears.pipeline_gears.gear1.Gear1Backend` for the full
-        parameter list (``n_components``, ``stratify_by``,
+        parameter list (``n_components``, ``max_components``, ``stratify_by``,
         ``forecaster_method``, ``charger_mix``, ``n_scenarios``,
         ``resolution_min``, ``max_samples_per_context``,
         ``forecaster_use_holidays``, ``forecaster_country``,
@@ -72,11 +62,8 @@ class GEARSModel:
     def __init__(self, gear: int = 1, **kwargs):
         if gear not in _GEAR_BACKENDS:
             raise NotImplementedError(
-                f"GEAR {gear} is reserved for a future release and is not "
-                f"implemented yet. GEAR 1st (the current GMM/VAE + "
-                f"SARIMA/probabilistic pipeline) is fully supported via "
-                f"GEARSModel(gear=1, ...). Implemented gears: "
-                f"{_IMPLEMENTED_GEARS}."
+                f"GEAR {gear} is not implemented. Available gears: {_IMPLEMENTED_GEARS} "
+                "(GEAR 1st is the default)."
             )
         self.gear = gear
         self._backend = _GEAR_BACKENDS[gear](**kwargs)
@@ -146,12 +133,7 @@ class GEARSModel:
         return instance
 
     # ------------------------------------------------------------------
-    # Dispatchers — thin, signature-agnostic forwarding to the active
-    # gear's backend. Deliberately no abc.ABC / typing.Protocol base class
-    # fixing an abstract interface across gears: a future Gear2Backend is
-    # free to define completely different signatures here, since these
-    # methods only forward *args/**kwargs (fit's `data` parameter aside —
-    # see PROPOSAL_GEAR_ARCHITECTURE.md for why that one is standardized).
+    # Dispatchers — thin forwarding to the active gear's backend.
     # ------------------------------------------------------------------
 
     def fit(self, data, *args, **kwargs) -> GEARSModel:
@@ -196,9 +178,7 @@ class GEARSModel:
         return self._backend.summary()
 
     # ------------------------------------------------------------------
-    # Persistence — the facade itself (gear + backend) is what's pickled,
-    # so GEARSModel.load() correctly reconstructs a GEARSModel instance
-    # rather than a bare backend.
+    # Persistence — the facade itself (gear + backend) is what's pickled.
     # ------------------------------------------------------------------
 
     def save(self, path: str | Path) -> None:
@@ -242,10 +222,7 @@ class GEARSModel:
         return obj
 
     # ------------------------------------------------------------------
-    # Read-through attributes — backward compatibility with the
-    # pre-gear-dispatch API, where these lived directly on GEARSModel.
-    # Read-only: nothing in the codebase sets these from outside the
-    # backend's own fit()/from_pretrained()/from_session_model().
+    # Read-through attributes (read-only): they live on the backend.
     # ------------------------------------------------------------------
 
     @property
@@ -275,6 +252,10 @@ class GEARSModel:
     @property
     def n_components(self):
         return self._backend.n_components
+
+    @property
+    def max_components(self):
+        return self._backend.max_components
 
     @property
     def stratify_by(self):

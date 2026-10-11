@@ -477,10 +477,13 @@ class EVSessionModel:
                 self.n_sessions_per_day_[ctx_tuple] = n / max(n_days, 1)
             self.context_counts_[ctx_tuple] = n
 
-            logger.info(
+            logger.debug(
                 "Fitted GMM(k=%d) for context %s on %d samples.",
                 gmm.n_components, ctx_tuple, n,
             )
+
+        if self.model_type == "gmm":
+            logger.info("Fitted %d GMM contexts.", len(self.models_))
 
         # VAE path: train a single shared model across all collected groups
         if self.model_type == "vae":
