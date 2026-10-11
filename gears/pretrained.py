@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import pickle
 import shutil
 import tempfile
 from pathlib import Path
@@ -44,7 +45,6 @@ DEFAULT_CACHE_DIR: Final[Path] = Path.home() / ".cache" / "gears"
 
 class PretrainedModelError(Exception):
     """Dedicated error for pre-trained model retrieval failures."""
-    pass
 
 
 def _get_cache_dir() -> Path:
@@ -68,23 +68,27 @@ def _download_file(url: str, dest_path: Path, timeout: int = 30, retries: int = 
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Atomic write: download to temp file first, then rename
+    # Atomic write: download to a temp file in the same directory, then rename.
     with tempfile.NamedTemporaryFile(dir=dest_path.parent, delete=False) as tmp:
         tmp_path = Path(tmp.name)
         try:
             for attempt in range(retries):
                 try:
-                    logger.info("Downloading model from %s (attempt %d/%d)...", url, attempt + 1, retries)
+                    logger.info(
+                        "Downloading model from %s (attempt %d/%d)...", url, attempt + 1, retries
+                    )
                     with urllib.request.urlopen(url, timeout=timeout) as response:
                         shutil.copyfileobj(response, tmp)
                     break
-                except Exception as e:
+                except OSError as e:  # URLError, HTTPError and timeouts all derive from OSError
                     if attempt == retries - 1:
-                        raise e
+                        raise
                     logger.warning("Download attempt %d failed: %s. Retrying...", attempt + 1, e)
-        finally:
-            if not dest_path.exists(): # avoid deleting existing file if we fail
-                pass
+                    tmp.seek(0)
+                    tmp.truncate()
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     tmp_path.replace(dest_path)
 
@@ -143,10 +147,10 @@ def load_pretrained(
             # Download
             try:
                 _download_file(_CATALOGUE[model_id]["url"], local_path)
-            except Exception as e:
+            except OSError as e:
                 raise PretrainedModelError(
                     f"Failed to download model '{model_id}' from {_CATALOGUE[model_id]['url']}: {e}"
-                )
+                ) from e
 
     # 3. Integrity check
     expected_sha = _CATALOGUE[model_id]["sha256"]
@@ -161,8 +165,8 @@ def load_pretrained(
     # 4. Load
     try:
         model = joblib.load(local_path)
-    except Exception as e:
-        raise PretrainedModelError(f"Failed to load joblib file at {local_path}: {e}")
+    except (OSError, EOFError, ValueError, AttributeError, ImportError, pickle.UnpicklingError) as e:
+        raise PretrainedModelError(f"Failed to load joblib file at {local_path}: {e}") from e
 
     if TYPE_CHECKING:
         from gears.models.session_model import EVSessionModel

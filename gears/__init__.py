@@ -44,10 +44,10 @@ __author__ = "Yvenn Amara-Ouali"
 
 __all__ = [
     "CHARGER_PRESETS",
-    "EVSessionModel",
-    "GEARSModel",
     "GROWTH_PROFILES",
     "LOCATION_POWER_PRESETS",
+    "EVSessionModel",
+    "GEARSModel",
     "MediumTermSimulator",
     "OutputAggregator",
     "PersistenceForecaster",
@@ -56,12 +56,13 @@ __all__ = [
     "SmartChargingOptimizer",
     "bass_diffusion_profile",
     "linear_growth_profile",
+    "load_pretrained",
     "load_sessions",
     "make_demo_data",
     "s_curve_growth_profile",
     "sessions_to_daily_counts",
-    "load_pretrained",
 ]
 
 from gears import plotting, utils
+
 __all__ += ["plotting", "utils"]

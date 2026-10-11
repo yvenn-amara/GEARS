@@ -12,12 +12,11 @@ import pytest
 
 from gears.data.schemas import validate_dataframe
 from gears.models.forecaster import (
-    NHiTSForecaster,
     PersistenceForecaster,
     SessionForecaster,
-    TransformerForecaster,
     sessions_to_daily_counts,
 )
+from gears.models.forecaster_dl import NHiTSForecaster, TransformerForecaster
 
 
 def make_sessions(n=300, seed=0):

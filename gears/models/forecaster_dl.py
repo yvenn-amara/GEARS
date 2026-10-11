@@ -6,8 +6,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from gears.models.forecaster import sessions_to_daily_counts, _make_forecast_df
-from gears._optional import require
+from gears.models.forecaster import _make_forecast_df, sessions_to_daily_counts
 
 logger = logging.getLogger(__name__)
 

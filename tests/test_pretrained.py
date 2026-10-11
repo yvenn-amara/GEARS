@@ -1,14 +1,10 @@
-import pytest
 import os
-import shutil
-import tempfile
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import joblib
-import numpy as np
-from gears.pretrained import load_pretrained, PretrainedModelError, _CATALOGUE
-from gears.models.session_model import EVSessionModel
+import pytest
+
+from gears.pretrained import PretrainedModelError, load_pretrained
 
 # --- Mocks ---
 
@@ -108,12 +104,14 @@ def test_load_pretrained_cache_hit(tmp_path, mock_model):
         }
     }
 
-    with patch("gears.pretrained._CATALOGUE", test_cat):
-        # Should load from cache without downloading
-        with patch("urllib.request.urlretrieve") as mock_retrieve:
-            model = load_pretrained("test_model", cache_dir=cache_dir)
-            assert model == mock_model
-            mock_retrieve.assert_not_called()
+    # Should load from cache without downloading
+    with (
+        patch("gears.pretrained._CATALOGUE", test_cat),
+        patch("urllib.request.urlretrieve") as mock_retrieve,
+    ):
+        model = load_pretrained("test_model", cache_dir=cache_dir)
+        assert model == mock_model
+        mock_retrieve.assert_not_called()
 
 def test_load_pretrained_sha_mismatch(tmp_path, mock_model):
     """Test that SHA mismatch triggers a re-download or error."""
@@ -132,11 +130,13 @@ def test_load_pretrained_sha_mismatch(tmp_path, mock_model):
         }
     }
 
-    with patch("gears.pretrained._CATALOGUE", test_cat):
-        # Simulate download failure to see it's trying to download again
-        with patch("urllib.request.urlretrieve", side_effect=Exception("Download failed")):
-            with pytest.raises(PretrainedModelError, match="Integrity check failed"):
-                load_pretrained("test_model", cache_dir=cache_dir)
+    # Simulate download failure to see it's trying to download again
+    with (
+        patch("gears.pretrained._CATALOGUE", test_cat),
+        patch("urllib.request.urlretrieve", side_effect=Exception("Download failed")),
+        pytest.raises(PretrainedModelError, match="Integrity check failed"),
+    ):
+        load_pretrained("test_model", cache_dir=cache_dir)
 
 def test_load_pretrained_offline_mode(tmp_path):
     """Test that GEARS_OFFLINE=1 prevents downloads."""
@@ -153,10 +153,12 @@ def test_load_pretrained_offline_mode(tmp_path):
         }
     }
 
-    with patch("gears.pretrained._CATALOGUE", test_cat):
-        with patch.dict(os.environ, {"GEARS_OFFLINE": "1"}):
-            with pytest.raises(PretrainedModelError, match="GEARS_OFFLINE=1"):
-                load_pretrained("test_model", cache_dir=cache_dir)
+    with (
+        patch("gears.pretrained._CATALOGUE", test_cat),
+        patch.dict(os.environ, {"GEARS_OFFLINE": "1"}),
+        pytest.raises(PretrainedModelError, match="GEARS_OFFLINE=1"),
+    ):
+        load_pretrained("test_model", cache_dir=cache_dir)
 
 def test_load_pretrained_invalid_id():
     """Test that requesting a non-existent model ID raises an error."""

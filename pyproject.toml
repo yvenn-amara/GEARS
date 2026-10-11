@@ -27,14 +27,12 @@ dependencies = [
     "tqdm>=4.66",
     "pmdarima>=2.0",
     "holidays>=0.46",
-    "requests>=2.31",
     "click>=8.0",
 ]
 
 [project.optional-dependencies]
 dl = ["neuralforecast>=2.0", "torch>=2.0"]
 vae = ["torch>=2.0"]
-hub = ["huggingface-hub>=0.20"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
@@ -43,7 +41,7 @@ dev = [
     "pyarrow>=15.0",
     "torch>=2.0",
 ]
-all = ["gears-ev[dl,vae,hub,dev]"]
+all = ["gears-ev[dl,vae,dev]"]
 
 [project.scripts]
 gears = "gears.cli:main"
@@ -51,9 +49,6 @@ gears = "gears.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["gears*"]
-
-[tool.setuptools.package-data]
-"gears.data.session_models" = ["*.joblib"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -39,8 +39,11 @@ def test_daily_energy_aggregator():
     assert "n_sessions" in daily.columns
 
 
-def test_from_native_gmm():
-    model = GEARSModel.from_native_gmm("french")
+def test_from_session_model():
+    from gears.models.session_model import EVSessionModel
+
+    gmm = EVSessionModel(n_components=3).fit(make_df(500))
+    model = GEARSModel.from_session_model(gmm, n_scenarios=2)
     assert model.is_fitted_
     sessions = model.simulate_short_term("2025-06-01", horizon=2, n_scenarios=2)
     assert len(sessions) > 0

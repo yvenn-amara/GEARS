@@ -3,15 +3,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gears.data.loader import make_demo_data
-from gears.models.session_model import EVSessionModel
 from gears.utils import (
     forecast_metrics,
+    mae,
     make_price_signal,
     make_res_signal,
     mape,
     rmse,
 )
+
 
 def test_price_signal_shape():
     sig = make_price_signal(periods=48, resolution_min=30)
@@ -49,10 +49,8 @@ def test_rmse_known():
 
 def test_mae_known():
     y = np.array([1.0, 2.0, 3.0])
-    # Note: mae is no longer in the provided utils.py,
-    # I should remove it or re-add it. Let's remove it for now
-    # to match the current utils.py content.
-    pass
+    assert mae(y, y + 2.0) == pytest.approx(2.0)
+
 
 def test_mape_positive():
     y, yp = np.array([10.0, 20.0]), np.array([11.0, 22.0])

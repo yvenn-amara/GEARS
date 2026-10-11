@@ -63,7 +63,7 @@ class GEARSModel:
     >>> model = GEARSModel(gear=1, model_type="vae", recency=True)
     >>> model.fit("data/sessions_france.pkl")
 
-    >>> model = GEARSModel.from_pretrained("french_demo")
+    >>> model = GEARSModel.from_pretrained("french")
     >>> sessions = model.simulate_short_term("2025-06-10")
 
     >>> energy = model.simulate_medium_term(years=10, annual_growth_rate=0.15)
@@ -89,19 +89,16 @@ class GEARSModel:
     def from_pretrained(
         cls,
         model_id: str,
-        hf_repo_id: str | None = None,
         cache_dir: str | Path | None = None,
         **kwargs,
     ) -> GEARSModel:
         """
-        Load a pre-trained model bundle from the GEARS registry.
+        Load a pre-trained session model (see :func:`gears.load_pretrained`).
 
         Parameters
         ----------
         model_id : str
-            Registry model identifier (e.g. ``'french'``).
-        hf_repo_id : str, optional
-            Override the default Hugging Face Hub repository.
+            Pre-trained model identifier (e.g. ``'french'``).
         cache_dir : str or Path, optional
             Local cache directory for downloaded artefacts.
         **kwargs
@@ -110,13 +107,13 @@ class GEARSModel:
         Returns
         -------
         GEARSModel
-            Fitted instance loaded from the registry (always GEAR 1st today
+            Fitted instance built from the pre-trained model (always GEAR 1st today
             — pre-trained bundles are native GMM/VAE session models).
         """
         instance = cls.__new__(cls)
         instance.gear = 1
         instance._backend = Gear1Backend.from_pretrained(
-            model_id, hf_repo_id=hf_repo_id, cache_dir=cache_dir, **kwargs
+            model_id, cache_dir=cache_dir, **kwargs
         )
         return instance
 
@@ -248,7 +245,7 @@ class GEARSModel:
     # Read-through attributes — backward compatibility with the
     # pre-gear-dispatch API, where these lived directly on GEARSModel.
     # Read-only: nothing in the codebase sets these from outside the
-    # backend's own fit()/from_pretrained()/from_native_gmm().
+    # backend's own fit()/from_pretrained()/from_session_model().
     # ------------------------------------------------------------------
 
     @property

@@ -4,6 +4,7 @@ Helper to manage optional dependencies for GEARS.
 
 from __future__ import annotations
 
+
 def require(module_name: str, extra: str) -> None:
     """
     Verify that an optional dependency is installed.

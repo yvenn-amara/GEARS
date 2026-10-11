@@ -139,12 +139,10 @@ class Gear1Backend:
     def from_pretrained(
         cls,
         model_id: str,
-        hf_repo_id: str | None = None,
         cache_dir: str | Path | None = None,
         **kwargs,
     ) -> Gear1Backend:
-        """Load a pre-trained model bundle from the GEARS registry."""
-        # In S4, ModelRegistry is replaced by gears.pretrained.load_pretrained
+        """Build a backend from a pre-trained session model."""
         from gears.pretrained import load_pretrained
 
         session_model = load_pretrained(model_id, cache_dir=cache_dir)
