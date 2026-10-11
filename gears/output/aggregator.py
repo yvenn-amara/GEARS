@@ -311,7 +311,7 @@ class OutputAggregator:
     --------
     >>> import gears
     >>> agg = OutputAggregator(resolution_min=60)
-    >>> gmm = gears.get_session_model()
+    >>> gmm = gears.load_pretrained("french")
     >>> result = agg.build_load_profiles(gmm, year=2025, n_days_mc=10)
     >>> result["ts"].plot()
     """
@@ -526,7 +526,7 @@ class OutputAggregator:
         Parameters
         ----------
         gmm : EVSessionModel
-            Fitted GMM (e.g. loaded via ``gears.get_session_model()``).
+            Fitted GMM (e.g. loaded via ``gears.load_pretrained()``).
         year : int
             Calendar year for the annual time series.
         n_days_mc : int
@@ -626,7 +626,7 @@ class OutputAggregator:
         --------
         >>> import gears
         >>> agg = gears.OutputAggregator()
-        >>> gmm = gears.get_session_model()
+        >>> gmm = gears.load_pretrained("french")
         >>> out = agg.build_load_profiles(gmm, year=2025, charging_mode="mean_power")
         >>> out["ts"].resample("W").mean().plot(title="Weekly avg load (MW)")
 

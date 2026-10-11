@@ -1,0 +1,3 @@
+[console_scripts]
+gears = gears.cli:main
+gears-fit-session-model = scripts.fit_session_model:main

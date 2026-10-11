@@ -23,7 +23,6 @@ import pandas as pd
 
 from gears.data.loader import load_sessions
 from gears.models.forecaster import SessionForecaster
-from gears.models.registry import ModelRegistry, NativeSessionModelRegistry
 from gears.models.session_model import EVSessionModel
 from gears.output.aggregator import OutputAggregator
 from gears.simulation.medium_term import MediumTermSimulator
@@ -145,21 +144,15 @@ class Gear1Backend:
         **kwargs,
     ) -> Gear1Backend:
         """Load a pre-trained model bundle from the GEARS registry."""
-        registry_kwargs = {}
-        if hf_repo_id:
-            registry_kwargs["hf_repo_id"] = hf_repo_id
-        if cache_dir:
-            registry_kwargs["cache_dir"] = cache_dir
+        # In S4, ModelRegistry is replaced by gears.pretrained.load_pretrained
+        from gears.pretrained import load_pretrained
 
-        registry = ModelRegistry(**registry_kwargs)
-        bundle = registry.load(model_id)
+        session_model = load_pretrained(model_id, cache_dir=cache_dir)
 
         instance = cls(**kwargs)
-        instance.gmm_ = bundle["gmm"]
-        instance.forecaster_ = bundle.get("forecaster") or SessionForecaster(
-            method="probabilistic"
-        )
-        instance.metadata_ = bundle.get("metadata", {})
+        instance.gmm_ = session_model
+        instance.forecaster_ = SessionForecaster(method="probabilistic")
+        instance.metadata_ = {"pretrained_model_id": model_id}
         instance._build_simulators()
         instance.is_fitted_ = True
 
@@ -167,20 +160,16 @@ class Gear1Backend:
         return instance
 
     @classmethod
-    def from_native_gmm(
+    def from_session_model(
         cls,
-        session_model_id: str = "french",
-        session_model_dir: Path | None = None,
+        session_model: EVSessionModel,
         **kwargs,
     ) -> Gear1Backend:
-        """Build a Gear1Backend from the pre-fitted unified French GMM."""
-        reg = NativeSessionModelRegistry(session_model_dir=session_model_dir)
-        gmm = reg.load(session_model_id)
-
+        """Build a Gear1Backend from a fitted session model."""
         instance = cls(**kwargs)
-        instance.gmm_ = gmm
+        instance.gmm_ = session_model
         instance.forecaster_ = SessionForecaster(method="probabilistic")
-        instance.metadata_ = {"native_session_model_id": session_model_id, **gmm.metadata_}
+        instance.metadata_ = {"source": "provided_session_model"}
         instance._build_simulators()
         instance.is_fitted_ = True
         return instance

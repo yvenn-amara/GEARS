@@ -405,7 +405,7 @@ def test_recency_ignored_for_vae_with_warning(caplog):
 
 
 def test_unpickling_old_bundle_backfills_recency_attrs():
-    """Regression test for the bug notebook 1 surfaced via ``get_session_model()``.
+    """Regression test for the bug notebook 1 surfaced via ``load_pretrained()``.
 
     The committed ``gmm_french.joblib`` bundle was pickled before Session 2
     added the recency-weighting attributes to ``EVSessionModel.__init__``, so

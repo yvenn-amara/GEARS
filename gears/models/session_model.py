@@ -21,7 +21,7 @@ producing up to 4 × 101 × 7 × 4 = 11 312 strata.
 A single ``EVSessionModel`` object covers all location types; the
 ``location_type`` dimension is just another context key.  Retrieve strata via:
 
-    model = gears.get_session_model("french")
+    model = load_pretrained("french")
     sk = model.get_sklearn_component(
         context={"location_type": "work", "department": "75",
                  "season": "winter", "day_of_week": 0}
@@ -29,8 +29,8 @@ A single ``EVSessionModel`` object covers all location types; the
 
 Pre-fitted GMMs
 ---------------
-The package ships with a single pre-fitted GMM bundle ``gmm_french.joblib``
-in gears/data/session_models/.  Use ``NativeSessionModelRegistry`` to load it without raw data.
+The package ships with a single pre-fitted GMM bundle ``gmm_french.joblib``.
+Use ``gears.load_pretrained("french")`` to load it without raw data.
 """
 
 from __future__ import annotations
@@ -296,7 +296,7 @@ class EVSessionModel:
         Without this, plain attribute access on those attributes elsewhere
         in the class (``__repr__`` in particular: ``if self.recency:``)
         raises ``AttributeError`` on load — surfaced by notebook 1's
-        ``get_session_model()`` call. Backfilling with the same defaults ``__init__``
+        ``load_pretrained()`` call. Backfilling with the same defaults ``__init__``
         uses keeps old bundles loadable under the current code without
         needing to refit and re-commit them.
 

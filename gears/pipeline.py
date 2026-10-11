@@ -99,7 +99,7 @@ class GEARSModel:
         Parameters
         ----------
         model_id : str
-            Registry model identifier (e.g. ``'french_demo'``).
+            Registry model identifier (e.g. ``'french'``).
         hf_repo_id : str, optional
             Override the default Hugging Face Hub repository.
         cache_dir : str or Path, optional
@@ -121,35 +121,30 @@ class GEARSModel:
         return instance
 
     @classmethod
-    def from_native_gmm(
+    def from_session_model(
         cls,
-        session_model_id: str = "french",
-        session_model_dir: Path | None = None,
+        session_model,
         **kwargs,
     ) -> GEARSModel:
         """
-        Build a GEARSModel from the pre-fitted unified French GMM.
+        Build a GEARSModel from a fitted session model.
 
         Parameters
         ----------
-        session_model_id : str
-            Registry bundle ID.  Currently only ``'french'`` is available —
-            it contains all location types stratified by
-            ``location_type × département × season × day_of_week``.
-        session_model_dir : Path, optional
-            Override the default session-model directory.
+        session_model : EVSessionModel
+            Fitted session model to use as the generator.
         **kwargs
             Forwarded to the GEAR 1st backend constructor.
 
         Returns
         -------
         GEARSModel
-            Fitted instance using the native GMM bundle (always GEAR 1st).
+            Fitted instance using the provided session model (always GEAR 1st).
         """
         instance = cls.__new__(cls)
         instance.gear = 1
-        instance._backend = Gear1Backend.from_native_gmm(
-            session_model_id, session_model_dir=session_model_dir, **kwargs
+        instance._backend = Gear1Backend.from_session_model(
+            session_model, **kwargs
         )
         return instance
 

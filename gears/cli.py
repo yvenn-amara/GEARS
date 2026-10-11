@@ -173,10 +173,12 @@ def smart_charge(model, pretrained, sessions_path, signal_path, signal_type, out
 @main.command("list-models")
 def list_models():
     """List available pre-trained model IDs."""
-    from gears.models.registry import ModelRegistry
+    # In S4, ModelRegistry is removed in favor of gears.pretrained
+    from gears.pretrained import _CATALOGUE
 
-    registry = ModelRegistry()
-    df = registry.list_models()
+    import pandas as pd
+    rows = [{"model_id": mid, **meta} for mid, meta in _CATALOGUE.items()]
+    df = pd.DataFrame(rows)
     click.echo(df.to_string(index=False))
 
 
