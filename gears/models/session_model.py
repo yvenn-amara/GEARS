@@ -921,63 +921,8 @@ class EVSessionModel:
         return obj
 
     # ------------------------------------------------------------------
-    # Diagnostics / plots
+    # Diagnostics
     # ------------------------------------------------------------------
-
-    def plot_components(
-        self,
-        context: dict | None = None,
-        date: str | None = None,
-        ax=None,
-        figsize: tuple = (8, 4),
-    ):
-        """
-        Plot GMM component weights for a given context.
-
-        Parameters
-        ----------
-        context : dict, optional
-            Context dict passed to :meth:`_resolve_context`.
-        date : str, optional
-            Reference date used to infer context when *context* is None.
-        ax : matplotlib.axes.Axes, optional
-            Axes to draw on. Created if None.
-        figsize : tuple
-            Figure size in inches, used only when creating a new figure.
-
-        Returns
-        -------
-        matplotlib.axes.Axes
-            The axes containing the bar chart.
-        """
-        import matplotlib.pyplot as plt
-
-        self._check_fitted()
-        ctx_tuple = self._resolve_context(context, date)
-        gmm = self._get_model(ctx_tuple)
-        weights = gmm.weights_
-        k = len(weights)
-
-        fig, ax_ = (None, ax) if ax is not None else plt.subplots(figsize=figsize)
-        ax_ = ax_ or plt.gca()
-
-        colors = plt.cm.Blues(np.linspace(0.4, 0.9, k))
-        bars = ax_.bar(range(k), weights, color=colors, edgecolor="white")
-        ax_.set_xlabel("Component")
-        ax_.set_ylabel("Weight")
-        ax_.set_title(f"GMM component weights – context {ctx_tuple}")
-        ax_.set_xticks(range(k))
-
-        for bar, w in zip(bars, weights):
-            ax_.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.005,
-                f"{w:.2f}",
-                ha="center", va="bottom", fontsize=9,
-            )
-        if fig:
-            fig.tight_layout()
-        return ax_
 
     def plot_marginals(
         self,

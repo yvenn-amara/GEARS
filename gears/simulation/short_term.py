@@ -207,65 +207,6 @@ class ShortTermSimulator:
         weights = np.array(list(self.charger_mix.values()), dtype=float)
         return rng.choice(powers, size=n, p=weights)
 
-    # ------------------------------------------------------------------
-    # Load-curve computation
-    # ------------------------------------------------------------------
-
-    def compute_load_curve(
-        self,
-        sessions: pd.DataFrame,
-        date: str | pd.Timestamp | None = None,
-        scenario: int = 0,
-    ) -> pd.Series:
-        """
-        Compute a time-step load curve (kW) from simulated sessions.
-
-        Parameters
-        ----------
-        sessions : pd.DataFrame
-            Output of :meth:`simulate` or :meth:`simulate_single_day`.
-        date : str or Timestamp, optional
-            Filter to a specific date.
-        scenario : int
-            Scenario index to select when *sessions* contains multiple scenarios.
-
-        Returns
-        -------
-        pd.Series
-            Instantaneous aggregate load in kW, indexed by a
-            ``DatetimeIndex`` at ``resolution_min`` intervals.
-            Returns an empty Series when no sessions match the filters.
-        """
-        df = sessions.copy()
-        if "scenario" in df.columns:
-            df = df[df["scenario"] == scenario]
-        if date is not None:
-            target = pd.Timestamp(date).date()
-            df = df[df["date"] == target]
-
-        if df.empty:
-            return pd.Series(dtype=float)
-
-        ref_date = pd.Timestamp(df["date"].iloc[0])
-        n_slots = 24 * 60 // self.resolution_min
-        load = np.zeros(n_slots)
-
-        for _, row in df.iterrows():
-            if "arrival_time" in df.columns:
-                start_h = pd.Timestamp(row["arrival_time"]).hour + \
-                          pd.Timestamp(row["arrival_time"]).minute / 60.0
-            else:
-                start_h = float(row.get("arrival_hour", 8.0))
-
-            end_h = start_h + float(row["duration"])
-            start_slot = int(start_h * 60 / self.resolution_min)
-            end_slot = int(min(end_h * 60 / self.resolution_min, n_slots))
-            if start_slot < n_slots:
-                load[start_slot:end_slot] += float(row["power_kw"])
-
-        times = pd.date_range(ref_date, periods=n_slots, freq=f"{self.resolution_min}min")
-        return pd.Series(load, index=times, name="load_kw")
-
     def __repr__(self) -> str:
         return (
             f"ShortTermSimulator("

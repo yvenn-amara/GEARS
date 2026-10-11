@@ -237,42 +237,10 @@ class TransformerForecaster:
 
     def plot_forecast(self, horizon: int = 14, n_scenarios: int = 50,
                       seed: int = 0, ax=None, figsize: tuple = (12, 4)):
-        """Plot historical counts and a fan-chart forecast.
+        """Fan chart of history and forecast (see :func:`gears.plotting.plot_forecast_fan`)."""
+        from gears.plotting import plot_forecast_fan
 
-        Parameters
-        ----------
-        horizon : int
-            Number of forecast days to display.
-        n_scenarios : int
-            Number of stochastic scenarios used for the fan chart.
-        seed : int
-        ax : matplotlib.axes.Axes, optional
-        figsize : tuple
-
-        Returns
-        -------
-        matplotlib.axes.Axes
-        """
-        import matplotlib.pyplot as plt
-        forecast = self.predict(horizon=horizon, n_scenarios=n_scenarios, seed=seed)
-        pivot = forecast.pivot(index="date", columns="scenario", values="n_sessions")
-
-        fig, ax_ = (None, ax) if ax is not None else plt.subplots(figsize=figsize)
-        ax_ = ax_ or plt.gca()
-
-        if self._daily_counts is not None:
-            self._daily_counts.plot(ax=ax_, label="Historical", color="#2E86AB", linewidth=1.2)
-        ax_.fill_between(pivot.index, pivot.quantile(0.1, axis=1),
-                         pivot.quantile(0.9, axis=1), alpha=0.2, color="#9B5DE5", label="80% CI")
-        pivot.median(axis=1).plot(ax=ax_, label="PatchTST median",
-                                  color="#9B5DE5", linewidth=2)
-        ax_.set_ylabel("Daily sessions")
-        ax_.set_title("PatchTST session-count forecast")
-        ax_.legend()
-        ax_.grid(True, alpha=0.3)
-        if fig:
-            fig.tight_layout()
-        return ax_
+        return plot_forecast_fan(self, horizon, n_scenarios, seed, ax, figsize, label="PatchTST median", color="#9B5DE5", title="PatchTST session-count forecast")
 
     def __repr__(self) -> str:
         return (
@@ -365,7 +333,6 @@ class NHiTSForecaster:
         # typical training set as context and leaving too few windows for
         # gradient descent.  An additional hard cap at n_train // 2 is
         # applied inside fit().
-        self._input_size_arg = input_size         # None means "auto"
         self.input_size = input_size or max(2 * horizon, 14)
         self.max_steps = max_steps
         self.n_stacks = n_stacks
@@ -602,41 +569,10 @@ class NHiTSForecaster:
 
     def plot_forecast(self, horizon: int = 14, n_scenarios: int = 50,
                       seed: int = 0, ax=None, figsize: tuple = (12, 4)):
-        """Plot historical counts and a fan-chart forecast.
+        """Fan chart of history and forecast (see :func:`gears.plotting.plot_forecast_fan`)."""
+        from gears.plotting import plot_forecast_fan
 
-        Parameters
-        ----------
-        horizon : int
-            Number of forecast days to display.
-        n_scenarios : int
-        seed : int
-        ax : matplotlib.axes.Axes, optional
-        figsize : tuple
-
-        Returns
-        -------
-        matplotlib.axes.Axes
-        """
-        import matplotlib.pyplot as plt
-        forecast = self.predict(horizon=horizon, n_scenarios=n_scenarios, seed=seed)
-        pivot = forecast.pivot(index="date", columns="scenario", values="n_sessions")
-
-        fig, ax_ = (None, ax) if ax is not None else plt.subplots(figsize=figsize)
-        ax_ = ax_ or plt.gca()
-
-        if self._daily_counts is not None:
-            self._daily_counts.plot(ax=ax_, label="Historical", color="#2E86AB", linewidth=1.2)
-        ax_.fill_between(pivot.index, pivot.quantile(0.1, axis=1),
-                         pivot.quantile(0.9, axis=1), alpha=0.2, color="#F18F01", label="80% CI")
-        pivot.median(axis=1).plot(ax=ax_, label="NHiTS median",
-                                  color="#F18F01", linewidth=2)
-        ax_.set_ylabel("Daily sessions")
-        ax_.set_title("NHiTS session-count forecast")
-        ax_.legend()
-        ax_.grid(True, alpha=0.3)
-        if fig:
-            fig.tight_layout()
-        return ax_
+        return plot_forecast_fan(self, horizon, n_scenarios, seed, ax, figsize, label="NHiTS median", color="#F18F01", title="NHiTS session-count forecast")
 
     def __repr__(self) -> str:
         return (

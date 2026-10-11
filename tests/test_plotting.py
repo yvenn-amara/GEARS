@@ -1,16 +1,4 @@
-"""Tests for gears.plotting.
-
-Originally focused solely on the Session 6 regression covering
-`plot_lt_trajectories`'s hard-clip bug (AUDIT.md §e, Mechanism 2). Phase 2 /
-Session 9 adds real coverage for the previously-untested session-distribution,
-time-series, GMM-descriptive, regret, forecast-overlay, and medium-term
-fan-chart plotting functions (gears/plotting.py was at 34% coverage with only
-this one function tested).
-
-Session 9 also found and fixed 6 previously-missed French plot labels in
-plot_mt_national_aggregate (point-4 "no French anywhere" — Session 7/8 had
-already fixed one earlier instance in this same file but missed this
-function's labels; see PR description / REFACTOR_STATE.md for the diff)."""
+"""Smoke tests for gears.plotting (headless Agg backend)."""
 import matplotlib
 
 matplotlib.use("Agg")  # headless, no display needed for these tests
@@ -23,6 +11,7 @@ from gears.plotting import (
     plot_arrival_distribution,
     plot_daily_energy,
     plot_energy_distribution,
+    plot_forecast_fan,
     plot_forecast_vs_actual,
     plot_gmm_means,
     plot_regret_comparison,
@@ -222,3 +211,29 @@ class TestPlotForecastVsActual:
         forecast = pd.DataFrame({"date": idx, "n_sessions": np.arange(10, dtype=float)})
         ax = plot_forecast_vs_actual(actual, forecast)
         assert ax is not None
+
+
+# ---------------------------------------------------------------------------
+# plot_forecast_fan / SessionForecaster.plot_forecast
+# ---------------------------------------------------------------------------
+
+class TestPlotForecastFan:
+    def test_session_forecaster_method_draws_fan_chart(self, sessions_df):
+        from gears.models.forecaster import SessionForecaster
+
+        forecaster = SessionForecaster(method="probabilistic").fit(sessions_df)
+        ax = forecaster.plot_forecast(horizon=7, n_scenarios=10)
+
+        assert ax.get_title() == "Session count forecast"
+        legend = [t.get_text() for t in ax.get_legend().get_texts()]
+        assert {"Historical", "80% CI", "Median forecast"} <= set(legend)
+
+    def test_label_color_and_title_are_customisable(self, sessions_df):
+        from gears.models.forecaster import SessionForecaster
+
+        forecaster = SessionForecaster(method="probabilistic").fit(sessions_df)
+        ax = plot_forecast_fan(forecaster, horizon=5, n_scenarios=5,
+                               label="My model", title="Custom")
+
+        assert ax.get_title() == "Custom"
+        assert "My model" in [t.get_text() for t in ax.get_legend().get_texts()]

@@ -14,11 +14,8 @@ import pandas as pd
 BLUE = "#2E86AB"
 RED = "#E84855"
 GREEN = "#3BB273"
-ORANGE = "#F4A261"
-PURPLE = "#9B5DE5"
 
 DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-SEASON_ORDER = ["winter", "spring", "summer", "autumn"]
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +81,6 @@ def plot_arrival_distribution(
 def plot_session_heatmap(
     df: pd.DataFrame,
     value: str = "n_sessions",
-    x: str = "hour_bin",
-    y: str = "day_of_week",
     ax=None,
     figsize: tuple = (12, 4),
     title: str = "Session heatmap",
@@ -99,10 +94,6 @@ def plot_session_heatmap(
         Validated sessions DataFrame.
     value : str
         Metric: ``'n_sessions'`` (count) or ``'energy'`` (kWh sum).
-    x : str
-        Column for the x-axis (hourly bins).
-    y : str
-        Column for the y-axis (day of week).
     ax : matplotlib.axes.Axes, optional
     figsize : tuple
     title : str
@@ -431,106 +422,50 @@ def plot_forecast_vs_actual(
     return ax_
 
 
-# ===========================================================================
-# Publication-ready visualisation functions
-# ===========================================================================
-
-# Historical / observed series colour (publication standard)
-HIST_COLOR = "#444444"
-
-# Okabe–Ito (2008) colorblind-safe 7-hue palette.
-# Use CB_PALETTE[i % len(CB_PALETTE)] to cycle across scenarios.
-CB_PALETTE = [
-    "#E69F00",  # orange
-    "#56B4E9",  # sky blue
-    "#009E73",  # bluish green
-    "#F0E442",  # yellow
-    "#0072B2",  # blue
-    "#D55E00",  # vermillion
-    "#CC79A7",  # reddish purple
-]
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _prepend_anchor(
-    pivot: pd.DataFrame,
-    anchor_date: pd.Timestamp,
-    anchor_val: float,
-) -> pd.DataFrame:
+def plot_forecast_fan(
+    forecaster,
+    horizon: int = 14,
+    n_scenarios: int = 50,
+    seed: int = 0,
+    ax=None,
+    figsize: tuple = (12, 4),
+    label: str = "Median forecast",
+    color: str = RED,
+    title: str = "Session count forecast",
+):
     """
-    Inject a single anchor row at ``anchor_date`` into a scenario pivot table.
+    Fan chart (median + 80 % band) of a session-count forecaster, over its history.
 
-    All scenario columns receive ``anchor_val``, so every fan ray starts from
-    the same last-observed point before diverging.  If ``anchor_date`` is
-    already present in the index the existing row is overwritten with the true
-    observed value (prevents rounding gaps).
-
-    Parameters
-    ----------
-    pivot : pd.DataFrame
-        Wide scenario pivot (DatetimeIndex × scenario columns).
-    anchor_date : pd.Timestamp
-        Date of the last observed value (t₀).
-    anchor_val : float
-        Last observed value (energy kWh or session count) at t₀.
+    Works with any fitted forecaster exposing ``predict(horizon, n_scenarios, seed)``
+    (:class:`~gears.models.forecaster.SessionForecaster` and the deep-learning
+    forecasters); the forecaster classes expose it as ``plot_forecast``.
 
     Returns
     -------
-    pd.DataFrame
-        Pivot with the anchor row inserted, sorted ascending by date.
+    matplotlib.axes.Axes
     """
-    import pandas as _pd
+    import matplotlib.pyplot as plt
 
-    anchor_date = _pd.Timestamp(anchor_date).normalize()
-    pivot = pivot.copy()
-    pivot.index = _pd.to_datetime(pivot.index)
+    forecast = forecaster.predict(horizon=horizon, n_scenarios=n_scenarios, seed=seed)
+    pivot = forecast.pivot(index="date", columns="scenario", values="n_sessions")
 
-    if anchor_date in pivot.index:
-        pivot.loc[anchor_date] = anchor_val
-        return pivot.sort_index()
+    fig, ax_ = (None, ax) if ax is not None else plt.subplots(figsize=figsize)
+    ax_ = ax_ or plt.gca()
 
-    anchor_row = _pd.DataFrame(
-        {col: [anchor_val] for col in pivot.columns},
-        index=[anchor_date],
+    history = getattr(forecaster, "_daily_counts", None)
+    if history is not None:
+        history.plot(ax=ax_, label="Historical", color=BLUE, linewidth=1.2)
+    ax_.fill_between(
+        pivot.index,
+        pivot.quantile(0.1, axis=1),
+        pivot.quantile(0.9, axis=1),
+        alpha=0.2, color=color, label="80% CI",
     )
-    return _pd.concat([anchor_row, pivot]).sort_index()
-
-
-def _apply_pub_style(ax, ylabel: str, title: str, rotate_x: int = 25) -> None:
-    """
-    Apply a shared publication style to an Axes object.
-
-    Sets grid, spine visibility, tick label sizes, and a monthly date
-    formatter on the x-axis.
-
-    Parameters
-    ----------
-    ax : matplotlib.axes.Axes
-    ylabel : str
-    title : str
-    rotate_x : int
-        Rotation angle for x-axis tick labels (degrees).
-
-    Returns
-    -------
-    None
-    """
-    import matplotlib.dates as _mdates
-
-    ax.set_ylabel(ylabel, fontsize=9)
-    ax.set_title(title, fontsize=10)
-    ax.grid(True, alpha=0.3, linestyle="--", linewidth=0.6)
-    ax.tick_params(axis="x", rotation=rotate_x, labelsize=8)
-    ax.tick_params(axis="y", labelsize=8)
-    ax.xaxis.set_major_formatter(_mdates.DateFormatter("%b %Y"))
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-
-# ---------------------------------------------------------------------------
-# Medium-term — per-département fan charts
-# ---------------------------------------------------------------------------
-
+    pivot.median(axis=1).plot(ax=ax_, label=label, color=color, linewidth=2)
+    ax_.set_ylabel("Daily sessions")
+    ax_.set_title(title)
+    ax_.legend()
+    ax_.grid(True, alpha=0.3)
+    if fig:
+        fig.tight_layout()
+    return ax_

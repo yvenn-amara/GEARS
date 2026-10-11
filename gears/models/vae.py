@@ -141,7 +141,6 @@ class ConditionalVAE:
         self.log_recon_var = nn.Parameter(torch.zeros(self.feature_dim))
 
         self._torch = torch
-        self._nn = nn
 
     def parameters(self):
         """Yield all trainable parameters."""

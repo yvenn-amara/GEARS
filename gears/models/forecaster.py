@@ -394,60 +394,12 @@ class SessionForecaster:
         fc = fc + rng.normal(0, noise_scale, horizon)
         return np.maximum(0, fc)
 
-    def plot_forecast(
-        self,
-        horizon: int = 14,
-        n_scenarios: int = 50,
-        seed: int = 0,
-        ax=None,
-        figsize: tuple = (12, 4),
-    ):
-        """Plot historical counts and a fan-chart forecast.
+    def plot_forecast(self, horizon: int = 14, n_scenarios: int = 50,
+                      seed: int = 0, ax=None, figsize: tuple = (12, 4)):
+        """Fan chart of history and forecast (see :func:`gears.plotting.plot_forecast_fan`)."""
+        from gears.plotting import plot_forecast_fan
 
-        Parameters
-        ----------
-        horizon : int
-            Number of forecast days to display.
-        n_scenarios : int
-            Number of stochastic scenarios used for the fan chart.
-        seed : int
-            Random seed for scenario generation.
-        ax : matplotlib.axes.Axes, optional
-            Axes to draw on. Created if None.
-        figsize : tuple
-            Figure size in inches, used only when creating a new figure.
-
-        Returns
-        -------
-        matplotlib.axes.Axes
-            The axes containing the plot.
-        """
-        import matplotlib.pyplot as plt
-
-        forecast = self.predict(horizon=horizon, n_scenarios=n_scenarios, seed=seed)
-        pivot = forecast.pivot(index="date", columns="scenario", values="n_sessions")
-
-        fig, ax_ = (None, ax) if ax is not None else plt.subplots(figsize=figsize)
-        ax_ = ax_ or plt.gca()
-
-        if self._daily_counts is not None:
-            self._daily_counts.plot(ax=ax_, label="Historical", color="#2E86AB", linewidth=1.2)
-        ax_.fill_between(
-            pivot.index,
-            pivot.quantile(0.1, axis=1),
-            pivot.quantile(0.9, axis=1),
-            alpha=0.2, color="#E84855", label="80% CI",
-        )
-        pivot.median(axis=1).plot(
-            ax=ax_, label="Median forecast", color="#E84855", linewidth=2
-        )
-        ax_.set_ylabel("Daily sessions")
-        ax_.set_title("Session count forecast")
-        ax_.legend()
-        ax_.grid(True, alpha=0.3)
-        if fig:
-            fig.tight_layout()
-        return ax_
+        return plot_forecast_fan(self, horizon, n_scenarios, seed, ax, figsize)
 
     def __repr__(self) -> str:
         return f"SessionForecaster(method={self.method!r}, fitted={self.is_fitted_})"
