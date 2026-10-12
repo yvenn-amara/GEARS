@@ -5,6 +5,44 @@ not necessarily when it lands on `main` (this repo uses a branch-and-PR workflow
 `REFACTOR_STATE.md` for full session-by-session detail, real measured numbers, and
 honestly-reported gaps behind every line below).
 
+## [Unreleased]
+
+### Breaking — removed from the public API (S2–S4)
+Experiment code moved to the private `GEARS_sandbox` repository: `DepartmentForecaster`,
+`aggregate_by_department`, `build_panel`, `crps_ensemble`, `PersistenceSessionSampler`,
+`run_benchmark_for_datasets`, `run_rolling_origin_benchmark`, `run_sarima_sanity_check`,
+`summarize_sarima_sanity_check`, `sessions_in_last_n_occurrences`.
+Pre-trained models: `ModelRegistry`, `NativeSessionModelRegistry`, `get_session_model`,
+`GEARSModel.from_native_gmm` and the Hugging Face hub are replaced by
+`gears.load_pretrained("french")` / `GEARSModel.from_pretrained("french")` /
+`GEARSModel.from_session_model(...)`; nothing is downloaded at `import gears` any more.
+`NHiTSForecaster` / `TransformerForecaster` now live in `gears.models.forecaster_dl`
+(import them from `gears.models`).
+
+### Changed (S5)
+- **CLI**: only `gears fit` and `gears simulate` remain. Removed `medium-term`,
+  `smart-charge`, `list-models` and `fit --gear`. Added `fit --stratify-by`,
+  `--max-components`, `--max-samples-per-context`, `--seed`. `simulate` requires exactly
+  one of `--model` / `--pretrained` (previously `--pretrained` silently won).
+- `GEARSModel` / `Gear1Backend` accept `max_components`; `GEARSModel(gear=n)` with
+  `n != 1` raises a one-line `NotImplementedError`.
+- **Logging**: the library no longer calls `print`. `verbose=True` now shows `INFO` messages
+  on stderr (previously stdout) through a temporary console handler; the per-context
+  "Fitted GMM" line is `DEBUG`, with one `INFO` summary.
+- `OutputAggregator` (`output/aggregator.py`): 982 → 586 lines by sharing the sampling and
+  annual-series code; `build_load_profiles` output is unchanged (bit-identical on fixed seeds).
+- `plot_forecast` of `SessionForecaster`, `TransformerForecaster` and `NHiTSForecaster`
+  delegates to the new `gears.plotting.plot_forecast_fan`.
+
+### Removed (S5)
+- Unused methods: `EVSessionModel.plot_components`, `MediumTermSimulator.plot_energy_trajectory`,
+  `ShortTermSimulator.compute_load_curve`, `SmartChargingOptimizer.plot_load_curve`.
+- `plot_session_heatmap`: the `x` and `y` parameters were never used.
+
+### Fixed
+- `pretrained._download_file` leaves no temporary file behind when a download fails.
+- Tests: `tests/test_forecaster.py` imports again (DL forecasters moved in S3).
+
 ## [2.0.0] — 2026-08 Phase 2 complete: GEAR architecture, naming, VAE integration, notebook overhaul, CI health
 
 Release-note-level summary of the full Phase 2 arc (11 sessions, 2026-08-02 → 2026-08-07).
