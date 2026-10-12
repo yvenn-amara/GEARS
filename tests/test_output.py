@@ -295,7 +295,7 @@ class TestReconstructSmartProfileHourly:
             "power_kw": [7.4, 7.4],
         })
         profile = _reconstruct_smart_profile_hourly(
-            result, date, resolution_min=30, n_sessions_per_day=1.0, n_total=1,
+            result, date, n_sessions_per_day=1.0, n_total=1,
         )
         np.testing.assert_array_equal(profile, np.zeros(24))
 
@@ -307,7 +307,7 @@ class TestReconstructSmartProfileHourly:
             "power_kw": [7.4],
         })
         profile = _reconstruct_smart_profile_hourly(
-            result, date, resolution_min=30, n_sessions_per_day=1.0, n_total=1,
+            result, date, n_sessions_per_day=1.0, n_total=1,
         )
         assert profile.sum() * 1.0 == pytest.approx(7.4, rel=1e-6)
         assert profile[2] > 0
@@ -319,7 +319,7 @@ class TestReconstructSmartProfileHourly:
             "energy": [7.4],
         })
         profile = _reconstruct_smart_profile_hourly(
-            result, date, resolution_min=30, n_sessions_per_day=1.0, n_total=1,
+            result, date, n_sessions_per_day=1.0, n_total=1,
         )
         assert profile.sum() * 1.0 == pytest.approx(7.4, rel=1e-6)
 
@@ -335,7 +335,7 @@ class TestBuildSmartTs:
         baseline = {(d, s): np.full(24, 1.0) for d in range(7)
                     for s in ("winter", "spring", "summer", "autumn")}
         ts = _build_smart_ts(
-            gmm=None, profiles_mw=baseline, smart_profiles_mw={},
+            profiles_mw=baseline, smart_profiles_mw={},
             year=2025, noise_std=0.0, seed=0,
         )
         assert isinstance(ts, pd.Series)
@@ -348,7 +348,7 @@ class TestBuildSmartTs:
         smart = {(d, s): np.full(24, 2.0) for d in range(7)
                  for s in ("winter", "spring", "summer", "autumn")}
         ts = _build_smart_ts(
-            gmm=None, profiles_mw=baseline, smart_profiles_mw=smart,
+            profiles_mw=baseline, smart_profiles_mw=smart,
             year=2025, noise_std=0.0, seed=0,
         )
         np.testing.assert_allclose(ts.values, 2.0)
