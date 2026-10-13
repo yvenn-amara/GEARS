@@ -5,6 +5,8 @@ zero-day-drop), R2 (sessions_to_daily_counts 1970-epoch date bug), and R4
 (NHiTSForecaster input_size/scaler_type defaults), relocated here so each regression guard lives next to the other tests for its
 subject class instead of in a fully parallel file. The bug-guard intent and
 "R<n>" labels are preserved in each test's docstring."""
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -221,11 +223,10 @@ def test_transformer_is_available():
     assert isinstance(result, bool)
 
 
-def test_transformer_import_error_message():
-    """Check that ImportError message is informative."""
-    fc = TransformerForecaster(horizon=7)
-    assert "neuralforecast" in fc._IMPORT_MSG.lower()
-    assert "torch" in fc._IMPORT_MSG.lower()
+def test_transformer_fit_without_neuralforecast_tells_how_to_install(monkeypatch):
+    monkeypatch.setitem(sys.modules, "neuralforecast", None)  # simulate "not installed"
+    with pytest.raises(ImportError, match=r'pip install "gears-ev\[dl\]"'):
+        TransformerForecaster(horizon=7).fit(make_sessions(100))
 
 
 @pytest.mark.skipif(
@@ -266,10 +267,10 @@ def test_nhits_is_available_returns_bool():
     assert isinstance(NHiTSForecaster.is_available(), bool)
 
 
-def test_nhits_import_msg_mentions_neuralforecast_and_torch():
-    msg = NHiTSForecaster(horizon=7)._IMPORT_MSG.lower()
-    assert "neuralforecast" in msg
-    assert "torch" in msg
+def test_nhits_fit_without_neuralforecast_tells_how_to_install(monkeypatch):
+    monkeypatch.setitem(sys.modules, "neuralforecast", None)  # simulate "not installed"
+    with pytest.raises(ImportError, match=r'pip install "gears-ev\[dl\]"'):
+        NHiTSForecaster(horizon=7).fit(make_sessions(100))
 
 
 def test_nhits_default_input_size_is_2x_horizon():

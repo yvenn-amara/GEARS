@@ -34,6 +34,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from gears._optional import require
+
 if TYPE_CHECKING:
     import torch
 
@@ -44,15 +46,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _require_torch():
-    try:
-        import torch
-        return torch
-    except ImportError as e:
-        raise ImportError(
-            "torch is required for VAE support.  Install it with:\n"
-            "  pip install torch --index-url https://download.pytorch.org/whl/cpu\n"
-            "or add it to your project with `uv add torch`."
-        ) from e
+    return require("torch", extra="vae", feature="VAE session models")
 
 
 # ---------------------------------------------------------------------------

@@ -10,9 +10,9 @@ Three forecasters with a unified interface:
 
 2. **TransformerForecaster** (PatchTST, optional)
    State-of-the-art transformer for time-series (Nie et al., ICLR 2023).
-   Requires the ``[transformer]`` optional extra::
+   Requires the ``[dl]`` optional extra::
 
-       pip install "gears-ev[transformer]"
+       pip install "gears-ev[dl]"
 
    The package works fully without it — if PyTorch / neuralforecast are not
    installed a clear ImportError is raised with installation instructions,
@@ -25,7 +25,7 @@ Three forecasters with a unified interface:
 4. **NHiTSForecaster** (NHiTS, optional)
    NHiTS (Challu et al., AAAI 2023). Requires PyTorch and neuralforecast::
 
-       uv pip install "gears-ev[dl]"
+       pip install "gears-ev[dl]"
 
    Implementation notes
    --------------------

@@ -6,9 +6,16 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from gears._optional import require
 from gears.models.forecaster import _make_forecast_df, sessions_to_daily_counts
 
 logger = logging.getLogger(__name__)
+
+
+def _require_neuralforecast(feature: str) -> None:
+    """Raise the standard ``pip install "gears-ev[dl]"`` error if torch or neuralforecast is missing."""
+    require("torch", extra="dl", feature=feature)
+    require("neuralforecast", extra="dl", feature=feature)
 
 
 class TransformerForecaster:
@@ -23,8 +30,7 @@ class TransformerForecaster:
 
     **This forecaster is optional.**  It requires PyTorch and neuralforecast::
 
-        pip install "gears-ev[transformer]"
-        # or: pip install neuralforecast torch
+        pip install "gears-ev[dl]"
 
     If these are not installed, a clear ``ImportError`` is raised.
     All other GEARS functionality works without them.
@@ -52,12 +58,6 @@ class TransformerForecaster:
     >>> fc.fit(df)
     >>> forecast = fc.predict(horizon=14, n_scenarios=50)
     """
-
-    _IMPORT_MSG = (
-        "TransformerForecaster requires neuralforecast and PyTorch.\n"
-        "Install with:  pip install 'gears-ev[transformer]'\n"
-        "or:            pip install neuralforecast torch"
-    )
 
     def __init__(
         self,
@@ -111,11 +111,9 @@ class TransformerForecaster:
         ImportError
             If neuralforecast or torch are not installed.
         """
-        try:
-            from neuralforecast import NeuralForecast
-            from neuralforecast.models import PatchTST
-        except ImportError:
-            raise ImportError(self._IMPORT_MSG)
+        _require_neuralforecast("TransformerForecaster")
+        from neuralforecast import NeuralForecast
+        from neuralforecast.models import PatchTST
 
         self._daily_counts = sessions_to_daily_counts(df)
         self.mean_daily_ = float(self._daily_counts.mean())
@@ -261,7 +259,7 @@ class NHiTSForecaster:
 
     **This forecaster is optional.**  It requires PyTorch and neuralforecast::
 
-        uv pip install "gears-ev[dl]"
+        pip install "gears-ev[dl]"
 
     Same interface as ``SessionForecaster`` and ``TransformerForecaster``.
 
@@ -311,12 +309,6 @@ class NHiTSForecaster:
         learning rates.
     random_state : int
     """
-
-    _IMPORT_MSG = (
-        "NHiTSForecaster requires neuralforecast and PyTorch.\n"
-        "Install with:  uv pip install 'gears-ev[dl]'\n"
-        "or:            pip install neuralforecast torch"
-    )
 
     def __init__(
         self,
@@ -387,10 +379,8 @@ class NHiTSForecaster:
         ImportError
             If neuralforecast or torch are not installed.
         """
-        try:
-            from neuralforecast import NeuralForecast
-        except ImportError:
-            raise ImportError(self._IMPORT_MSG)
+        _require_neuralforecast("NHiTSForecaster")
+        from neuralforecast import NeuralForecast
 
         self._daily_counts = sessions_to_daily_counts(df)
         self.mean_daily_ = float(self._daily_counts.mean())
