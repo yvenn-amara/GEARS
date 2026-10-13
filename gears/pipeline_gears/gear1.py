@@ -3,14 +3,8 @@ Gear1Backend – GEAR 1st: GMM/VAE session modeling, SARIMA/probabilistic
 session-count forecasting, short- and medium-term simulation, and V1G smart
 charging.
 
-This is today's pipeline (previously ``GEARSModel`` itself, prior to Phase 2
-Session 3's gear-dispatch refactor), moved essentially as-is behind the
-``GEARSModel(gear=1, ...)`` seam described in ``PROPOSAL_GEAR_ARCHITECTURE.md``.
-Behavior is unchanged from the pre-Session-3 ``GEARSModel`` for every existing
-caller; the only additions are ``model_type``, ``recency``, and
-``half_life_days`` becoming first-class constructor parameters (previously
-only reachable by constructing :class:`~gears.models.session_model.EVSessionModel`
-directly, bypassing the unified facade).
+Use it through :class:`gears.pipeline.GEARSModel` (``GEARSModel(gear=1, ...)``,
+or simply ``GEARSModel(...)`` since 1 is the default gear).
 """
 
 from __future__ import annotations
@@ -21,9 +15,9 @@ from typing import Literal
 
 import pandas as pd
 
+from gears._logging import console_logging
 from gears.data.loader import load_sessions
 from gears.models.forecaster import SessionForecaster
-from gears.models.registry import ModelRegistry, NativeSessionModelRegistry
 from gears.models.session_model import EVSessionModel
 from gears.output.aggregator import OutputAggregator
 from gears.simulation.medium_term import MediumTermSimulator
@@ -48,6 +42,8 @@ class Gear1Backend:
         GMM/VAE-context components passed to
         :class:`~gears.models.session_model.EVSessionModel`.
         Use ``'auto'`` for BIC-based selection (GMM only).
+    max_components : int
+        Upper bound of the BIC search when ``n_components='auto'``.
     stratify_by : list of str, optional
         Context columns for session-model stratification.
         Default: ``['day_of_week', 'season']``.
@@ -97,6 +93,7 @@ class Gear1Backend:
     def __init__(
         self,
         n_components: int | str = "auto",
+        max_components: int = 10,
         stratify_by: list[str] | None = None,
         forecaster_method: str = "sarima",
         charger_mix: dict[float, float] | None = None,
@@ -111,6 +108,7 @@ class Gear1Backend:
         half_life_days: float | None = None,
     ):
         self.n_components = n_components
+        self.max_components = max_components
         self.stratify_by = stratify_by or ["day_of_week", "season"]
         self.forecaster_method = forecaster_method
         self.charger_mix = charger_mix or {7.4: 0.5, 22.0: 0.5}
@@ -127,7 +125,6 @@ class Gear1Backend:
         self.gmm_: EVSessionModel | None = None
         self.forecaster_: SessionForecaster | None = None
         self._short_sim: ShortTermSimulator | None = None
-        self._medium_sim: MediumTermSimulator | None = None
         self.aggregator_ = OutputAggregator(resolution_min=resolution_min)
         self.metadata_: dict = {}
         self.is_fitted_: bool = False
@@ -140,26 +137,19 @@ class Gear1Backend:
     def from_pretrained(
         cls,
         model_id: str,
-        hf_repo_id: str | None = None,
         cache_dir: str | Path | None = None,
+        path: str | Path | None = None,
         **kwargs,
     ) -> Gear1Backend:
-        """Load a pre-trained model bundle from the GEARS registry."""
-        registry_kwargs = {}
-        if hf_repo_id:
-            registry_kwargs["hf_repo_id"] = hf_repo_id
-        if cache_dir:
-            registry_kwargs["cache_dir"] = cache_dir
+        """Build a backend from a pre-trained session model."""
+        from gears.pretrained import load_pretrained
 
-        registry = ModelRegistry(**registry_kwargs)
-        bundle = registry.load(model_id)
+        session_model = load_pretrained(model_id, path=path, cache_dir=cache_dir)
 
         instance = cls(**kwargs)
-        instance.gmm_ = bundle["gmm"]
-        instance.forecaster_ = bundle.get("forecaster") or SessionForecaster(
-            method="probabilistic"
-        )
-        instance.metadata_ = bundle.get("metadata", {})
+        instance.gmm_ = session_model
+        instance.forecaster_ = SessionForecaster(method="probabilistic")
+        instance.metadata_ = {"pretrained_model_id": model_id}
         instance._build_simulators()
         instance.is_fitted_ = True
 
@@ -167,20 +157,16 @@ class Gear1Backend:
         return instance
 
     @classmethod
-    def from_native_gmm(
+    def from_session_model(
         cls,
-        session_model_id: str = "french",
-        session_model_dir: Path | None = None,
+        session_model: EVSessionModel,
         **kwargs,
     ) -> Gear1Backend:
-        """Build a Gear1Backend from the pre-fitted unified French GMM."""
-        reg = NativeSessionModelRegistry(session_model_dir=session_model_dir)
-        gmm = reg.load(session_model_id)
-
+        """Build a Gear1Backend from a fitted session model."""
         instance = cls(**kwargs)
-        instance.gmm_ = gmm
+        instance.gmm_ = session_model
         instance.forecaster_ = SessionForecaster(method="probabilistic")
-        instance.metadata_ = {"native_session_model_id": session_model_id, **gmm.metadata_}
+        instance.metadata_ = {"source": "provided_session_model"}
         instance._build_simulators()
         instance.is_fitted_ = True
         return instance
@@ -199,53 +185,46 @@ class Gear1Backend:
         **loader_kwargs,
     ) -> Gear1Backend:
         """Fit the full GEAR 1st pipeline on a sessions dataset."""
-        df = load_sessions(
-            data, strict=strict, filter_failed=filter_failed,
-            verbose=verbose, **loader_kwargs
-        )
+        with console_logging(verbose):
+            df = load_sessions(
+                data, strict=strict, filter_failed=filter_failed,
+                verbose=verbose, **loader_kwargs
+            )
 
-        if verbose:
-            print(f"[GEARS] Fitting {self.model_type.upper()} on {len(df):,} sessions …")
-        self.gmm_ = EVSessionModel(
-            n_components=self.n_components,
-            stratify_by=self.stratify_by,
-            max_samples_per_context=self.max_samples_per_context,
-            recent_months=recent_months,
-            random_state=self.random_state,
-            model_type=self.model_type,
-            recency=self.recency,
-            half_life_days=self.half_life_days,
-        ).fit(df)
+            logger.info("Fitting %s on %d sessions …", self.model_type.upper(), len(df))
+            self.gmm_ = EVSessionModel(
+                n_components=self.n_components,
+                max_components=self.max_components,
+                stratify_by=self.stratify_by,
+                max_samples_per_context=self.max_samples_per_context,
+                recent_months=recent_months,
+                random_state=self.random_state,
+                model_type=self.model_type,
+                recency=self.recency,
+                half_life_days=self.half_life_days,
+            ).fit(df)
 
-        if verbose:
-            print(f"[GEARS] Fitting session-count forecaster ({self.forecaster_method}) …")
-        self.forecaster_ = SessionForecaster(
-            method=self.forecaster_method,
-            use_holidays=self.forecaster_use_holidays,
-            country=self.forecaster_country,
-            random_state=self.random_state,
-        ).fit(df)
+            logger.info("Fitting session-count forecaster (%s) …", self.forecaster_method)
+            self.forecaster_ = SessionForecaster(
+                method=self.forecaster_method,
+                use_holidays=self.forecaster_use_holidays,
+                country=self.forecaster_country,
+                random_state=self.random_state,
+            ).fit(df)
 
-        self._build_simulators()
-        self.is_fitted_ = True
+            self._build_simulators()
+            self.is_fitted_ = True
 
-        if verbose:
-            print("[GEARS] Fitting complete ✓")
-            print(repr(self.gmm_))
+            logger.info("Fitting complete ✓")
+            logger.info("%r", self.gmm_)
         return self
 
     def _build_simulators(self) -> None:
-        """Instantiate short- and medium-term simulators from fitted components."""
+        """Instantiate the short-term simulator from fitted components."""
         self._short_sim = ShortTermSimulator(
             gmm=self.gmm_,
             forecaster=self.forecaster_,
             charger_mix=self.charger_mix,
-        )
-        self._medium_sim = MediumTermSimulator(
-            gmm=self.gmm_,
-            charger_mix=self.charger_mix,
-            n_scenarios=self.n_scenarios,
-            seed=self.random_state,
         )
 
     # ------------------------------------------------------------------

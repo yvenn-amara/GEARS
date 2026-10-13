@@ -184,11 +184,10 @@ GEARS ships two pre-fitted native bundles, both stratified by
 ### Load a bundle
 
 ```python
-from gears import NativeSessionModelRegistry
+from gears import load_pretrained
 
-registry = NativeSessionModelRegistry()
-print(registry.list())        # 'french' and 'french_vae_sample'
-gmm = registry.load("french")
+print(load_pretrained("french")) # Load the French national bundle
+gmm = load_pretrained("french")
 ```
 
 > **Known gap:** `gmm_vae_french_sample.joblib`, the curated real VAE bundle, isn't
@@ -206,7 +205,7 @@ gmm = registry.load("french")
 import gears
 
 # Primary retrieval API — returns the full EVSessionModel wrapper
-gmm = gears.get_session_model("french")   # or "french_vae_sample" for the VAE
+gmm = gears.load_pretrained("french")   # or "french_vae_sample" for the VAE
 
 # Underlying sklearn GaussianMixture for a given stratum
 sk_gmm = gmm.get_sklearn_component(
@@ -404,7 +403,7 @@ See [`data/README.md`](data/README.md) for the 11 public benchmark datasets, the
 ```
 gears/
 ├── data/           loader, schemas, INSEE helpers, pre-fitted GMM/VAE bundles
-├── models/         EVSessionModel (GMM + VAE + recency), forecasters, registry, get_session_model()
+├── models/         EVSessionModel (GMM + VAE + recency), forecasters
 ├── pipeline.py     GEARSModel — gear-dispatching facade (GEAR 1st implemented, 2-5 reserved)
 ├── pipeline_gears/ per-GEAR backends (gear1.py today)
 ├── evaluation/     benchmark harness (4 arms), results cache, rolling-origin windowing

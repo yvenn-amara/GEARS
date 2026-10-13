@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from gears._logging import console_logging
 from gears.data.schemas import summary_stats, validate_dataframe
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ def load_sessions(
     filter_failed : bool
         French data only: drop sessions with ``succes_session != 't'``.
     verbose : bool
-        Print a short summary after loading.
+        Log a short summary (``INFO``) on the console after loading.
     **kwargs
         Extra keyword arguments forwarded to the underlying reader
         (e.g. ``sep=';'`` for CSV files).
@@ -77,14 +78,14 @@ def load_sessions(
 
     df = validate_dataframe(raw, strict=strict, filter_failed=filter_failed)
 
-    if verbose:
-        logger.info("Loaded %d sessions.", len(df))
-        print(f"[GEARS] Loaded {len(df):,} sessions.")
-        if "department" in df.columns:
-            print(f"[GEARS] Departments: {df['department'].nunique()}")
-        if "location_type" in df.columns:
-            print(f"[GEARS] Location types: {dict(df['location_type'].value_counts())}")
-        print(summary_stats(df).to_string())
+    with console_logging(verbose):
+        if logger.isEnabledFor(logging.INFO):
+            logger.info("Loaded %d sessions.", len(df))
+            if "department" in df.columns:
+                logger.info("Departments: %d", df["department"].nunique())
+            if "location_type" in df.columns:
+                logger.info("Location types: %s", df["location_type"].value_counts().to_dict())
+            logger.info("\n%s", summary_stats(df).to_string())
 
     return df
 

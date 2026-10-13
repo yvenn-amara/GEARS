@@ -21,7 +21,7 @@ producing up to 4 × 101 × 7 × 4 = 11 312 strata.
 A single ``EVSessionModel`` object covers all location types; the
 ``location_type`` dimension is just another context key.  Retrieve strata via:
 
-    model = gears.get_session_model("french")
+    model = load_pretrained("french")
     sk = model.get_sklearn_component(
         context={"location_type": "work", "department": "75",
                  "season": "winter", "day_of_week": 0}
@@ -29,8 +29,8 @@ A single ``EVSessionModel`` object covers all location types; the
 
 Pre-fitted GMMs
 ---------------
-The package ships with a single pre-fitted GMM bundle ``gmm_french.joblib``
-in gears/data/session_models/.  Use ``NativeSessionModelRegistry`` to load it without raw data.
+The package ships with a single pre-fitted GMM bundle ``gmm_french.joblib``.
+Use ``gears.load_pretrained("french")`` to load it without raw data.
 """
 
 from __future__ import annotations
@@ -63,6 +63,15 @@ DEFAULT_RECENCY_RESAMPLE_CAP = 5000
 # observed history span (in days) when half_life_days is not given
 # explicitly: half_life_days = span_days / DEFAULT_RECENCY_HALFLIFE_DIVISOR.
 DEFAULT_RECENCY_HALFLIFE_DIVISOR = 3.5
+
+
+def _library_versions() -> dict[str, str]:
+    """Versions of GEARS and scikit-learn, stored in ``EVSessionModel.metadata_``."""
+    import sklearn
+
+    from gears import __version__
+
+    return {"gears_version": __version__, "sklearn_version": sklearn.__version__}
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +305,7 @@ class EVSessionModel:
         Without this, plain attribute access on those attributes elsewhere
         in the class (``__repr__`` in particular: ``if self.recency:``)
         raises ``AttributeError`` on load — surfaced by notebook 1's
-        ``get_session_model()`` call. Backfilling with the same defaults ``__init__``
+        ``load_pretrained()`` call. Backfilling with the same defaults ``__init__``
         uses keeps old bundles loadable under the current code without
         needing to refit and re-commit them.
 
@@ -355,7 +364,9 @@ class EVSessionModel:
         """
         df = _add_context(df)
         self.is_sample_ = is_sample
-        self.metadata_ = metadata or {}
+        # Versions of the libraries the model is pickled with; load_pretrained()
+        # warns when scikit-learn differs at load time.
+        self.metadata_ = {**(metadata or {}), **_library_versions()}
 
         # Optional: keep only the most recent N months
         if self.recent_months is not None:
@@ -477,10 +488,13 @@ class EVSessionModel:
                 self.n_sessions_per_day_[ctx_tuple] = n / max(n_days, 1)
             self.context_counts_[ctx_tuple] = n
 
-            logger.info(
+            logger.debug(
                 "Fitted GMM(k=%d) for context %s on %d samples.",
                 gmm.n_components, ctx_tuple, n,
             )
+
+        if self.model_type == "gmm":
+            logger.info("Fitted %d GMM contexts.", len(self.models_))
 
         # VAE path: train a single shared model across all collected groups
         if self.model_type == "vae":
@@ -918,63 +932,8 @@ class EVSessionModel:
         return obj
 
     # ------------------------------------------------------------------
-    # Diagnostics / plots
+    # Diagnostics
     # ------------------------------------------------------------------
-
-    def plot_components(
-        self,
-        context: dict | None = None,
-        date: str | None = None,
-        ax=None,
-        figsize: tuple = (8, 4),
-    ):
-        """
-        Plot GMM component weights for a given context.
-
-        Parameters
-        ----------
-        context : dict, optional
-            Context dict passed to :meth:`_resolve_context`.
-        date : str, optional
-            Reference date used to infer context when *context* is None.
-        ax : matplotlib.axes.Axes, optional
-            Axes to draw on. Created if None.
-        figsize : tuple
-            Figure size in inches, used only when creating a new figure.
-
-        Returns
-        -------
-        matplotlib.axes.Axes
-            The axes containing the bar chart.
-        """
-        import matplotlib.pyplot as plt
-
-        self._check_fitted()
-        ctx_tuple = self._resolve_context(context, date)
-        gmm = self._get_model(ctx_tuple)
-        weights = gmm.weights_
-        k = len(weights)
-
-        fig, ax_ = (None, ax) if ax is not None else plt.subplots(figsize=figsize)
-        ax_ = ax_ or plt.gca()
-
-        colors = plt.cm.Blues(np.linspace(0.4, 0.9, k))
-        bars = ax_.bar(range(k), weights, color=colors, edgecolor="white")
-        ax_.set_xlabel("Component")
-        ax_.set_ylabel("Weight")
-        ax_.set_title(f"GMM component weights – context {ctx_tuple}")
-        ax_.set_xticks(range(k))
-
-        for bar, w in zip(bars, weights):
-            ax_.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.005,
-                f"{w:.2f}",
-                ha="center", va="bottom", fontsize=9,
-            )
-        if fig:
-            fig.tight_layout()
-        return ax_
 
     def plot_marginals(
         self,

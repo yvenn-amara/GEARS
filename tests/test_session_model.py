@@ -405,7 +405,7 @@ def test_recency_ignored_for_vae_with_warning(caplog):
 
 
 def test_unpickling_old_bundle_backfills_recency_attrs():
-    """Regression test for the bug notebook 1 surfaced via ``get_session_model()``.
+    """Regression test for the bug notebook 1 surfaced via ``load_pretrained()``.
 
     The committed ``gmm_french.joblib`` bundle was pickled before Session 2
     added the recency-weighting attributes to ``EVSessionModel.__init__``, so
@@ -533,7 +533,7 @@ def test_vae_sample_shape():
 
 
 def test_vae_sample_prior_adds_observation_noise():
-    """Regression test for the variance-collapse bug (AUDIT.md section d).
+    """Regression test for the variance-collapse bug.
 
     ``ConditionalVAE.sample_prior`` used to return ``decode(z, ctx_emb)``
     directly -- the decoder's mean output with zero observation noise --

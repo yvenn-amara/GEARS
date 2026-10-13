@@ -1,103 +1,22 @@
-# =============================================================================
-# gears-ev — .gitignore
-# =============================================================================
-
-# -----------------------------------------------------------------------------
-# Données locales -- structure + README tracked, real data files ignored
-# (Session 4: data/ now holds 11 public-benchmark subfolders + custom/, see
-# data/README.md; nothing under data/ can be committed by accident except the
-# directory tree itself, its .gitkeep placeholders, and the README.)
-# -----------------------------------------------------------------------------
-data/**
-!data/**/
-!data/**/.gitkeep
-!data/README.md
-scripts/simu.csv
-
-# -----------------------------------------------------------------------------
-# Notebooks à usage strictement local (non destinés au repo)
-# -----------------------------------------------------------------------------
-# scripts/compare_external.ipynb
-
-# -----------------------------------------------------------------------------
-# Figures générées
-# -----------------------------------------------------------------------------
-scripts/figures/
-
-# -----------------------------------------------------------------------------
-# Outputs et logs générés par les notebooks
-# -----------------------------------------------------------------------------
-notebooks/outputs/
-notebooks/lightning_logs/
-
-# -----------------------------------------------------------------------------
-# Checkpoints Jupyter (tous dossiers)
-# -----------------------------------------------------------------------------
-.ipynb_checkpoints/
-
-# -----------------------------------------------------------------------------
-# Environnements virtuels Python
-# -----------------------------------------------------------------------------
-.venv/
-venv/
-env/
-.uv/
-
-# -----------------------------------------------------------------------------
-# Lockfile uv
-# uv.lock n'est pas versionné ici car gears-ev est une bibliothèque (pas une
-# application déployée) : imposer des versions épinglées aux consommateurs du
-# package serait contre-productif. Les applications clientes gèrent leur propre
-# lockfile. Retirer cette ligne si le repo devient une application standalone.
-# -----------------------------------------------------------------------------
-uv.lock
-
-# -----------------------------------------------------------------------------
-# Fichiers Python compilés & artefacts de build
-# -----------------------------------------------------------------------------
+# Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
 *.egg-info/
-dist/
 build/
-*.egg
-MANIFEST
-*.whl
+dist/
+.venv/
 
-# -----------------------------------------------------------------------------
-# Outils de test & qualité de code
-# -----------------------------------------------------------------------------
+# Tool caches and reports
 .pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
-.mypy_cache/
 .ruff_cache/
-.tox/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
 
-# -----------------------------------------------------------------------------
-# IDE
-# -----------------------------------------------------------------------------
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
+# Data: your own files go in data/ and stay out of git (only the README is tracked)
+data/**
+!data/README.md
 
-# -----------------------------------------------------------------------------
-# OS
-# -----------------------------------------------------------------------------
-.DS_Store
-.DS_Store?
-._*
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# =============================================================================
-# RÈGLE CRITIQUE — Modèles pré-entraînés du package
-# Ces fichiers .joblib sont des artefacts utiles au fonctionnement du
-# package et doivent être récupérer via GitHub release et ne sont pas versionés
-# =============================================================================
-gears/data/session_models/*.joblib
+# Fitted models are release assets, not source
+*.joblib

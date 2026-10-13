@@ -1,9 +1,77 @@
 # Changelog
 
 All notable changes to GEARS are documented here. Dates are when each change was made,
-not necessarily when it lands on `main` (this repo uses a branch-and-PR workflow; see
-`REFACTOR_STATE.md` for full session-by-session detail, real measured numbers, and
-honestly-reported gaps behind every line below).
+not necessarily when it lands on `main` (this repo uses a branch-and-PR workflow).
+
+Entries up to 2.0.0 mention design documents (`REFACTOR_STATE.md`, `AUDIT.md`,
+`PROPOSAL_*.md`, `INVESTIGATION_*.md`), scripts and notebooks that were removed from the
+repository during the clean-up; they are still in the git history at the `pre-cleanup` tag.
+
+## [Unreleased]
+
+### Breaking — removed from the public API (S2–S4)
+Experiment code moved to the private `GEARS_sandbox` repository: `DepartmentForecaster`,
+`aggregate_by_department`, `build_panel`, `crps_ensemble`, `PersistenceSessionSampler`,
+`run_benchmark_for_datasets`, `run_rolling_origin_benchmark`, `run_sarima_sanity_check`,
+`summarize_sarima_sanity_check`, `sessions_in_last_n_occurrences`.
+Pre-trained models: `ModelRegistry`, `NativeSessionModelRegistry`, `get_session_model`,
+`GEARSModel.from_native_gmm` and the Hugging Face hub are replaced by
+`gears.load_pretrained("french")` / `GEARSModel.from_pretrained("french")` /
+`GEARSModel.from_session_model(...)`; nothing is downloaded at `import gears` any more.
+`NHiTSForecaster` / `TransformerForecaster` now live in `gears.models.forecaster_dl`
+(import them from `gears.models`).
+
+### Changed (S5)
+- **CLI**: only `gears fit` and `gears simulate` remain. Removed `medium-term`,
+  `smart-charge`, `list-models` and `fit --gear`. Added `fit --stratify-by`,
+  `--max-components`, `--max-samples-per-context`, `--seed`. `simulate` requires exactly
+  one of `--model` / `--pretrained` (previously `--pretrained` silently won).
+- `GEARSModel` / `Gear1Backend` accept `max_components`; `GEARSModel(gear=n)` with
+  `n != 1` raises a one-line `NotImplementedError`.
+- **Logging**: the library no longer calls `print`. `verbose=True` now shows `INFO` messages
+  on stderr (previously stdout) through a temporary console handler; the per-context
+  "Fitted GMM" line is `DEBUG`, with one `INFO` summary.
+- `OutputAggregator` (`output/aggregator.py`): 982 → 586 lines by sharing the sampling and
+  annual-series code; `build_load_profiles` output is unchanged (bit-identical on fixed seeds).
+- `plot_forecast` of `SessionForecaster`, `TransformerForecaster` and `NHiTSForecaster`
+  delegates to the new `gears.plotting.plot_forecast_fan`.
+
+### Removed (S5)
+- Unused methods: `EVSessionModel.plot_components`, `MediumTermSimulator.plot_energy_trajectory`,
+  `ShortTermSimulator.compute_load_curve`, `SmartChargingOptimizer.plot_load_curve`.
+- `plot_session_heatmap`: the `x` and `y` parameters were never used.
+
+### Added (S2–S4 fixes)
+- `load_pretrained(model_id, path=..., cache_dir=...)`, `GEARSModel.from_pretrained(..., path=...)`:
+  load the official file from a local path on a machine without internet access.
+- `GEARS_HOME` (cache folder, default `~/.cache/gears`) and `GEARS_OFFLINE=1` (never use the
+  network; a cached model is still used, otherwise `PretrainedModelError` says what to do).
+- `load_pretrained` warns, once and with the fix, when the installed scikit-learn differs from
+  the one the model was trained with. `EVSessionModel.fit` now records `gears_version` and
+  `sklearn_version` in `metadata_`.
+- `gears._optional.require`: one `ImportError` for every optional dependency
+  (`pip install "gears-ev[vae]"`, `pip install "gears-ev[dl]"`).
+
+### Changed (S2–S4 fixes)
+- **`import gears` is lazy** (PEP 562): a few milliseconds instead of ~1.2 s, and it no longer imports
+  pandas, scikit-learn or any submodule. `gears.<name>`, `from gears import <name>` and
+  `dir(gears)` behave as before; `gears.models` is lazy too. `gears.__all__` is unchanged
+  (20 names).
+- `load_pretrained`: the SHA-256 of `gmm_french.joblib` is now the real one (it was the hash of an
+  empty file, so every call failed the integrity check); a download is verified **before** it is
+  moved into the cache, so a corrupt or truncated file never lands there; the checksum also
+  applies to `path=`; the loaded object must be an `EVSessionModel`; the repository and release
+  tag live in `gears.pretrained.REPO` / `RELEASE_TAG`.
+- `data/README.md` reduced to the expected format and "put your files here".
+
+### Fixed
+- `pretrained._download_file` leaves no temporary file behind when a download fails, including
+  truncated transfers (`http.client.IncompleteRead`).
+- Install hints named an extra that does not exist (`gears-ev[transformer]`); they now say `[dl]`.
+- Tests: `tests/test_forecaster.py` imports again (DL forecasters moved in S3);
+  `tests/test_pretrained.py` mocked a function the code does not call.
+- 12 lines of double-encoded UTF-8 in `gears/models/forecaster_dl.py` docstrings.
+- Comments and docstrings no longer point to the design documents deleted in S2.
 
 ## [2.0.0] — 2026-08 Phase 2 complete: GEAR architecture, naming, VAE integration, notebook overhaul, CI health
 
