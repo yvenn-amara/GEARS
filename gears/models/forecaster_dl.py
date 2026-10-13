@@ -38,7 +38,7 @@ class TransformerForecaster:
         if ``predict(horizon=...)`` is called with a different horizon,
         the model is refitted automatically.
     input_size : int
-        Number of past days used as input context. Defaults to 4 Ã— horizon.
+        Number of past days used as input context. Defaults to 4 × horizon.
     max_steps : int
         Training steps.  200 is enough for typical EV datasets; increase
         for very long or noisy series.
@@ -265,12 +265,12 @@ class NHiTSForecaster:
 
     Same interface as ``SessionForecaster`` and ``TransformerForecaster``.
 
-    âš  SCOPE CONSTRAINT
+    ⚠ SCOPE CONSTRAINT
     -------------------
     This forecaster predicts **session counts** (``n_sessions``), NOT energy.
     It must be fitted on the **same department scope** as the actual counts
     it will be evaluated against.  Fitting on multi-department data and
-    evaluating against a single department produces ~N_deptÃ— systematic bias.
+    evaluating against a single department produces ~N_dept× systematic bias.
 
     Concretely:
     - Notebook 2 (dept 92 evaluation): ``fc_nhits.fit(train_sarima)``
@@ -288,7 +288,7 @@ class NHiTSForecaster:
         The old default of ``4 * horizon`` caused ``input_size=360`` for
         horizon=90.  On a 450-day training set this meant 80 % of the data
         was used as a single context window, leaving only 90 points to
-        compute the loss â€” effectively <1 full training epoch of gradient
+        compute the loss — effectively <1 full training epoch of gradient
         signal, producing random-walk behaviour.
 
         The effective value is additionally hard-capped at ``n_train // 2``
@@ -307,7 +307,7 @@ class NHiTSForecaster:
         Default ``"standard"`` (zero-mean, unit-variance).  Set to
         ``"robust"`` for heavy-tailed count data.  Set to ``"identity"``
         to disable.  Normalisation is critical: without it, raw session
-        counts (range 0â€“200) produce erratic gradients on default
+        counts (range 0–200) produce erratic gradients on default
         learning rates.
     random_state : int
     """
@@ -324,11 +324,11 @@ class NHiTSForecaster:
         input_size: int | None = None,
         max_steps: int = 200,           # Reduced from 300: fewer steps prevent overfitting on small datasets
         n_stacks: int = 3,
-        scaler_type: str = "standard",  # Explicitly set: normalisation is critical for raw count data (range 0â€“200)
+        scaler_type: str = "standard",  # Explicitly set: normalisation is critical for raw count data (range 0–200)
         random_state: int = 42,
     ):
         self.horizon = horizon
-        # Default context window is 2 Ã— horizon (down from 4 Ã—): the larger
+        # Default context window is 2 × horizon (down from 4 ×): the larger
         # value caused input_size=360 for horizon=90, consuming 80 % of a
         # typical training set as context and leaving too few windows for
         # gradient descent.  An additional hard cap at n_train // 2 is
@@ -364,7 +364,7 @@ class NHiTSForecaster:
         """
         Fit NHiTS on historical daily session counts.
 
-        âš  No-leakage contract
+        ⚠ No-leakage contract
         ----------------------
         ``df`` must contain ONLY training data (i.e. sessions strictly before
         the evaluation start date).  No shuffling is applied; the temporal
@@ -374,7 +374,7 @@ class NHiTSForecaster:
         ----------
         df : pd.DataFrame
             Validated sessions DataFrame (output of load_sessions).
-            Must cover the same dÃ©partement scope as the actual counts
+            Must cover the same département scope as the actual counts
             against which predictions will be evaluated.
 
         Returns
@@ -401,7 +401,7 @@ class NHiTSForecaster:
         # Hard-cap input_size at n // 2: ensures the model has at least n // 2
         # usable training windows of width input_size.  Without this cap, a
         # 450-day dataset with input_size=360 yields only ~90 non-overlapping
-        # windows â€” less than one full pass of gradient signal, causing the
+        # windows — less than one full pass of gradient signal, causing the
         # model to memorise the last few values (random-walk collapse).
         effective_input_size = min(self.input_size, max(n // 2, self.horizon + 1))
         logger.info(
@@ -442,8 +442,8 @@ class NHiTSForecaster:
 
         ``scaler_type`` is forwarded to NeuralForecast when the installed
         version supports it (â‰¥ 1.7).  Normalising the target series internally
-        before gradient updates is critical: raw session counts (range 0â€“200)
-        produce gradients ~100Ã— larger than normalised targets, causing erratic
+        before gradient updates is critical: raw session counts (range 0–200)
+        produce gradients ~100× larger than normalised targets, causing erratic
         training dynamics.
 
         Parameters
