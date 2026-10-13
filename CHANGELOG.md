@@ -53,7 +53,7 @@ Pre-trained models: `ModelRegistry`, `NativeSessionModelRegistry`, `get_session_
   (`pip install "gears-ev[vae]"`, `pip install "gears-ev[dl]"`).
 
 ### Changed (S2–S4 fixes)
-- **`import gears` is lazy** (PEP 562): ~6 ms instead of ~1.2 s, and it no longer imports
+- **`import gears` is lazy** (PEP 562): a few milliseconds instead of ~1.2 s, and it no longer imports
   pandas, scikit-learn or any submodule. `gears.<name>`, `from gears import <name>` and
   `dir(gears)` behave as before; `gears.models` is lazy too. `gears.__all__` is unchanged
   (20 names).
