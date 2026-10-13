@@ -38,8 +38,7 @@ def test_growth_profile_basic(fn, extra):
 def test_all_profiles_registered():
     """Session 6: reduced from 5 to 3 profiles (`s_curve_linear_tail` and
     `double_s_curve` cut — see gears/simulation/medium_term.py's module
-    docstring "Session 6 fix note" and REFACTOR_STATE.md for the
-    justification)."""
+    docstring "Session 6 fix note" for the justification)."""
     assert set(GROWTH_PROFILES.keys()) == {"linear", "s_curve", "bass"}
 
 
@@ -62,7 +61,7 @@ def test_growth_profile_anchors_at_base(fn, extra):
 
 def test_s_curve_saturation_timing_scales_with_horizon():
     """Session 6 regression test for the actual traced root cause of the
-    notebook 3 "plateau" (AUDIT.md §e / REFACTOR_STATE.md): with the old
+    notebook 3 "plateau": with the old
     fixed defaults (midpoint_year=2.5, steepness=1.5), the curve was ~100%
     saturated by year 8 *regardless of the requested horizon* — so a
     20-year simulation was completely flat for its last 12 years. With the
@@ -91,7 +90,7 @@ def test_s_curve_saturation_timing_scales_with_horizon():
 def test_linear_growth_profile_is_actually_linear():
     """Session 6 regression test: `linear_growth_profile` previously computed
     compound/exponential growth (`base * (1 + rate) ** t`) despite its name —
-    flagged in AUDIT.md §c. Must now match `base * (1 + rate * t)` exactly,
+    a real bug. Must now match `base * (1 + rate * t)` exactly,
     and must clearly differ from the old exponential formula at a long
     horizon (they agree only at t=0 and t=1)."""
     base, rate, years = 1000.0, 0.15, 15
@@ -119,7 +118,7 @@ class TestGrowthProfiles:
     """Property checks specific to individual profiles, not covered by the
     generic `test_growth_profile_basic` parametrization above (moved here
     from test_simulation.py — both files were testing linear_growth_profile
-    and s_curve_growth_profile; see AUDIT.md §g)."""
+    and s_curve_growth_profile)."""
 
     def test_linear_length(self):
         profile = linear_growth_profile(50, years=2)

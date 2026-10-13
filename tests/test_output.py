@@ -2,9 +2,9 @@
 Tests for gears.output – OutputAggregator.
 
 Phase 2 / Session 9 additions (below the original daily_energy/hourly_profile/
-export tests) target the module's biggest coverage gaps per AUDIT.md/the
-Session 9 brief: the private Monte-Carlo helper functions (_overlap_profile_24h,
-_draw_power_levels, _reconstruct_smart_profile_hourly, _build_smart_ts) and the
+export tests) target the module's biggest coverage gaps: the private Monte-Carlo
+helper functions (_overlap_profile_24h, _draw_power_levels,
+_reconstruct_smart_profile_hourly, _build_smart_ts) and the
 build_load_profiles() end-to-end method, which previously had zero direct
 test coverage despite being the module's largest and most load-bearing piece
 of logic.

@@ -2,8 +2,7 @@
 
 Includes former tests/test_regression.py content for R1 (PersistenceForecaster
 zero-day-drop), R2 (sessions_to_daily_counts 1970-epoch date bug), and R4
-(NHiTSForecaster input_size/scaler_type defaults), relocated here per
-AUDIT.md §g so each regression guard lives next to the other tests for its
+(NHiTSForecaster input_size/scaler_type defaults), relocated here so each regression guard lives next to the other tests for its
 subject class instead of in a fully parallel file. The bug-guard intent and
 "R<n>" labels are preserved in each test's docstring."""
 import numpy as np

@@ -1,6 +1,6 @@
 """Tests for smart charging optimizer — including Section 7 regression tests
 and the R3 compute_regret() scalar-value regression guards (relocated here
-from tests/test_regression.py per AUDIT.md §g; see test_compute_regret_basic
+from tests/test_regression.py; see test_compute_regret_basic
 for the bug this guards against)."""
 import pytest
 

@@ -81,7 +81,7 @@ def test_smart_charge():
 
 
 # ---------------------------------------------------------------------------
-# GEAR dispatch (Phase 2 / Session 3) — see PROPOSAL_GEAR_ARCHITECTURE.md
+# GEAR dispatch (Phase 2 / Session 3)
 # ---------------------------------------------------------------------------
 
 def test_gear_defaults_to_one_and_is_backward_compatible():

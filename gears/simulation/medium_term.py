@@ -35,9 +35,7 @@ Two earlier profiles (`s_curve_linear_tail_profile`, `double_s_curve_profile`)
 were removed: with the base-anchoring and horizon-relative-timing fixes below
 applied to `s_curve_growth_profile`, both added extra hyperparameters without
 materially differentiated behaviour for this package's three canonical
-adoption scenarios (conservative/central/ambitious — see notebook 3 and
-REFACTOR_STATE.md, Session 6, for the traced comparison that motivated the
-cut). Two bugs were fixed in the three remaining profiles, both found by
+adoption scenarios (conservative/central/ambitious). Two bugs were fixed in the three remaining profiles, both found by
 tracing concrete numbers rather than assumed:
 (1) `s_curve_growth_profile` and `bass_diffusion_profile` did not actually
 start at `base_sessions_per_day` at t=0 (s_curve started at ~2-7% of the
@@ -87,8 +85,8 @@ def linear_growth_profile(
     Genuinely linear in elapsed time: ``base * (1 + annual_growth_rate * t)``.
     (An earlier version of this function computed compound/exponential growth,
     ``base * (1 + rate) ** t``, despite its name — a real bug, not a design
-    choice: flagged in AUDIT.md §c and fixed in Session 6, traced by comparing
-    the two formulas' year-15 output directly; see REFACTOR_STATE.md.)
+    choice: fixed in Session 6, traced by comparing
+    the two formulas' year-15 output directly.)
 
     Parameters
     ----------
@@ -135,7 +133,7 @@ def s_curve_growth_profile(
     real discontinuity, not a design choice, when a scenario is meant to
     start "from the current observed fleet, not zero". Fixed in Session 6 by
     subtracting the raw curve's own t=0 value and rescaling the remainder to
-    span exactly [base, base*saturation_factor]; see REFACTOR_STATE.md.)
+    span exactly [base, base*saturation_factor].)
 
     Parameters
     ----------
@@ -149,8 +147,7 @@ def s_curve_growth_profile(
         Year at which growth rate is maximal. Defaults to ``years / 2`` —
         i.e. scales with the requested horizon. (The old fixed default of
         2.5 meant the curve was ~100% saturated by year 8 regardless of
-        whether `years` was 3 or 20 — see Session 6 trace in
-        REFACTOR_STATE.md for the numbers.)
+        whether `years` was 3 or 20.)
     steepness : float, optional
         Controls the slope of the S (larger = sharper transition). Defaults
         to ``6 / years`` so the curve reaches ~95% of the way to saturation
@@ -208,8 +205,7 @@ def bass_diffusion_profile(
     current baseline is. Confirmed by tracing the raw output: t=0 was exactly
     0 regardless of `base_sessions_per_day`. Fixed in Session 6 by treating
     the Bass cumulative-adoption fraction F(t) as tracking growth *beyond*
-    the current base rather than adoption from scratch; see
-    REFACTOR_STATE.md.)
+    the current base rather than adoption from scratch.)
 
     Parameters
     ----------
@@ -246,7 +242,7 @@ def bass_diffusion_profile(
 
 # Growth profile registry
 # Reduced from 5 to 3 in Session 6 (see module docstring "Session 6 fix note"
-# and REFACTOR_STATE.md for the justification: `s_curve_linear_tail_profile`
+# for the justification: `s_curve_linear_tail_profile`
 # and `double_s_curve_profile` added extra hyperparameters without materially
 # differentiated behaviour once the base-anchoring and horizon-relative-timing
 # bugs in `s_curve_growth_profile` were fixed, and neither mapped to any of
@@ -300,7 +296,7 @@ class MediumTermSimulator:
         `.simulate()` argument — passing `growth_model=` to `.simulate()` is
         silently ignored, since it isn't a growth-profile-function parameter;
         this was already true before Session 6 and the class-level example
-        below was previously wrong about it, see REFACTOR_STATE.md).
+        below was previously wrong about it).
     n_scenarios : int
     seed : int
 

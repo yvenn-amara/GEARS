@@ -1,17 +1,22 @@
 # Python
 __pycache__/
 *.py[cod]
-*.class
+*.egg-info/
+build/
+dist/
 .venv/
+
+# Tool caches and reports
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
 
-# Data
+# Data: your own files go in data/ and stay out of git (only the README is tracked)
 data/**
 !data/README.md
 
-# Models & Notebooks
+# Fitted models are release assets, not source
 *.joblib
-*.ipynb_checkpoints/
-*.egg-info/

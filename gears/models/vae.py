@@ -303,14 +303,14 @@ class ConditionalVAE:
         N(decoder(z,c), recon_var) -- i.e. draw from the full generative
         (observation) distribution, not just its mean.
 
-        Bug fixed here (see AUDIT.md section d): this used to return
+        Bug fixed here: this used to return
         ``decode(z, ctx_emb)`` directly, i.e. the decoder's mean output with
         zero observation noise. Since ``z`` is already a single draw from
         the prior, the *only* remaining source of sample-to-sample spread
         was however much the decoder's mean happens to vary across z draws
         -- which, once the KL term encourages a smooth decoder, collapses
         to near-zero variance relative to the real data (confirmed
-        empirically: sampled std ~10-150x too narrow, AUDIT.md section d).
+        empirically: sampled std ~10-150x too narrow).
         The model already learns an explicit observation variance
         (``log_recon_var``) for exactly this purpose during training
         (``elbo_loss``) and scoring (``iwae_log_prob``) -- ``sample_prior``
