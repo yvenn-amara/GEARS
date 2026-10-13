@@ -77,6 +77,7 @@ class GEARSModel:
         cls,
         model_id: str,
         cache_dir: str | Path | None = None,
+        path: str | Path | None = None,
         **kwargs,
     ) -> GEARSModel:
         """
@@ -88,6 +89,8 @@ class GEARSModel:
             Pre-trained model identifier (e.g. ``'french'``).
         cache_dir : str or Path, optional
             Local cache directory for downloaded artefacts.
+        path : str or Path, optional
+            Location of the model file, for machines without internet access.
         **kwargs
             Forwarded to the GEAR 1st backend constructor.
 
@@ -100,7 +103,7 @@ class GEARSModel:
         instance = cls.__new__(cls)
         instance.gear = 1
         instance._backend = Gear1Backend.from_pretrained(
-            model_id, cache_dir=cache_dir, **kwargs
+            model_id, cache_dir=cache_dir, path=path, **kwargs
         )
         return instance
 

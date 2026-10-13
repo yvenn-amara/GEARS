@@ -65,6 +65,15 @@ DEFAULT_RECENCY_RESAMPLE_CAP = 5000
 DEFAULT_RECENCY_HALFLIFE_DIVISOR = 3.5
 
 
+def _library_versions() -> dict[str, str]:
+    """Versions of GEARS and scikit-learn, stored in ``EVSessionModel.metadata_``."""
+    import sklearn
+
+    from gears import __version__
+
+    return {"gears_version": __version__, "sklearn_version": sklearn.__version__}
+
+
 # ---------------------------------------------------------------------------
 # Feature extraction
 # ---------------------------------------------------------------------------
@@ -355,7 +364,9 @@ class EVSessionModel:
         """
         df = _add_context(df)
         self.is_sample_ = is_sample
-        self.metadata_ = metadata or {}
+        # Versions of the libraries the model is pickled with; load_pretrained()
+        # warns when scikit-learn differs at load time.
+        self.metadata_ = {**(metadata or {}), **_library_versions()}
 
         # Optional: keep only the most recent N months
         if self.recent_months is not None:

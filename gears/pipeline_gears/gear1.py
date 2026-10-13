@@ -138,12 +138,13 @@ class Gear1Backend:
         cls,
         model_id: str,
         cache_dir: str | Path | None = None,
+        path: str | Path | None = None,
         **kwargs,
     ) -> Gear1Backend:
         """Build a backend from a pre-trained session model."""
         from gears.pretrained import load_pretrained
 
-        session_model = load_pretrained(model_id, cache_dir=cache_dir)
+        session_model = load_pretrained(model_id, path=path, cache_dir=cache_dir)
 
         instance = cls(**kwargs)
         instance.gmm_ = session_model
