@@ -25,6 +25,22 @@ aliases (`start_time`, `kwh`, `energy_kwh`, …). The authoritative list is
 [`gears/data/schemas.py`](../gears/data/schemas.py). The French national IRVE
 export is detected automatically and converted (Wh → kWh, minutes → hours).
 
+## Conventions
+
+- **Time.** `arrival_time` is **local wall-clock time** at the charging site, and simulated
+  `arrival_time` values are naive timestamps in that same local time. A time zone or UTC
+  offset is dropped and the clock reading kept (`08:00+02:00` becomes `08:00`), **not
+  converted**, and a warning says so. If your timestamps are in UTC, convert them first
+  (`df["arrival_time"].dt.tz_convert("Europe/Paris")`).
+- **Units.** Hours and kWh. A median energy above 200 or a median duration above 48 triggers a
+  warning ("probably Wh", "probably minutes").
+- **Filters.** Rows with `duration <= 0`, a negative or missing `energy`, `duration >= 168` h,
+  `energy >= 400` kWh, or an exact duplicate are dropped and counted by reason in one warning
+  (`strict=True` raises instead).
+- **Size.** At least 10 sessions overall; a stratification context (e.g. Monday x summer) with
+  fewer than 10 sessions gets no model of its own and is served by the closest fitted one
+  (one warning at `fit`, listed in `model.summary()`).
+
 ## Use it
 
 ```python
