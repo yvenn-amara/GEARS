@@ -14,9 +14,12 @@ forward or backward within each vehicle's connection window.
 from __future__ import annotations
 
 import logging
+import warnings
 
 import numpy as np
 import pandas as pd
+
+from gears._validation import check_float, check_int
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +66,19 @@ class SmartChargingOptimizer:
         if signal_type not in ("price", "res"):
             raise ValueError(f"signal_type must be 'price' or 'res', got '{signal_type}'")
         self.signal_type = signal_type
-        self.resolution_min = resolution_min
-        self.efficiency = efficiency
-        self.default_power_kw = default_power_kw
+        self.resolution_min = check_int(
+            resolution_min, "resolution_min", minimum=1, meaning="minutes per signal slot"
+        )
+        self.efficiency = check_float(
+            efficiency, "efficiency", gt=0, meaning="charging efficiency, in ]0, 1]"
+        )
+        if self.efficiency > 1:
+            raise ValueError(
+                f"efficiency must be <= 1 (charging efficiency, in ]0, 1]), got {efficiency}."
+            )
+        self.default_power_kw = check_float(
+            default_power_kw, "default_power_kw", gt=0, meaning="charger power in kW"
+        )
 
     # ------------------------------------------------------------------
     # Main optimisation
@@ -139,15 +152,18 @@ class SmartChargingOptimizer:
         sessions["_scheduled_start"] = pd.NaT
         sessions["_scheduled_end"] = pd.NaT
 
+        n_no_arrival = n_no_signal = n_truncated = 0
         for idx, row in sessions.iterrows():
             arrival_dt, departure_dt = self._get_window(row)
             if arrival_dt is None:
+                n_no_arrival += 1
                 continue
 
             window_sig = signal[
                 (signal.index >= arrival_dt) & (signal.index < departure_dt)
             ]
             if window_sig.empty:
+                n_no_signal += 1
                 continue
 
             energy_kwh = float(row["energy"])
@@ -155,6 +171,8 @@ class SmartChargingOptimizer:
                 else self.default_power_kw
             energy_needed = energy_kwh / self.efficiency
             slots_needed = int(np.ceil(energy_needed / (power_kw * res_h)))
+            if slots_needed > len(window_sig):
+                n_truncated += 1
             slots_needed = min(slots_needed, len(window_sig))
 
             # Plug-and-charge baseline: charge at arrival, first available slots.
@@ -185,12 +203,51 @@ class SmartChargingOptimizer:
             "_scheduled_end": "scheduled_end",
         }, inplace=True)
 
+        self._warn_unscheduled(len(sessions), n_no_arrival, n_no_signal, n_truncated, signal)
+
         mask = sessions["cost_plug"].notna() & (sessions["cost_plug"] > 0)
         sessions.loc[mask, "savings_pct"] = (
             (sessions.loc[mask, "cost_plug"] - sessions.loc[mask, "cost_smart"])
             / sessions.loc[mask, "cost_plug"] * 100
         )
         return sessions
+
+    def _warn_unscheduled(
+        self, n_total: int, n_no_arrival: int, n_no_signal: int, n_truncated: int,
+        signal: pd.Series,
+    ) -> None:
+        """Announce sessions that were not scheduled, or not fully, instead of hiding them."""
+        problems = []
+        if n_no_arrival:
+            problems.append(
+                f"{n_no_arrival} have no arrival information (need 'arrival_time', or "
+                "'date' and 'arrival_hour')"
+            )
+        if n_no_signal:
+            span = (
+                f"{signal.index.min()} to {signal.index.max()}" if len(signal) else "empty"
+            )
+            problems.append(
+                f"{n_no_signal} have no signal value during their plug-in window "
+                f"(the signal covers {span}) and got NaN costs"
+            )
+        if problems:
+            warnings.warn(
+                f"{n_no_arrival + n_no_signal} of {n_total} sessions were not optimised: "
+                + "; ".join(problems) + ". Pass a signal that covers all the sessions' dates.",
+                UserWarning,
+                stacklevel=3,
+            )
+        if n_truncated:
+            warnings.warn(
+                f"{n_truncated} of {n_total} sessions cannot be fully charged inside their "
+                f"plug-in window: energy / efficiency ({self.efficiency}) exceeds "
+                "power_kw x duration, so only the energy that fits is scheduled and their "
+                "costs are for less than the session's energy. Check the 'power_kw' and "
+                "'duration' of these sessions.",
+                UserWarning,
+                stacklevel=3,
+            )
 
     def _get_window(self, row: pd.Series):
         """
