@@ -13,18 +13,22 @@ import logging
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 from gears._logging import console_logging
+from gears._validation import as_naive_timestamp, check_int, not_fitted_error
 from gears.data.loader import load_sessions
 from gears.models.forecaster import SessionForecaster
-from gears.models.session_model import EVSessionModel
+from gears.models.session_model import MIN_SESSIONS_PER_CONTEXT, EVSessionModel
 from gears.output.aggregator import OutputAggregator
 from gears.simulation.medium_term import MediumTermSimulator
 from gears.simulation.short_term import ShortTermSimulator
 from gears.smart_charging.optimizer import SmartChargingOptimizer
 
 logger = logging.getLogger(__name__)
+
+_FORECASTER_METHODS = ("sarima", "probabilistic")
 
 
 class Gear1Backend:
@@ -48,7 +52,9 @@ class Gear1Backend:
         Context columns for session-model stratification.
         Default: ``['day_of_week', 'season']``.
     forecaster_method : str
-        ``'sarima'`` (recommended, requires pmdarima) or
+        ``'sarima'`` (recommended; with fewer than 28 days of history, or if
+        pmdarima cannot be imported, a warning announces the substitute used —
+        see :class:`~gears.models.forecaster.SessionForecaster`) or
         ``'probabilistic'`` (fast, no extra deps).
     charger_mix : dict, optional
         Charger power distribution, e.g. ``{7.4: 0.3, 22.0: 0.7}``.
@@ -107,6 +113,14 @@ class Gear1Backend:
         recency: bool | None = None,
         half_life_days: float | None = None,
     ):
+        if forecaster_method not in _FORECASTER_METHODS:
+            raise ValueError(
+                f"forecaster_method must be one of {list(_FORECASTER_METHODS)}, "
+                f"got {forecaster_method!r}."
+            )
+        n_scenarios = check_int(
+            n_scenarios, "n_scenarios", minimum=1, meaning="default number of scenarios"
+        )
         self.n_components = n_components
         self.max_components = max_components
         self.stratify_by = stratify_by or ["day_of_week", "season"]
@@ -238,27 +252,70 @@ class Gear1Backend:
         n_scenarios: int | None = None,
         n_sessions: int | None = None,
         seed: int | None = None,
+        strict: bool = False,
     ) -> pd.DataFrame:
-        """Simulate individual EV sessions for a short-term horizon."""
+        """
+        Simulate individual EV sessions for a short-term horizon.
+
+        Parameters
+        ----------
+        start_date : str or Timestamp
+            First day, read as local wall-clock time (a time zone is dropped,
+            not converted). Simulated ``arrival_time`` values are naive local
+            timestamps.
+        horizon : int
+            Number of days (an integer >= 1).
+        n_scenarios : int, optional
+            Number of scenarios (an integer >= 1); defaults to the value given
+            at construction. Ignored when ``n_sessions`` is given.
+        n_sessions : int, optional
+            Simulate exactly this many sessions per day (one scenario, no
+            ``scenario`` column) instead of drawing daily counts from the
+            forecaster.
+        seed : int, optional
+            Random seed. The same seed gives the same sessions; ``None`` draws
+            fresh randomness on every call.
+        strict : bool, default False
+            Raise ``ValueError`` instead of warning when the session model has
+            no mixture for a day's context and the closest one would be used.
+
+        Raises
+        ------
+        sklearn.exceptions.NotFittedError
+            If the model is not fitted.
+        ValueError
+            If ``horizon``, ``n_scenarios`` or ``n_sessions`` is not an integer
+            >= 1, or ``start_date`` is not a valid date.
+        """
         self._check_fitted()
-        n_sc = n_scenarios or self.n_scenarios
+        horizon = check_int(horizon, "horizon", minimum=1, meaning="number of days to simulate")
+        n_sc = check_int(
+            self.n_scenarios if n_scenarios is None else n_scenarios,
+            "n_scenarios", minimum=1, meaning="number of stochastic scenarios",
+        )
+        start = as_naive_timestamp(start_date, "start_date")
 
         if n_sessions is not None:
-            frames = []
-            for day_offset in range(horizon):
-                day = pd.Timestamp(start_date) + pd.Timedelta(days=day_offset)
-                day_df = self._short_sim.simulate_single_day(
-                    date=day, n_sessions=n_sessions,
-                    seed=(seed or 0) + day_offset,
+            n_sessions = check_int(n_sessions, "n_sessions", minimum=1, meaning="sessions per day")
+            # One independent seed per day: consecutive seeds must not share days.
+            day_seeds = np.random.default_rng(seed).integers(0, 2**31, size=horizon)
+            frames = [
+                self._short_sim.simulate_single_day(
+                    date=start + pd.Timedelta(days=day_offset),
+                    n_sessions=n_sessions,
+                    seed=int(day_seeds[day_offset]),
+                    strict=strict,
                 )
-                frames.append(day_df)
-            return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+                for day_offset in range(horizon)
+            ]
+            return pd.concat(frames, ignore_index=True)
 
         return self._short_sim.simulate(
-            start_date=start_date,
+            start_date=start,
             horizon=horizon,
             n_scenarios=n_sc,
             seed=seed,
+            strict=strict,
         )
 
     def simulate_medium_term(
@@ -273,13 +330,23 @@ class Gear1Backend:
         charger_mix: dict[float, float] | None = None,
         saturation_factor: float = 3.0,
     ) -> pd.DataFrame:
-        """Simulate aggregated EV demand over a multi-year horizon."""
+        """Simulate aggregated EV demand over a multi-year horizon.
+
+        Raises
+        ------
+        sklearn.exceptions.NotFittedError
+            If the model is not fitted.
+        ValueError
+            If ``years`` is not > 0, ``annual_growth_rate`` is <= -1,
+            ``n_scenarios`` is not an integer >= 1, ``start_date`` is not a valid
+            date, or ``growth_model`` / ``output`` is not recognised.
+        """
         self._check_fitted()
         sim = MediumTermSimulator(
             gmm=self.gmm_,
             charger_mix=charger_mix or self.charger_mix,
             growth_model=growth_model,
-            n_scenarios=n_scenarios or self.n_scenarios,
+            n_scenarios=self.n_scenarios if n_scenarios is None else n_scenarios,
             seed=self.random_state,
         )
         return sim.simulate(
@@ -333,11 +400,11 @@ class Gear1Backend:
     # ------------------------------------------------------------------
 
     def _check_fitted(self) -> None:
-        """Raise RuntimeError if the model has not been fitted yet."""
+        """Raise ``NotFittedError`` if the model has not been fitted yet."""
         if not self.is_fitted_:
-            raise RuntimeError(
-                "This GEARSModel instance is not fitted yet. "
-                "Call .fit(data) or use GEARSModel.from_pretrained(model_id)."
+            raise not_fitted_error(
+                "GEARSModel",
+                "Call .fit(data) first, or use GEARSModel.from_pretrained('french').",
             )
 
     def summary(self) -> str:
@@ -348,6 +415,7 @@ class Gear1Backend:
         else:
             lines.append("Status     : fitted ✓")
             lines.append(f"GMM        : {self.gmm_}")
+            lines.extend(self._context_coverage_lines())
             lines.append(f"Forecaster : {self.forecaster_}")
             lines.append(f"Charger mix: {self.charger_mix}")
             lines.append(f"Scenarios  : {self.n_scenarios}")
@@ -355,6 +423,26 @@ class Gear1Backend:
                 lines.append(f"Metadata   : {self.metadata_}")
         lines.append("=" * 55)
         return "\n".join(lines)
+
+    def _context_coverage_lines(self) -> list[str]:
+        """Summary lines on sparse contexts and on substitutions made so far."""
+        gmm = self.gmm_
+        lines = []
+        skipped = getattr(gmm, "skipped_contexts_", None)
+        if skipped:
+            n_fitted = len(gmm.models_)
+            lines.append(
+                f"Contexts   : {n_fitted} fitted; {len(skipped)} with < "
+                f"{MIN_SESSIONS_PER_CONTEXT} sessions have no model of their own and use "
+                "the closest fitted context (model.gmm_.skipped_contexts_)"
+            )
+        fallbacks = getattr(gmm, "fallback_contexts_", None)
+        if fallbacks:
+            lines.append(
+                f"Fallbacks  : {len(fallbacks)} requested context(s) not fitted, "
+                "closest used (model.gmm_.fallback_contexts_)"
+            )
+        return lines
 
     def __repr__(self) -> str:
         status = "fitted" if self.is_fitted_ else "not fitted"

@@ -64,6 +64,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from gears._validation import as_naive_timestamp, check_float, check_int
 from gears.data.schemas import _season
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,8 @@ def linear_growth_profile(
     n_days = max(1, round(365.25 * years))
     dates = pd.date_range(start, periods=n_days, freq="D")
     t = np.arange(n_days) / 365.25
-    counts = base_sessions_per_day * (1 + annual_growth_rate * t)
+    # A shrinking fleet cannot have a negative number of sessions: clamp at 0.
+    counts = np.maximum(base_sessions_per_day * (1 + annual_growth_rate * t), 0.0)
     return pd.Series(counts, index=dates, name="n_sessions_expected")
 
 
@@ -381,14 +383,32 @@ class MediumTermSimulator:
 
         Raises
         ------
+        sklearn.exceptions.NotFittedError
+            If the session model is not fitted.
         ValueError
-            If *output* or *growth_model* is not recognised.
+            If *output* or *growth_model* is not recognised, ``years`` is not a
+            finite number > 0, ``annual_growth_rate`` is not a finite number
+            > -1, ``n_scenarios`` is not an integer >= 1, or ``start_date`` is
+            not a valid date.
         """
         if output not in ("daily_energy", "hourly_energy", "sessions"):
-            raise ValueError("output must be 'daily_energy', 'hourly_energy', or 'sessions'.")
-
-        n_sc = n_scenarios or self.n_scenarios
-        start = pd.Timestamp(start_date) if start_date else pd.Timestamp.today().normalize()
+            raise ValueError(
+                f"output must be 'daily_energy', 'hourly_energy' or 'sessions', got {output!r}."
+            )
+        self.gmm._check_fitted()
+        years = check_float(years, "years", gt=0, meaning="simulation horizon in years")
+        annual_growth_rate = check_float(
+            annual_growth_rate, "annual_growth_rate", gt=-1,
+            meaning="0.15 = +15% of the starting level per year; -1 would reach zero within a year",
+        )
+        n_sc = check_int(
+            self.n_scenarios if n_scenarios is None else n_scenarios,
+            "n_scenarios", minimum=1, meaning="number of stochastic scenarios",
+        )
+        start = (
+            as_naive_timestamp(start_date, "start_date")
+            if start_date is not None else pd.Timestamp.today().normalize()
+        )
         rng = np.random.default_rng(self.seed)
 
         # Build growth profile
