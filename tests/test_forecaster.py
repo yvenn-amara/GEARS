@@ -10,6 +10,7 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.exceptions import NotFittedError
 
 from gears.data.schemas import validate_dataframe
 from gears.models.forecaster import (
@@ -148,7 +149,7 @@ def test_invalid_method():
 
 def test_predict_before_fit():
     fc = SessionForecaster()
-    with pytest.raises(RuntimeError):
+    with pytest.raises(NotFittedError):
         fc.predict(horizon=3)
 
 
@@ -172,7 +173,7 @@ def test_persistence_single_scenario():
 
 def test_persistence_before_fit():
     fc = PersistenceForecaster()
-    with pytest.raises(RuntimeError):
+    with pytest.raises(NotFittedError):
         fc.predict(horizon=3)
 
 
@@ -291,7 +292,7 @@ def test_nhits_scaler_type_default_is_standard():
 
 
 def test_nhits_predict_before_fit_raises():
-    with pytest.raises(RuntimeError, match="fit"):
+    with pytest.raises(NotFittedError, match="fit"):
         NHiTSForecaster(horizon=7).predict(horizon=7)
 
 
