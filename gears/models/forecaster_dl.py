@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from gears._optional import require
+from gears._validation import not_fitted_error
 from gears.models.forecaster import _make_forecast_df, sessions_to_daily_counts
 
 logger = logging.getLogger(__name__)
@@ -175,7 +176,9 @@ class TransformerForecaster:
             Columns: date, scenario, n_sessions.
         """
         if not self.is_fitted_:
-            raise RuntimeError("Call .fit() before predict().")
+            raise not_fitted_error(
+                "TransformerForecaster", "Call .fit(sessions) before .predict()."
+            )
 
         if horizon != self._fitted_horizon:
             logger.warning(
@@ -505,7 +508,9 @@ class NHiTSForecaster:
             pivot_energy = pivot_nhits * mean_kwh
         """
         if not self.is_fitted_:
-            raise RuntimeError("Call .fit() before predict().")
+            raise not_fitted_error(
+                "NHiTSForecaster", "Call .fit(sessions) before .predict()."
+            )
 
         if horizon != self._fitted_horizon:
             logger.warning(
