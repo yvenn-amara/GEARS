@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import warnings
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -45,6 +46,7 @@ import numpy as np
 import pandas as pd
 from sklearn.mixture import GaussianMixture
 
+from gears._validation import as_naive_timestamp, check_int, not_fitted_error
 from gears.data.schemas import _season
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,13 @@ DEFAULT_RECENCY_RESAMPLE_CAP = 5000
 # observed history span (in days) when half_life_days is not given
 # explicitly: half_life_days = span_days / DEFAULT_RECENCY_HALFLIFE_DIVISOR.
 DEFAULT_RECENCY_HALFLIFE_DIVISOR = 3.5
+
+# A context (one combination of the stratify_by columns) needs at least this many
+# sessions to get its own model; smaller ones are served by the closest fitted
+# context (see EVSessionModel.skipped_contexts_). The same number is the minimum
+# size of the whole dataset.
+MIN_SESSIONS_PER_CONTEXT = 10
+MIN_SESSIONS_TOTAL = MIN_SESSIONS_PER_CONTEXT
 
 
 def _library_versions() -> dict[str, str]:
@@ -235,6 +244,15 @@ class EVSessionModel:
     recency_reference_date_used_ : pd.Timestamp or None
         The reference date actually used for recency weighting, populated
         only when ``recency`` is enabled.
+    skipped_contexts_ : dict or None
+        ``{context: n_sessions}`` for the contexts with fewer than
+        ``MIN_SESSIONS_PER_CONTEXT`` (10) sessions, which got no model of their
+        own and are served by the closest fitted context. ``None`` for bundles
+        saved before this was recorded.
+    fallback_contexts_ : dict
+        ``{requested context: fitted context used}`` for every request that was
+        not an exact match, filled as you sample. The first one raises a
+        ``UserWarning``; ``sample(..., strict=True)`` raises instead.
     """
 
     def __init__(
@@ -295,6 +313,11 @@ class EVSessionModel:
         self.metadata_: dict = {}
         self.half_life_days_used_: dict[tuple, float] = {}
         self.recency_reference_date_used_: pd.Timestamp | None = None
+        # context tuple -> number of sessions, for contexts too small to be fitted
+        self.skipped_contexts_: dict[tuple, int] | None = {}
+        # requested context -> fitted context used instead (filled while sampling)
+        self.fallback_contexts_: dict[tuple, tuple] = {}
+        self._fallback_warned = False
 
     def __setstate__(self, state: dict) -> None:
         """Restore instance state from unpickling.
@@ -330,6 +353,9 @@ class EVSessionModel:
             "half_life_days_used_": {},
             "recency_reference_date_used_": None,
             "model_type": "gmm",
+            "skipped_contexts_": None,   # not recorded by older bundles
+            "fallback_contexts_": {},
+            "_fallback_warned": False,
         }
         for key, default in defaults.items():
             state.setdefault(key, default)
@@ -362,8 +388,30 @@ class EVSessionModel:
         EVSessionModel
             The fitted model (``self``), allowing method chaining.
         """
+        missing = [c for c in ("arrival_time", "duration", "energy") if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"EVSessionModel.fit needs the columns {missing}. Pass the output of "
+                "gears.load_sessions(...) (or validate_dataframe), which also converts "
+                "units and parses dates."
+            )
+        n_total = len(df)
+        if n_total < MIN_SESSIONS_TOTAL:
+            raise ValueError(
+                f"Cannot fit a session model on {n_total} session(s): at least "
+                f"{MIN_SESSIONS_TOTAL} are needed, and each stratification context needs "
+                f"{MIN_SESSIONS_PER_CONTEXT} of its own. Provide more data, or check that "
+                "your filters did not remove most of it."
+            )
         df = _add_context(df)
         self.is_sample_ = is_sample
+        # Start from a clean state: refitting must not keep contexts of an earlier fit.
+        self.models_ = {}
+        self.n_sessions_per_day_ = {}
+        self.context_counts_ = {}
+        self.skipped_contexts_ = {}
+        self.fallback_contexts_ = {}
+        self._fallback_warned = False
         # Versions of the libraries the model is pickled with; load_pretrained()
         # warns when scikit-learn differs at load time.
         self.metadata_ = {**(metadata or {}), **_library_versions()}
@@ -398,6 +446,12 @@ class EVSessionModel:
                 missing_cols, kept_cols,
             )
             self.stratify_by = kept_cols
+            if not kept_cols:
+                raise ValueError(
+                    f"None of the stratify_by columns {missing_cols} exists in the data "
+                    f"(columns: {list(df.columns)}). Name at least one existing column, "
+                    "e.g. stratify_by=['day_of_week', 'season']."
+                )
 
         # Recency-weighted resampling (opt-in) is only implemented for the
         # GMM path; VAE fitting collects raw groups and trains a single
@@ -422,17 +476,40 @@ class EVSessionModel:
 
         groups = df.groupby(self.stratify_by, observed=True)
 
+        # Contexts too small for a model of their own: one summary, not one warning each.
+        sizes = {
+            (k if isinstance(k, tuple) else (k,)): int(v) for k, v in groups.size().items()
+        }
+        self.skipped_contexts_ = {
+            k: v for k, v in sizes.items() if v < MIN_SESSIONS_PER_CONTEXT
+        }
+        if len(self.skipped_contexts_) == len(sizes):
+            raise ValueError(
+                f"No stratification context has {MIN_SESSIONS_PER_CONTEXT} sessions: the "
+                f"{n_total} sessions are spread over {len(sizes)} contexts "
+                f"(stratify_by={self.stratify_by}, largest context: {max(sizes.values())}). "
+                "Stratify by fewer columns, e.g. stratify_by=['day_of_week'], or provide "
+                "more data."
+            )
+        if self.skipped_contexts_:
+            n_skipped = sum(self.skipped_contexts_.values())
+            warnings.warn(
+                f"{len(self.skipped_contexts_)} of {len(sizes)} contexts have fewer than "
+                f"{MIN_SESSIONS_PER_CONTEXT} sessions ({n_skipped:,} sessions, "
+                f"{100 * n_skipped / n_total:.1f}% of the data) and get no model of their "
+                "own: requests for them use the closest fitted context. To reduce this, "
+                "stratify by fewer columns or provide more data; the list is in "
+                "model.skipped_contexts_ (and model.summary() when using GEARSModel).",
+                UserWarning,
+                stacklevel=2,
+            )
+
         retained_groups: list[tuple[tuple, pd.DataFrame]] = []
 
         for ctx_key, group_df in groups:
             ctx_tuple = ctx_key if isinstance(ctx_key, tuple) else (ctx_key,)
             n = len(group_df)
-            if n < 10:
-                warnings.warn(
-                    f"Context {ctx_tuple} has only {n} samples – skipping.",
-                    UserWarning,
-                    stacklevel=2,
-                )
+            if ctx_tuple in self.skipped_contexts_:
                 continue
 
             # Recency-weighted bootstrap resample (opt-in). Replaces the
@@ -498,12 +575,15 @@ class EVSessionModel:
 
         # VAE path: train a single shared model across all collected groups
         if self.model_type == "vae":
-            if not retained_groups:
-                raise RuntimeError("No contexts with enough samples for VAE. Check data quality.")
             self._fit_vae(df, retained_groups)
 
         if not self.models_:
-            raise RuntimeError("No GMM was fitted. Check data quality.")
+            raise RuntimeError(
+                f"No mixture model could be fitted ({len(sizes) - len(self.skipped_contexts_)} "
+                "contexts were large enough, but every fit failed). The data are probably "
+                "degenerate (e.g. constant duration or energy): check them with "
+                "gears.data.schemas.summary_stats(df)."
+            )
 
         self.is_fitted_ = True
         return self
@@ -728,6 +808,7 @@ class EVSessionModel:
         context: dict | None = None,
         date: str | pd.Timestamp | None = None,
         seed: int | None = None,
+        strict: bool = False,
     ) -> pd.DataFrame:
         """
         Generate synthetic EV sessions.
@@ -735,23 +816,40 @@ class EVSessionModel:
         Parameters
         ----------
         n_sessions : int
-            Number of sessions to generate.
+            Number of sessions to generate (an integer >= 1).
         context : dict, optional
             Explicit context, e.g. {'day_of_week': 1, 'season': 'winter'}.
             If None, inferred from ``date``.
         date : str or Timestamp, optional
-            Reference date used to infer context if context is None.
+            Reference date used to infer context if context is None. Read as
+            local wall-clock time (a time zone is dropped, not converted).
         seed : int, optional
             Random seed.
+        strict : bool, default False
+            What to do when no mixture model was fitted for the requested
+            context. ``False``: use the closest fitted context and warn once
+            (see ``fallback_contexts_``). ``True``: raise ``ValueError``.
 
         Returns
         -------
         pd.DataFrame
             Columns: arrival_hour, duration, energy, [arrival_time].
+
+        Raises
+        ------
+        sklearn.exceptions.NotFittedError
+            If the model is not fitted.
+        ValueError
+            If ``n_sessions`` is not an integer >= 1, ``context`` is not a
+            dict, ``date`` is not a valid date, or ``strict`` is True and the
+            context was not fitted.
         """
         self._check_fitted()
+        n_sessions = check_int(n_sessions, "n_sessions", minimum=1)
+        if date is not None:
+            date = as_naive_timestamp(date, "date")
         ctx_tuple = self._resolve_context(context, date)
-        gmm = self._get_model(ctx_tuple)
+        gmm = self._get_model(ctx_tuple, strict=strict)
 
         rng = np.random.default_rng(seed)
         gmm.random_state = int(rng.integers(0, 2**31))
@@ -1010,9 +1108,13 @@ class EVSessionModel:
     # ------------------------------------------------------------------
 
     def _check_fitted(self) -> None:
-        """Raise RuntimeError if the model has not been fitted yet."""
+        """Raise ``NotFittedError`` if the model has not been fitted yet."""
         if not self.is_fitted_:
-            raise RuntimeError("Call .fit() before using this method.")
+            raise not_fitted_error(
+                "EVSessionModel",
+                "Call .fit(sessions) first, or load a fitted model with "
+                "gears.load_pretrained('french').",
+            )
 
     def _resolve_context(
         self,
@@ -1037,10 +1139,17 @@ class EVSessionModel:
             Values ordered according to ``stratify_by``.
         """
         if context is not None:
+            if not isinstance(context, Mapping):
+                raise ValueError(
+                    "context must be a dict such as "
+                    f"{{'day_of_week': 1, 'season': 'winter'}}, got {context!r} "
+                    f"of type {type(context).__name__}. This model is stratified by "
+                    f"{self.stratify_by}."
+                )
             return tuple(context.get(k) for k in self.stratify_by)
 
         if date is not None:
-            ts = pd.Timestamp(date)
+            ts = as_naive_timestamp(date, "date")
             ctx: dict = {}
             if "day_of_week" in self.stratify_by:
                 ctx["day_of_week"] = ts.dayofweek
@@ -1057,40 +1166,68 @@ class EVSessionModel:
             return max(self.context_counts_, key=lambda k: self.context_counts_[k])
         return next(iter(self.models_))
 
-    def _get_model(self, ctx_tuple: tuple) -> GaussianMixture:
-        """Return GMM for context, with smart fallback chain.
+    def _closest_context(self, ctx_tuple: tuple) -> tuple:
+        """Key of the fitted context used when ``ctx_tuple`` was not fitted.
 
-        The fallback tries progressively shorter prefix matches before
-        settling on the globally most-populous model.  This handles rare
-        contexts (e.g. uncommon departments) gracefully without raising.
+        Tries progressively shorter prefixes of ``ctx_tuple`` (so the last
+        ``stratify_by`` keys are dropped first), then the most populous context.
+        """
+        for width in range(len(ctx_tuple) - 1, 0, -1):
+            prefix = ctx_tuple[:width]
+            for key in self.models_:
+                if key[:width] == prefix:
+                    return key
+        return max(self.context_counts_, key=lambda k: self.context_counts_[k])
+
+    def _get_model(self, ctx_tuple: tuple, strict: bool = False) -> GaussianMixture:
+        """Return the GMM for a context, falling back to the closest fitted one.
 
         Parameters
         ----------
         ctx_tuple : tuple
             Context tuple produced by :meth:`_resolve_context`.
+        strict : bool
+            Raise ``ValueError`` instead of falling back.
 
         Returns
         -------
         GaussianMixture
-            The best available fitted model for the requested context.
+            The fitted model for the requested context or, if there is none and
+            ``strict`` is False, the closest one. Each substitution is recorded
+            in ``fallback_contexts_`` and announced by a warning (once per model).
         """
         if ctx_tuple in self.models_:
             return self.models_[ctx_tuple]
 
-        # Try partial matches (ignore department, then ignore season)
-        for width in range(len(ctx_tuple) - 1, 0, -1):
-            prefix = ctx_tuple[:width]
-            for key in self.models_:
-                if key[:width] == prefix:
-                    logger.debug(
-                        "Context %s not found; falling back to %s.", ctx_tuple, key
-                    )
-                    return self.models_[key]
+        asked = dict(zip(self.stratify_by, ctx_tuple))
+        given = {k: v for k, v in asked.items() if v is not None}
+        not_given = [k for k, v in asked.items() if v is None]
+        what = (
+            f"No mixture model was fitted for context {given or '{}'}"
+            + (f" ({', '.join(not_given)} not given)" if not_given else "")
+            + f"; this model is stratified by {self.stratify_by}."
+        )
+        if strict:
+            raise ValueError(
+                f"{what} Pass a context that was fitted (see "
+                "model.bic_summary()['context']), or strict=False to fall back to "
+                "the closest fitted context."
+            )
 
-        # Last resort: most populous model
-        best = max(self.context_counts_, key=lambda k: self.context_counts_[k])
-        logger.debug("Context %s not found; using global fallback %s.", ctx_tuple, best)
-        return self.models_[best]
+        used = self._closest_context(ctx_tuple)
+        self.fallback_contexts_[ctx_tuple] = used
+        if not self._fallback_warned:
+            self._fallback_warned = True
+            warnings.warn(
+                f"{what} Using the closest fitted context "
+                f"{dict(zip(self.stratify_by, used))} instead, so the simulated "
+                "sessions do not reflect the requested context. Pass a full `context` "
+                "that was fitted, or strict=True to raise instead. Every substitution is listed "
+                "in model.fallback_contexts_ (this warning is shown once per model).",
+                UserWarning,
+                stacklevel=3,
+            )
+        return self.models_[used]
 
     def __repr__(self) -> str:
         if not self.is_fitted_:
