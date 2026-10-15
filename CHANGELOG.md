@@ -73,6 +73,79 @@ Pre-trained models: `ModelRegistry`, `NativeSessionModelRegistry`, `get_session_
 - 12 lines of double-encoded UTF-8 in `gears/models/forecaster_dl.py` docstrings.
 - Comments and docstrings no longer point to the design documents deleted in S2.
 
+### Added (S6 — sanity checks and error messages)
+- **Data checks** (`gears.data.schemas.validate_dataframe`, so also `load_sessions` and every
+  `fit`): an empty dataset or fewer than 10 sessions raises a `ValueError` naming the minimum
+  (it used to end in `RuntimeError: No GMM was fitted`); rows with `duration <= 0`, a negative or
+  missing energy, `duration >= 168 h`, `energy >= 400 kWh` or an exact duplicate are dropped
+  and **counted by reason in one warning**; if nothing is left, a `ValueError` says what to
+  check; `strict=True` raises instead of dropping.
+- **Units**: a median energy above 200 or a median duration above 48 triggers a warning that
+  states the heuristic ("probably Wh" / "probably minutes") and the fix.
+- **Time zones**: the convention is documented (`gears.data.schemas`, `gears._validation`,
+  `data/README.md`) and tested: GEARS works in local wall-clock time; a zone or UTC offset in
+  `arrival_time` or in `start_date` is **dropped, not converted**, and `arrival_time` is announced
+  by a warning. Simulated `arrival_time` values are naive local timestamps.
+- **Contexts with few sessions**: contexts with fewer than 10 sessions get no model of their own;
+  one summary warning at `fit` gives their number and share of the data, they are listed in
+  `EVSessionModel.skipped_contexts_` and in `GEARSModel.summary()`.
+- **Unknown context at simulation time**: `EVSessionModel.sample(..., strict=False)` warns **once
+  per model**, naming the requested context and the one used, and records every substitution in
+  `fallback_contexts_`; `strict=True` raises a `ValueError`. `strict` is also accepted by
+  `ShortTermSimulator.simulate / simulate_single_day` and `GEARSModel.simulate_short_term`.
+- **Known limitation, now visible**: a date alone only sets `day_of_week` / `season` / `is_weekend`.
+  On a model that is also stratified by `location_type` / `department` (the pre-trained French
+  model: `location_type`, `department`, `day_of_week`, `season`), the requested context does not
+  exist and the **most populous context overall** is used whatever the date. This was silent;
+  it now triggers the fallback warning (so `gears simulate --pretrained french` prints it once).
+  The selection rule itself is unchanged and is left for a decision.
+- `tests/test_sanity.py`: one test per case of the plan's table and the ten output invariants.
+
+### Changed (S6)
+- **Argument errors are `ValueError`s that say what was received and what is valid**:
+  `horizon`, `n_scenarios`, `n_sessions` (integers >= 1; `2.5` and `True` are refused),
+  `start_date` / `date` (invalid or missing: a `KeyError: 'date'` or a pandas message before),
+  `years` (> 0), `annual_growth_rate` (finite, > -1), `output`, `forecaster_method`
+  (now checked in `GEARSModel(...)`, not after a long fit), `context` (must be a dict) and the
+  `SmartChargingOptimizer` constructor arguments.
+- **Using an unfitted object raises `sklearn.exceptions.NotFittedError`** (a `ValueError` and an
+  `AttributeError`, not a `RuntimeError`) with the way forward, for `GEARSModel`, `EVSessionModel`
+  and the four forecasters.
+- **SARIMA is always tried, and never degrades silently**: whatever the length of the history.
+  If it cannot be fitted (pmdarima refuses histories below about two weeks) or the fit diverges
+  (the forecast over one season exceeds 3x the largest observed daily count), a warning gives the
+  reason and the forecaster switches to `'probabilistic'` (`forecaster.method_` tells which is
+  used; `method` stays what was asked). If `pmdarima` cannot be imported (any error, not only
+  `ImportError`) it warns and fits the fixed statsmodels SARIMAX(1,1,1)x(1,1,0,7); a failing
+  `predict` warns once before falling back to the historical mean. A history of a single day no
+  longer gives `NaN` counts.
+- `simulate_short_term(n_sessions=...)`: the per-day seeds are now drawn from `seed` instead of
+  computed as `seed + day`, which made day *d* of seed *s* identical to day 0 of seed *s + d*
+  whenever the weekday and season matched, and `seed=None` is now random (it was silently 0).
+  **Simulated values differ from earlier versions for the same seed in this path.**
+- **`SmartChargingOptimizer` is consistent with the simulator** (**costs and savings differ from
+  earlier versions**). It assumed a charging efficiency of 0.9 on top of the session's `energy`,
+  while GEARS caps simulated energy at `power_kw x duration`: sessions close to the cap could not
+  be completed (on simulated `public` data, 24 % of them) and were truncated silently. Now:
+  `efficiency` defaults to 1.0 (a session's `energy` is the energy delivered by the charger, losses
+  included; pass e.g. 0.9 to add losses on top) and the energy is allocated slot by slot: a slot only
+  partly inside the plug-in window offers only the time inside it, the last slot used is only partly
+  filled, and a session is billed for the energy it receives and nothing else (before: whole slots,
+  energy / 0.9). Absolute costs are 20-25 % lower on simulated data, savings percentages
+  move by a few points (work 24.8 -> 24.5 %, home 23.2 -> 27.5 %, public 6.0 -> 7.0 %), and the
+  optimiser is about 7x faster. `scheduled_start` / `scheduled_end` are now the first and last
+  instants of actual charging, always inside the plug-in window. New column `energy_scheduled`
+  (kWh that reach the vehicle: equals `energy` unless the session cannot be completed).
+  `OutputAggregator.build_load_profiles(..., smart_charging_signal=...)` uses the optimiser, so its
+  `ts_smart` series changes slightly.
+- `SmartChargingOptimizer.optimise` warns about sessions it could not schedule (no usable arrival,
+  energy or duration; no signal value during the plug-in window - their costs stay `NaN`), about
+  sessions that cannot be completed, and about a signal whose step is not `resolution_min`; it
+  raises a `TypeError` for a signal without a timestamp index and a `ValueError` for `power_kw <= 0`.
+- `linear_growth_profile` is clamped at 0: a negative growth rate used to produce negative
+  expected sessions.
+- `n_scenarios=0` is no longer replaced by the default (`n_scenarios or default`).
+
 ## [2.0.0] — 2026-08 Phase 2 complete: GEAR architecture, naming, VAE integration, notebook overhaul, CI health
 
 Release-note-level summary of the full Phase 2 arc (11 sessions, 2026-08-02 → 2026-08-07).

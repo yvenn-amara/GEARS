@@ -14,22 +14,39 @@ forward or backward within each vehicle's connection window.
 from __future__ import annotations
 
 import logging
+import warnings
 
 import numpy as np
 import pandas as pd
 
+from gears._validation import check_float, check_int
+
 logger = logging.getLogger(__name__)
+
+
+def _as_ns(ts: pd.Timestamp) -> np.datetime64:
+    """Naive ``datetime64[ns]`` of a Timestamp, keeping nanoseconds (``np.datetime64(ts)`` drops them)."""
+    if ts.tzinfo is not None:
+        ts = ts.tz_localize(None)
+    return ts.to_datetime64().astype("datetime64[ns]")
 
 
 class SmartChargingOptimizer:
     """
     Greedy V1G smart charging scheduler.
 
-    For each session the algorithm:
+    The signal is cut into slots of ``resolution_min`` minutes. For each session
+    the algorithm:
 
-    1. Identifies the feasible charging window ``[arrival, departure]``.
-    2. Sorts slots by signal (ascending for price, descending for RES).
-    3. Greedily fills cheapest slots until the energy demand is met.
+    1. Takes the slots that overlap the connection window ``[arrival, departure]``;
+       a slot that is only partly inside the window offers only the time inside it.
+    2. Sorts them by signal (ascending for price, descending for RES).
+    3. Charges at the charger's power in the best slots first, until the session's
+       energy is delivered; the last slot used may be only partly filled.
+
+    The baseline "plug-and-charge" fills the same slots in chronological order,
+    starting at arrival. Costs are signal x energy, slot by slot, so a session is
+    never billed for energy it does not receive.
 
     This is a **V1G** strategy: load can only be *shifted*, not injected
     back to the grid.
@@ -39,9 +56,14 @@ class SmartChargingOptimizer:
     signal_type : str
         ``'price'`` – minimise cost (€); ``'res'`` – maximise renewable use.
     resolution_min : int
-        Signal time resolution in minutes.
+        Signal time resolution in minutes (must match the signal's step).
     efficiency : float
-        Charging efficiency (0–1). Default 0.9.
+        Share of the energy drawn from the charger that reaches the battery,
+        in ]0, 1]. Default 1.0: a session's ``energy`` is the energy delivered
+        by the charger (as metered, and as simulated by GEARS), which already
+        includes the losses. Use e.g. 0.9 to add losses on top: the charger then
+        has to draw ``energy / efficiency``, and sessions for which that exceeds
+        ``power_kw x duration`` cannot be completed (they are reported).
     default_power_kw : float
         Fallback charger power if ``power_kw`` column is absent in the
         sessions DataFrame. Default 7.4 kW.
@@ -57,15 +79,25 @@ class SmartChargingOptimizer:
         self,
         signal_type: str = "price",
         resolution_min: int = 30,
-        efficiency: float = 0.9,
+        efficiency: float = 1.0,
         default_power_kw: float = 7.4,
     ):
         if signal_type not in ("price", "res"):
             raise ValueError(f"signal_type must be 'price' or 'res', got '{signal_type}'")
         self.signal_type = signal_type
-        self.resolution_min = resolution_min
-        self.efficiency = efficiency
-        self.default_power_kw = default_power_kw
+        self.resolution_min = check_int(
+            resolution_min, "resolution_min", minimum=1, meaning="minutes per signal slot"
+        )
+        self.efficiency = check_float(
+            efficiency, "efficiency", gt=0, meaning="charging efficiency, in ]0, 1]"
+        )
+        if self.efficiency > 1:
+            raise ValueError(
+                f"efficiency must be <= 1 (charging efficiency, in ]0, 1]), got {efficiency}."
+            )
+        self.default_power_kw = check_float(
+            default_power_kw, "default_power_kw", gt=0, meaning="charger power in kW"
+        )
 
     # ------------------------------------------------------------------
     # Main optimisation
@@ -87,7 +119,7 @@ class SmartChargingOptimizer:
             - ``arrival_time`` (``datetime.date``, ``str``, or
               ``pd.Timestamp``) **or** ``date`` + ``arrival_hour`` (float).
             - ``duration`` (hours, float).
-            - ``energy`` (kWh, float).
+            - ``energy`` (kWh, float): energy delivered by the charger.
             - ``power_kw`` (kW, float, optional – defaults to
               ``self.default_power_kw``).
 
@@ -95,32 +127,66 @@ class SmartChargingOptimizer:
             object, a date string, or a ``pd.Timestamp``; all are coerced
             to ``datetime.date`` internally.
         signal : pd.Series
-            Indexed by datetime at ``resolution_min``-minute intervals.
+            Indexed by datetime (slot start) at ``resolution_min``-minute intervals.
             Values: €/kWh (for ``signal_type='price'``) or fraction 0–1
             (for ``signal_type='res'``).
 
         Returns
         -------
         pd.DataFrame
-            Original sessions with four additional columns:
+            Original sessions with additional columns:
 
-            - ``cost_smart`` (€): cost when charging at optimal slots.
+            - ``cost_smart`` (€): cost when charging in the best slots (for a
+              RES signal: green-weighted energy, higher is better).
             - ``cost_plug`` (€): cost under plug-and-charge (first slots).
             - ``savings_pct`` (%): relative saving vs. plug-and-charge.
-            - ``scheduled_start`` (``pd.Timestamp``): start of optimised
-              charging window.
-            - ``scheduled_end`` (``pd.Timestamp``): end of optimised
-              charging window.
+            - ``scheduled_start`` (``pd.Timestamp``): start of the first
+              charging interval of the optimised plan (never before arrival).
+            - ``scheduled_end`` (``pd.Timestamp``): end of the last charging
+              interval (never after departure).
+            - ``energy_scheduled`` (kWh): energy that reaches the vehicle in the
+              plan. Equal to ``energy`` unless the session cannot be completed
+              (see the warning), then smaller.
+
+        Raises
+        ------
+        TypeError
+            If ``signal`` is not indexed by timestamps.
+        ValueError
+            If ``power_kw`` holds a value <= 0.
+
+        Warns
+        -----
+        UserWarning
+            For sessions that cannot be scheduled (no usable arrival, energy or
+            duration; no signal during the window) and for sessions that cannot
+            be completed; ``resolution_min`` not matching the signal's step.
         """
         sessions = sessions.copy().reset_index(drop=True)
         # Remove any output columns left over from a prior optimise() call.
         _output_cols = ["cost_smart", "cost_plug", "savings_pct",
-                        "scheduled_start", "scheduled_end"]
+                        "scheduled_start", "scheduled_end", "energy_scheduled"]
         sessions.drop(columns=[c for c in _output_cols if c in sessions.columns],
                       inplace=True)
-        signal = signal.sort_index()
 
-        res_h = self.resolution_min / 60.0
+        if not isinstance(signal.index, pd.DatetimeIndex):
+            raise TypeError(
+                "signal must be indexed by timestamps (one value per slot start), got an "
+                f"index of type {type(signal.index).__name__}. For example "
+                "gears.utils.make_price_signal(...) builds one."
+            )
+        signal = signal.sort_index()
+        if "power_kw" in sessions.columns and (sessions["power_kw"] <= 0).any():
+            raise ValueError(
+                f"power_kw must be > 0, but {int((sessions['power_kw'] <= 0).sum())} session(s) "
+                "have 0 or a negative charger power."
+            )
+
+        step = np.timedelta64(self.resolution_min, "m")
+        sig_index = signal.index.tz_localize(None) if signal.index.tz is not None else signal.index
+        sig_t = sig_index.to_numpy("datetime64[ns]")
+        sig_v = signal.to_numpy(dtype=float)
+        self._warn_if_step_differs(sig_t)
 
         if "date" in sessions.columns:
             sessions["date"] = pd.to_datetime(sessions["date"]).dt.date
@@ -134,63 +200,137 @@ class SmartChargingOptimizer:
         elif "arrival_time" in sessions.columns:
             sessions["arrival_time"] = pd.to_datetime(sessions["arrival_time"])
 
-        sessions["_cost_smart"] = np.nan
-        sessions["_cost_plug"] = np.nan
-        sessions["_scheduled_start"] = pd.NaT
-        sessions["_scheduled_end"] = pd.NaT
+        n = len(sessions)
+        cost_smart = np.full(n, np.nan)
+        cost_plug = np.full(n, np.nan)
+        delivered = np.full(n, np.nan)
+        sched_start = np.full(n, np.datetime64("NaT", "ns"))
+        sched_end = np.full(n, np.datetime64("NaT", "ns"))
 
+        n_unusable = n_no_signal = n_truncated = 0
         for idx, row in sessions.iterrows():
             arrival_dt, departure_dt = self._get_window(row)
-            if arrival_dt is None:
+            energy_kwh = float(row["energy"]) if pd.notna(row.get("energy")) else np.nan
+            if (
+                arrival_dt is None or pd.isna(arrival_dt) or pd.isna(departure_dt)
+                or departure_dt <= arrival_dt or not np.isfinite(energy_kwh) or energy_kwh < 0
+            ):
+                n_unusable += 1
                 continue
 
-            window_sig = signal[
-                (signal.index >= arrival_dt) & (signal.index < departure_dt)
-            ]
-            if window_sig.empty:
+            arrival = _as_ns(arrival_dt)
+            departure = _as_ns(departure_dt)
+            # Slots overlapping [arrival, departure): start < departure and start + step > arrival.
+            i0 = int(np.searchsorted(sig_t, arrival - step, side="right"))
+            i1 = int(np.searchsorted(sig_t, departure, side="left"))
+            if i1 <= i0:
+                n_no_signal += 1
                 continue
 
-            energy_kwh = float(row["energy"])
+            starts = sig_t[i0:i1]
+            prices = sig_v[i0:i1]
+            lo = np.maximum(starts, arrival)
+            hours = (np.minimum(starts + step, departure) - lo) / np.timedelta64(1, "h")
             power_kw = float(row["power_kw"]) if "power_kw" in row.index and pd.notna(row.get("power_kw")) \
                 else self.default_power_kw
-            energy_needed = energy_kwh / self.efficiency
-            slots_needed = int(np.ceil(energy_needed / (power_kw * res_h)))
-            slots_needed = min(slots_needed, len(window_sig))
+            capacity = power_kw * hours                      # kWh the charger can give in each slot
+            needed = energy_kwh / self.efficiency            # kWh the charger must draw
+            if needed > capacity.sum() * (1 + 1e-9):
+                n_truncated += 1
 
-            # Plug-and-charge baseline: charge at arrival, first available slots.
-            plug_slots = window_sig.iloc[:slots_needed]
-            cost_plug = float((plug_slots * power_kw * res_h).sum())
+            plug = self._fill(np.arange(len(starts)), capacity, needed)
+            best_first = np.argsort(prices if self.signal_type == "price" else -prices, kind="stable")
+            smart = self._fill(best_first, capacity, needed)
 
-            # Smart charging: choose the cheapest (or greenest) slots first.
-            if self.signal_type == "price":
-                ordered = window_sig.nsmallest(slots_needed)
-            else:
-                ordered = window_sig.nlargest(slots_needed)
+            cost_plug[idx] = float((prices * plug).sum())
+            cost_smart[idx] = float((prices * smart).sum())
+            delivered[idx] = float(smart.sum() * self.efficiency)
 
-            cost_smart = float((ordered * power_kw * res_h).sum())
-            scheduled_start = ordered.index.min() if not ordered.empty else arrival_dt
-            scheduled_end = scheduled_start + pd.Timedelta(
-                minutes=self.resolution_min * slots_needed
-            )
+            used = smart > 0
+            if used.any():
+                busy = (smart[used] / power_kw * 3.6e12).astype("int64").astype("timedelta64[ns]")
+                sched_start[idx] = lo[used].min()
+                sched_end[idx] = (lo[used] + busy).max()
+            else:                                            # nothing to charge
+                sched_start[idx] = sched_end[idx] = arrival
 
-            sessions.at[idx, "_cost_smart"] = cost_smart
-            sessions.at[idx, "_cost_plug"] = cost_plug
-            sessions.at[idx, "_scheduled_start"] = scheduled_start
-            sessions.at[idx, "_scheduled_end"] = scheduled_end
+        sessions["cost_smart"] = cost_smart
+        sessions["cost_plug"] = cost_plug
+        sessions["scheduled_start"] = sched_start
+        sessions["scheduled_end"] = sched_end
+        sessions["energy_scheduled"] = delivered
 
-        sessions.rename(columns={
-            "_cost_smart": "cost_smart",
-            "_cost_plug": "cost_plug",
-            "_scheduled_start": "scheduled_start",
-            "_scheduled_end": "scheduled_end",
-        }, inplace=True)
+        self._warn_unscheduled(n, n_unusable, n_no_signal, n_truncated, signal)
 
         mask = sessions["cost_plug"].notna() & (sessions["cost_plug"] > 0)
+        sessions["savings_pct"] = np.nan
         sessions.loc[mask, "savings_pct"] = (
             (sessions.loc[mask, "cost_plug"] - sessions.loc[mask, "cost_smart"])
             / sessions.loc[mask, "cost_plug"] * 100
         )
         return sessions
+
+    @staticmethod
+    def _fill(order: np.ndarray, capacity: np.ndarray, needed: float) -> np.ndarray:
+        """Energy per slot when slots are filled, in ``order``, up to their capacity."""
+        cap = capacity[order]
+        before = np.cumsum(cap) - cap
+        filled = np.zeros_like(capacity)
+        filled[order] = np.clip(needed - before, 0.0, cap)
+        return filled
+
+    def _warn_if_step_differs(self, sig_t: np.ndarray) -> None:
+        """Warn when the signal's step is not ``resolution_min``: slots would be wrong."""
+        if len(sig_t) < 2:
+            return
+        step_min = float(np.median(np.diff(sig_t)) / np.timedelta64(1, "m"))
+        if not np.isclose(step_min, self.resolution_min):
+            warnings.warn(
+                f"The signal has a {step_min:g}-minute step but the optimiser was built with "
+                f"resolution_min={self.resolution_min}, so slots are mis-sized and the costs "
+                f"are wrong. Build SmartChargingOptimizer(resolution_min={step_min:g}) or "
+                "resample the signal.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    def _warn_unscheduled(
+        self, n_total: int, n_unusable: int, n_no_signal: int, n_truncated: int,
+        signal: pd.Series,
+    ) -> None:
+        """Announce sessions that were not scheduled, or not fully, instead of hiding them."""
+        problems = []
+        if n_unusable:
+            problems.append(
+                f"{n_unusable} have no usable arrival time, energy >= 0 or duration > 0"
+            )
+        if n_no_signal:
+            span = (
+                f"{signal.index.min()} to {signal.index.max()}" if len(signal) else "empty"
+            )
+            problems.append(
+                f"{n_no_signal} have no signal value during their plug-in window "
+                f"(the signal covers {span})"
+            )
+        if problems:
+            warnings.warn(
+                f"{n_unusable + n_no_signal} of {n_total} sessions were not optimised: "
+                + "; ".join(problems) + ". Their costs are NaN. Pass a signal that covers "
+                "all the sessions' dates and check the sessions' columns.",
+                UserWarning,
+                stacklevel=3,
+            )
+        if n_truncated:
+            warnings.warn(
+                f"{n_truncated} of {n_total} sessions cannot be completed: their energy"
+                + (f" / efficiency ({self.efficiency})" if self.efficiency != 1 else "")
+                + " exceeds power_kw x the time available in their plug-in window (or in "
+                "the part of it that the signal covers). Only the energy that fits is "
+                "scheduled (see the energy_scheduled column). Check the 'power_kw' and "
+                "'duration' of these sessions.",
+                UserWarning,
+                stacklevel=3,
+            )
 
     def _get_window(self, row: pd.Series):
         """

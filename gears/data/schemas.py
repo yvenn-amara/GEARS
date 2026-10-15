@@ -20,6 +20,21 @@ Derived columns added automatically:
     season        : 'winter' | 'spring' | 'summer' | 'autumn'
     is_weekend    : 0/1
     date          : date object
+
+Conventions
+-----------
+Time: ``arrival_time`` is **local wall-clock time** at the charging site, and is
+stored without a time zone. A time zone or UTC offset in the input is dropped and
+the clock reading kept, not converted (a ``UserWarning`` says so): if your
+timestamps are in UTC, convert them to local time first. Simulated
+``arrival_time`` values are naive local times as well.
+Units: ``duration`` in hours, ``energy`` in kWh. A median that is implausible for
+charging sessions triggers a ``UserWarning`` suggesting Wh or minutes.
+Quality filters: rows with a missing or unreadable ``arrival_time``, a missing or
+non-positive ``duration``, a missing or negative ``energy``, an implausible value
+(``duration >= 168`` h, ``energy >= 400`` kWh) or that duplicate an earlier row are
+dropped and counted in a single ``UserWarning``; if nothing is left, a
+``ValueError`` is raised.
 """
 
 from __future__ import annotations
@@ -144,6 +159,15 @@ MINUTE_DURATION_COLUMNS: set[str] = {"park_duration", "duree_min"}
 NOISE_COLUMNS: set[str] = {"day", "weekend", "unnamed_0", "start_date"}
 
 REQUIRED_COLS = {"arrival_time", "duration", "energy"}
+
+# Plausibility bounds: rows at or beyond them are dropped (and reported).
+MAX_DURATION_H = 168.0   # one week
+MAX_ENERGY_KWH = 400.0
+# Unit heuristics, applied to the median of the raw column. A typical charging
+# session lasts 1-24 h and delivers 5-60 kWh, so a median far above these values
+# means the column is not in the expected unit.
+SUSPECT_ENERGY_MEDIAN_KWH = 200.0   # above: probably Wh
+SUSPECT_DURATION_MEDIAN_H = 48.0    # above: probably minutes
 
 # Data-quality note: acn.csv (from the 11-dataset EVSE benchmark) is the
 # row-wise union of caltech.csv + jpl.csv + office.csv, distinguishable via
@@ -411,6 +435,102 @@ def _drop_noise_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _missing_columns_error(df: pd.DataFrame, missing: set[str]) -> ValueError:
+    """Build the error for missing required columns: what is missing, what is accepted."""
+    lines = []
+    for canonical in sorted(missing):
+        accepted = ", ".join(COLUMN_ALIASES.get(canonical, [canonical]))
+        line = f"  - {canonical}: accepted names are {accepted}"
+        if canonical == "duration":
+            line += (
+                f"; or give end_time (duration = end_time - arrival_time); or a duration in "
+                f"minutes named one of {', '.join(sorted(MINUTE_DURATION_COLUMNS))}"
+            )
+        lines.append(line)
+    return ValueError(
+        f"Missing required column(s): {sorted(missing)}.\n"
+        + "\n".join(lines)
+        + f"\nColumns found in your data: {list(df.columns)}.\n"
+        "Rename your columns to one of the accepted names (case and punctuation are ignored)."
+    )
+
+
+def _wall_clock(value):
+    """Timestamp of ``value`` without its time zone (clock reading kept)."""
+    ts = pd.Timestamp(value)
+    return ts.tz_localize(None) if ts.tzinfo is not None else ts
+
+
+def _parse_arrival_time(column: pd.Series) -> tuple[pd.Series, bool]:
+    """
+    Parse ``arrival_time`` into naive local timestamps.
+
+    Returns the parsed column and whether a time zone / UTC offset was dropped.
+    Unreadable values become ``NaT`` (the quality filter then drops and counts them).
+
+    Raises
+    ------
+    ValueError
+        If the column holds numbers instead of dates.
+    """
+    if pd.api.types.is_numeric_dtype(column) and not pd.api.types.is_bool_dtype(column):
+        raise ValueError(
+            f"arrival_time holds numbers (first value: {column.iloc[0]!r}), not dates. "
+            "GEARS needs the date and time of plug-in, e.g. '2025-06-10 08:30'. "
+            "A number such as 4.13 is an hour of the day: use the column that holds the "
+            "full timestamp instead."
+        )
+    if isinstance(column.dtype, pd.DatetimeTZDtype):
+        return column.dt.tz_localize(None), True
+    try:
+        parsed = pd.to_datetime(column, format="mixed", dayfirst=False, errors="coerce")
+    except ValueError:
+        # Several UTC offsets in one column (e.g. +01:00 and +02:00 across a DST change):
+        # keep each clock reading, as the convention says.
+        parsed = pd.to_datetime(
+            column.map(lambda v: _wall_clock(v) if pd.notna(v) else pd.NaT),
+            errors="coerce",
+        )
+        return parsed, True
+    if isinstance(parsed.dtype, pd.DatetimeTZDtype):
+        return parsed.dt.tz_localize(None), True
+    return parsed, False
+
+
+def _warn_if_suspicious_units(df: pd.DataFrame) -> None:
+    """Warn when the median energy / duration is implausible for charging sessions."""
+    energy = df["energy"].dropna()
+    energy = energy[energy > 0]
+    if len(energy) and energy.median() > SUSPECT_ENERGY_MEDIAN_KWH:
+        warnings.warn(
+            f"The median energy is {energy.median():,.0f}, above {SUSPECT_ENERGY_MEDIAN_KWH:.0f}, "
+            "which is implausible for charging sessions in kWh: the column is probably in Wh. "
+            "GEARS expects kWh; divide it by 1000 before loading (the French national format "
+            f"is converted automatically). Values >= {MAX_ENERGY_KWH:.0f} are dropped as outliers.",
+            UserWarning, stacklevel=3,
+        )
+    duration = df["duration"].dropna()
+    duration = duration[duration > 0]
+    if len(duration) and duration.median() > SUSPECT_DURATION_MEDIAN_H:
+        warnings.warn(
+            f"The median duration is {duration.median():,.0f}, above "
+            f"{SUSPECT_DURATION_MEDIAN_H:.0f}, which is implausible for charging sessions in "
+            "hours: the column is probably in minutes (or seconds). GEARS expects hours; "
+            f"divide it by 60 before loading. Values >= {MAX_DURATION_H:.0f} are dropped "
+            "as outliers.",
+            UserWarning, stacklevel=3,
+        )
+
+
+def _describe_dropped(counts: dict[str, int], n_dropped: int, n_total: int) -> str:
+    """One sentence listing why rows were dropped (only the non-zero reasons)."""
+    reasons = ", ".join(f"{n:,} {label}" for label, n in counts.items() if n)
+    return (
+        f"Dropped {n_dropped:,}/{n_total:,} rows failing the quality filters: {reasons}. "
+        "A row can fail several checks, so the counts may add up to more than the total."
+    )
+
+
 def validate_dataframe(
     df: pd.DataFrame,
     strict: bool = False,
@@ -443,8 +563,16 @@ def validate_dataframe(
     ------
     ValueError
         If required columns (``arrival_time``, ``duration``, ``energy``) are
-        still missing after alias resolution, or if ``strict=True`` and any
-        rows fail quality filters.
+        still missing after alias resolution (the message lists the accepted
+        names), if the dataset is empty or every row is dropped by the quality
+        filters, if ``arrival_time`` holds numbers instead of dates, or if
+        ``strict=True`` and any rows fail the quality filters.
+
+    Warns
+    -----
+    UserWarning
+        Rows dropped (with the count per reason); a time zone dropped from
+        ``arrival_time``; a median energy or duration that suggests Wh or minutes.
 
     Examples
     --------
@@ -469,34 +597,68 @@ def validate_dataframe(
     df = _resolve_aliases(df)
     df = _convert_minute_duration_columns(df)
 
-    if "duration" not in df.columns and "end_time" in df.columns:
+    if "duration" not in df.columns and "end_time" in df.columns and "arrival_time" in df.columns:
         at = pd.to_datetime(df["arrival_time"], format="mixed", dayfirst=False)
         et = pd.to_datetime(df["end_time"], format="mixed", dayfirst=False)
         df["duration"] = (et - at).dt.total_seconds() / 3600.0
 
     missing = REQUIRED_COLS - set(df.columns)
     if missing:
-        raise ValueError(f"Missing required columns after aliasing: {missing}")
+        raise _missing_columns_error(df, missing)
 
-    df["arrival_time"] = pd.to_datetime(df["arrival_time"], format="mixed", dayfirst=False)
+    if len(df) == 0:
+        raise ValueError(
+            "The dataset has no rows (0 sessions). Check the file you loaded and any "
+            "filter applied before this call."
+        )
+
+    df["arrival_time"], tz_dropped = _parse_arrival_time(df["arrival_time"])
+    if tz_dropped:
+        warnings.warn(
+            "arrival_time carries a time zone or UTC offset. GEARS works with local "
+            "wall-clock time: the zone was dropped and the clock reading kept, not "
+            "converted. If these timestamps are in UTC, convert them to the site's local "
+            "time first (e.g. df['arrival_time'].dt.tz_convert('Europe/Paris')).",
+            UserWarning, stacklevel=3,
+        )
     df["duration"] = pd.to_numeric(df["duration"], errors="coerce")
     df["energy"] = pd.to_numeric(df["energy"], errors="coerce")
     if "power" in df.columns:
         df["power"] = pd.to_numeric(df["power"], errors="coerce")
 
+    _warn_if_suspicious_units(df)
+
     n_before = len(df)
-    mask = (
-        df["duration"].notna() & (df["duration"] > 0) & (df["duration"] < 168)
-        & df["energy"].notna() & (df["energy"] >= 0) & (df["energy"] < 400)
-        & df["arrival_time"].notna()
+    time_ok = df["arrival_time"].notna()
+    dur, ene = df["duration"], df["energy"]
+    ok = (
+        time_ok & dur.notna() & (dur > 0) & (dur < MAX_DURATION_H)
+        & ene.notna() & (ene >= 0) & (ene < MAX_ENERGY_KWH)
     )
-    bad = (~mask).sum()
-    if bad > 0:
-        msg = f"Dropping {bad:,}/{n_before:,} rows failing quality filters."
+    n_duplicates = int(df[ok].duplicated().sum())
+    counts = {
+        "with a missing or unreadable arrival_time": int((~time_ok).sum()),
+        "with a missing duration": int(dur.isna().sum()),
+        "with duration <= 0": int((dur <= 0).sum()),
+        f"with duration >= {MAX_DURATION_H:.0f} h": int((dur >= MAX_DURATION_H).sum()),
+        "with a missing energy": int(ene.isna().sum()),
+        "with negative energy": int((ene < 0).sum()),
+        f"with energy >= {MAX_ENERGY_KWH:.0f} kWh": int((ene >= MAX_ENERGY_KWH).sum()),
+        "duplicating an earlier row": n_duplicates,
+    }
+    df = df[ok].drop_duplicates().reset_index(drop=True)
+    n_dropped = n_before - len(df)
+    if len(df) == 0:
+        raise ValueError(
+            _describe_dropped(counts, n_dropped, n_before)
+            + " Nothing is left. Check that duration is in hours, energy in kWh and "
+            "arrival_time holds timestamps (see the unit warnings above, if any)."
+        )
+    if n_dropped > 0:
+        msg = _describe_dropped(counts, n_dropped, n_before)
         if strict:
             raise ValueError(msg)
         warnings.warn(msg, UserWarning, stacklevel=3)
-    df = df[mask].reset_index(drop=True)
 
     df["hour"] = df["arrival_time"].dt.hour + df["arrival_time"].dt.minute / 60.0
     df["day_of_week"] = df["arrival_time"].dt.dayofweek   # 0=Monday, 6=Sunday

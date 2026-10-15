@@ -1,6 +1,7 @@
 """Integration tests for GEARSModel pipeline."""
 import pandas as pd
 import pytest
+from sklearn.exceptions import NotFittedError
 
 from gears import GEARSModel
 from gears.data.loader import make_demo_data
@@ -51,7 +52,7 @@ def test_from_session_model():
 
 def test_simulate_without_fit():
     model = GEARSModel()
-    with pytest.raises(RuntimeError):
+    with pytest.raises(NotFittedError):
         model.simulate_short_term("2025-06-01")
 
 
