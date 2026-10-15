@@ -111,19 +111,37 @@ Pre-trained models: `ModelRegistry`, `NativeSessionModelRegistry`, `get_session_
 - **Using an unfitted object raises `sklearn.exceptions.NotFittedError`** (a `ValueError` and an
   `AttributeError`, not a `RuntimeError`) with the way forward, for `GEARSModel`, `EVSessionModel`
   and the four forecasters.
-- **SARIMA never degrades silently**: with fewer than 28 days of history the forecaster warns
-  and uses `'probabilistic'` (`forecaster.method_` tells which was used; `method` stays what was
-  asked); if `pmdarima` cannot be imported (any error, not only `ImportError`) it warns and fits
-  the fixed statsmodels SARIMAX(1,1,1)x(1,1,0,7); a failing `predict` warns once before falling
-  back to the historical mean. A history of a single day no longer gives `NaN` counts.
+- **SARIMA is always tried, and never degrades silently**: whatever the length of the history.
+  If it cannot be fitted (pmdarima refuses histories below about two weeks) or the fit diverges
+  (the forecast over one season exceeds 3x the largest observed daily count), a warning gives the
+  reason and the forecaster switches to `'probabilistic'` (`forecaster.method_` tells which is
+  used; `method` stays what was asked). If `pmdarima` cannot be imported (any error, not only
+  `ImportError`) it warns and fits the fixed statsmodels SARIMAX(1,1,1)x(1,1,0,7); a failing
+  `predict` warns once before falling back to the historical mean. A history of a single day no
+  longer gives `NaN` counts.
 - `simulate_short_term(n_sessions=...)`: the per-day seeds are now drawn from `seed` instead of
   computed as `seed + day`, which made day *d* of seed *s* identical to day 0 of seed *s + d*
   whenever the weekday and season matched, and `seed=None` is now random (it was silently 0).
   **Simulated values differ from earlier versions for the same seed in this path.**
-- `SmartChargingOptimizer.optimise` warns about sessions it could not schedule (no arrival
-  information, or no signal value during the plug-in window — their costs stay `NaN`) and about
-  sessions that cannot be fully charged inside their window (energy / efficiency > power x
-  duration), instead of dropping or truncating them silently.
+- **`SmartChargingOptimizer` is consistent with the simulator** (**costs and savings differ from
+  earlier versions**). It assumed a charging efficiency of 0.9 on top of the session's `energy`,
+  while GEARS caps simulated energy at `power_kw x duration`: sessions close to the cap could not
+  be completed (on simulated `public` data, 24 % of them) and were truncated silently. Now:
+  `efficiency` defaults to 1.0 (a session's `energy` is the energy delivered by the charger, losses
+  included; pass e.g. 0.9 to add losses on top) and the energy is allocated slot by slot: a slot only
+  partly inside the plug-in window offers only the time inside it, the last slot used is only partly
+  filled, and a session is billed for the energy it receives and nothing else (before: whole slots,
+  energy / 0.9). Absolute costs are 20-25 % lower on simulated data, savings percentages
+  move by a few points (work 24.8 -> 24.5 %, home 23.2 -> 27.5 %, public 6.0 -> 7.0 %), and the
+  optimiser is about 7x faster. `scheduled_start` / `scheduled_end` are now the first and last
+  instants of actual charging, always inside the plug-in window. New column `energy_scheduled`
+  (kWh that reach the vehicle: equals `energy` unless the session cannot be completed).
+  `OutputAggregator.build_load_profiles(..., smart_charging_signal=...)` uses the optimiser, so its
+  `ts_smart` series changes slightly.
+- `SmartChargingOptimizer.optimise` warns about sessions it could not schedule (no usable arrival,
+  energy or duration; no signal value during the plug-in window - their costs stay `NaN`), about
+  sessions that cannot be completed, and about a signal whose step is not `resolution_min`; it
+  raises a `TypeError` for a signal without a timestamp index and a `ValueError` for `power_kw <= 0`.
 - `linear_growth_profile` is clamped at 0: a negative growth rate used to produce negative
   expected sessions.
 - `n_scenarios=0` is no longer replaced by the default (`n_scenarios or default`).
