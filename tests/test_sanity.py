@@ -421,17 +421,86 @@ def _days(df: pd.DataFrame, n_days: int) -> pd.DataFrame:
     return df[keep].reset_index(drop=True)
 
 
-def test_sarima_on_a_short_history_announces_a_fall_back_to_probabilistic():
-    short = make_demo_data(n=300, seed=5, start_date="2023-01-01", end_date="2023-01-10")
-    fc = SessionForecaster(method="sarima")
-    _, msgs = _warnings_of(fc.fit, short)
+def _short_history(n_days: int) -> pd.DataFrame:
+    end = (pd.Timestamp("2023-01-01") + pd.Timedelta(days=n_days - 1)).strftime("%Y-%m-%d")
+    return make_demo_data(n=max(60, 6 * n_days), seed=5, start_date="2023-01-01", end_date=end)
+
+
+@pytest.mark.parametrize("n_days", [1, 3, 7, 10, 14, 20, 27])
+def test_sarima_is_always_tried_and_a_short_history_never_breaks_the_fit(n_days):
+    """Whatever the history, fit() works; if SARIMA could not be fitted it says so and
+    ``method_`` tells that 'probabilistic' is used."""
+    fc = SessionForecaster(method="sarima", use_holidays=False)
+    _, msgs = _warnings_of(fc.fit, _short_history(n_days))
+    switched = [m for m in msgs if "SARIMA could not be fitted" in m]
+    assert fc.is_fitted_ and fc.method == "sarima"
+    if fc.method_ == "probabilistic":
+        assert len(switched) == 1
+        assert f"{n_days} day(s)" in switched[0] and "forecaster_method='probabilistic'" in switched[0]
+    else:
+        assert switched == []                  # it worked: no warning, SARIMA is used
+    pred = fc.predict(horizon=7, n_scenarios=2, seed=0)
+    assert len(pred) == 14 and np.isfinite(pred["n_sessions"]).all()
+
+
+def test_a_sarima_fit_that_raises_switches_to_probabilistic_and_says_why(monkeypatch):
+    """pmdarima refuses short series ('no more samples after seasonal differencing')."""
+    import pmdarima
+
+    def refuse(*args, **kwargs):
+        raise ValueError("There are no more samples after a first-order seasonal differencing. See http://x")
+
+    monkeypatch.setattr(pmdarima, "auto_arima", refuse)
+    fc = SessionForecaster(method="sarima", use_holidays=False)
+    _, msgs = _warnings_of(fc.fit, _short_history(10))
     assert len(msgs) == 1
-    assert "at least 4 seasonal periods (28 days)" in msgs[0] and "10 day(s)" in msgs[0]
-    assert "probabilistic" in msgs[0]
-    assert fc.method == "sarima" and fc.method_ == "probabilistic"   # asked vs actually used
+    assert "ValueError: There are no more samples after a first-order seasonal differencing" in msgs[0]
+    assert "http://x" not in msgs[0]                       # the pmdarima URL is cut off
+    assert "Switching to method='probabilistic'" in msgs[0]
+    assert fc.method == "sarima" and fc.method_ == "probabilistic"
     assert "used='probabilistic'" in repr(fc)
-    pred = fc.predict(horizon=5, n_scenarios=2, seed=0)
-    assert len(pred) == 10 and (pred["n_sessions"] >= 0).all()
+    assert len(fc.predict(horizon=5, n_scenarios=2, seed=0)) == 10
+
+
+def test_a_sarima_fit_that_diverges_is_treated_as_failed(monkeypatch):
+    """A fit that 'succeeds' but forecasts 264 sessions/day from a history of ~10 has failed."""
+    class Diverging:
+        _is_statsmodels = True
+
+        def forecast(self, horizon, exog=None):
+            return np.array([11.0, 0.0, 24.0, 0.0, 65.0, 0.0, 264.0])[:horizon]
+
+    def fake_fit(self, exog=None):
+        self._model = Diverging()
+
+    monkeypatch.setitem(sys.modules, "pmdarima", None)
+    monkeypatch.setattr(SessionForecaster, "_fit_statsmodels_fallback", fake_fit)
+    fc = SessionForecaster(method="sarima", use_holidays=False)
+    _, msgs = _warnings_of(fc.fit, _short_history(14))
+    failed = [m for m in msgs if "SARIMA could not be fitted" in m]
+    assert len(failed) == 1 and "forecast diverges" in failed[0] and "264" in failed[0]
+    assert fc.method_ == "probabilistic" and fc._model is None
+
+
+def test_a_sarima_forecast_with_nan_is_treated_as_failed(monkeypatch):
+    class Broken:
+        _is_statsmodels = True
+
+        def forecast(self, horizon, exog=None):
+            return np.full(horizon, np.nan)
+
+    monkeypatch.setitem(sys.modules, "pmdarima", None)
+    monkeypatch.setattr(SessionForecaster, "_fit_statsmodels_fallback",
+                        lambda self, exog=None: setattr(self, "_model", Broken()))
+    fc = SessionForecaster(method="sarima", use_holidays=False)
+    _, msgs = _warnings_of(fc.fit, _short_history(14))
+    assert any("SARIMA could not be fitted" in m for m in msgs) and fc.method_ == "probabilistic"
+
+
+def test_a_sarima_that_fits_on_a_long_enough_history_is_kept_without_any_warning():
+    fc = SessionForecaster(method="sarima", use_holidays=False)
+    _, msgs = _warnings_of(fc.fit, _short_history(120))
+    assert fc.method_ == "sarima" and msgs == []
 
 
 def test_sarima_on_a_single_day_still_gives_finite_counts():
@@ -605,71 +674,82 @@ def test_inv8_save_then_load_reproduces_the_simulation(model, tmp_path):
 
 # 9. V1G optimiser ------------------------------------------------------------
 
+RES_MIN = 30
+
+
 @pytest.fixture(scope="module")
 def optimised(model):
-    """Simulated sessions scheduled against a price signal, plus the settings used."""
+    """Simulated sessions scheduled against a price signal."""
     sess = model.simulate_short_term(START, horizon=3, n_scenarios=1, n_sessions=25, seed=2)
-    res_min = 30
     signal = make_price_signal(
-        start=START, periods=48 * 6, resolution_min=res_min, pattern="spot_like"
+        start=START, periods=48 * 6, resolution_min=RES_MIN, pattern="spot_like"
     )
-    opt = SmartChargingOptimizer(signal_type="price", resolution_min=res_min)
+    opt = SmartChargingOptimizer(signal_type="price", resolution_min=RES_MIN)
     result, msgs = _warnings_of(opt.optimise, sess, signal)
-    return opt, sess, result, msgs, res_min
+    return sess, signal, result, msgs
 
 
-def _slots(result: pd.DataFrame, res_min: int) -> pd.Series:
-    return (result["scheduled_end"] - result["scheduled_start"]) / pd.Timedelta(minutes=res_min)
+def _departure(result: pd.DataFrame) -> pd.Series:
+    return result["arrival_time"] + pd.to_timedelta(result["duration"], unit="h")
 
 
-def test_inv9_every_session_is_scheduled_and_columns_are_complete(optimised):
-    _, sess, result, _, _ = optimised
+def test_inv9_every_session_is_scheduled_without_any_warning(optimised):
+    """GEARS caps energy at power x duration: every simulated session must be completable."""
+    sess, _, result, msgs = optimised
+    assert msgs == []
     assert len(result) == len(sess)
-    for col in ("cost_smart", "cost_plug", "savings_pct", "scheduled_start", "scheduled_end"):
+    for col in ("cost_smart", "cost_plug", "savings_pct", "scheduled_start", "scheduled_end",
+                "energy_scheduled"):
         assert col in result.columns
-    assert result[["cost_smart", "cost_plug", "scheduled_start", "scheduled_end"]].notna().all().all()
+    assert not result[["cost_smart", "cost_plug", "scheduled_start", "scheduled_end",
+                       "energy_scheduled"]].isna().any().any()
+
+
+def test_inv9_planned_energy_is_the_session_energy(optimised):
+    _, _, result, _ = optimised
+    assert np.allclose(result["energy_scheduled"], result["energy"], rtol=1e-9)
 
 
 def test_inv9_sessions_stay_inside_their_plug_in_window(optimised):
-    _, _, result, _, res_min = optimised
-    departure = result["arrival_time"] + pd.to_timedelta(result["duration"], unit="h")
+    _, _, result, _ = optimised
+    tol = pd.Timedelta(milliseconds=1)
     assert (result["scheduled_start"] >= result["arrival_time"]).all()
-    # The last slot may overhang an unaligned departure by less than one signal step.
-    assert (result["scheduled_end"] <= departure + pd.Timedelta(minutes=res_min)).all()
+    assert (result["scheduled_end"] <= _departure(result) + tol).all()
 
 
-def test_inv9_planned_energy_matches_the_session_energy_within_one_slot(optimised):
-    opt, _, result, _, res_min = optimised
-    step_h = res_min / 60
-    n = _slots(result, res_min)
-    assert np.allclose(n, n.round())                                  # whole slots
-    planned = n * result["power_kw"] * step_h * opt.efficiency        # kWh delivered to the car
-    one_slot = result["power_kw"] * step_h * opt.efficiency
-    fully_charged = planned >= result["energy"] - 1e-9
-    # Sessions that fit in their window: planned >= energy, and not a whole slot too much.
-    assert (planned[fully_charged] - result["energy"][fully_charged] < one_slot[fully_charged]).all()
-    # The others are the truncated ones, and the optimiser said so (see the next test).
-    assert fully_charged.mean() > 0.5
+def test_inv9_the_maximum_power_is_respected(optimised):
+    """Delivering E kWh at no more than P kW takes at least E / P hours."""
+    _, _, result, _ = optimised
+    span_h = (result["scheduled_end"] - result["scheduled_start"]) / pd.Timedelta(hours=1)
+    assert (span_h >= result["energy"] / result["power_kw"] - 1e-9).all()
 
 
-def test_inv9_each_charging_slot_uses_the_charger_power_and_no_more(optimised):
-    """Recompute every cost from the signal: slots x power x step x price, nothing else."""
-    _, _, result, _, res_min = optimised
-    step_h = res_min / 60
-    signal = make_price_signal(
-        start=START, periods=48 * 6, resolution_min=res_min, pattern="spot_like"
-    )
-    n_slots = _slots(result, res_min).round().astype(int)
-    for _, row, n in zip(range(len(result)), result.itertuples(), n_slots):
-        departure = row.arrival_time + pd.Timedelta(hours=row.duration)
-        window = signal[(signal.index >= row.arrival_time) & (signal.index < departure)]
-        kwh_per_slot = row.power_kw * step_h
-        assert row.cost_smart == pytest.approx(window.nsmallest(n).sum() * kwh_per_slot)
-        assert row.cost_plug == pytest.approx(window.iloc[:n].sum() * kwh_per_slot)
+def test_inv9_costs_match_an_independent_slot_by_slot_recomputation(optimised):
+    """Fill the slots by hand (plain Python): best price first / chronologically."""
+    _, signal, result, _ = optimised
+    step = pd.Timedelta(minutes=RES_MIN)
+    for row in result.itertuples():
+        arrival, departure = row.arrival_time, row.arrival_time + pd.Timedelta(hours=row.duration)
+        slots = []   # (slot start, price, kWh the charger can give inside the window)
+        for t, price in signal.items():
+            overlap = min(t + step, departure) - max(t, arrival)
+            if overlap > pd.Timedelta(0):
+                slots.append((t, price, row.power_kw * overlap / pd.Timedelta(hours=1)))
+
+        def cost(order, energy=row.energy):
+            left, total = energy, 0.0
+            for _, price, capacity in order:
+                kwh = min(capacity, left)
+                total += price * kwh
+                left -= kwh
+            return total
+
+        assert row.cost_plug == pytest.approx(cost(slots))
+        assert row.cost_smart == pytest.approx(cost(sorted(slots, key=lambda s: s[1])))
 
 
 def test_inv9_smart_charging_never_costs_more_than_immediate_charging(optimised):
-    _, _, result, _, _ = optimised
+    _, _, result, _ = optimised
     assert (result["cost_smart"] <= result["cost_plug"] + 1e-12).all()
     assert (result["savings_pct"].dropna() >= -1e-9).all()
     assert result["cost_smart"].sum() < result["cost_plug"].sum()   # and it saves something
@@ -677,23 +757,93 @@ def test_inv9_smart_charging_never_costs_more_than_immediate_charging(optimised)
 
 def test_inv9_res_signal_never_schedules_less_green_than_immediate_charging(model):
     sess = model.simulate_short_term(START, horizon=2, n_scenarios=1, n_sessions=15, seed=4)
-    signal = make_res_signal(start=START, periods=48 * 4, resolution_min=30)
-    opt = SmartChargingOptimizer(signal_type="res")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        result = opt.optimise(sess, signal)
+    signal = make_res_signal(start=START, periods=48 * 4, resolution_min=RES_MIN)
+    result = SmartChargingOptimizer(signal_type="res").optimise(sess, signal)
     # for a RES signal the 'cost' columns hold the green fraction x energy: more is better
     assert (result["cost_smart"] >= result["cost_plug"] - 1e-12).all()
 
 
-def test_inv9_sessions_that_cannot_be_fully_charged_are_announced(model):
-    sess = model.simulate_short_term(START, horizon=1, n_scenarios=1, n_sessions=4, seed=1)
-    sess["power_kw"] = 3.7
-    sess["duration"] = 1.0
-    sess["energy"] = 3.7 * 1.0          # exactly power x duration, so efficiency 0.9 cannot fit
-    signal = make_price_signal(start=START, periods=96, resolution_min=30)
-    _, msgs = _warnings_of(SmartChargingOptimizer("price").optimise, sess, signal)
-    assert any("cannot be fully charged" in m and "4 of 4" in m for m in msgs), msgs
+def _one_session(arrival: str, duration: float, energy: float, power: float = 10.0):
+    return pd.DataFrame({
+        "arrival_time": [pd.Timestamp(arrival)], "duration": [duration],
+        "energy": [energy], "power_kw": [power],
+    })
+
+
+def _signal(prices, start="2025-06-10 08:00"):
+    idx = pd.date_range(start, periods=len(prices), freq="30min")
+    return pd.Series(prices, index=idx)
+
+
+def test_inv9_hand_computed_example_with_a_full_and_a_partial_slot():
+    # 10 kW => 5 kWh per 30-min slot; prices 08:00..09:30 = 1, 4, 2, 3 EUR/kWh.
+    opt = SmartChargingOptimizer("price", resolution_min=30)
+    prices = [1.0, 4.0, 2.0, 3.0]
+    full = opt.optimise(_one_session("2025-06-10 08:00", 2.0, 15.0), _signal(prices)).iloc[0]
+    assert full["cost_plug"] == pytest.approx(5 * (1 + 4 + 2))      # slots 08:00, 08:30, 09:00
+    assert full["cost_smart"] == pytest.approx(5 * (1 + 2 + 3))     # slots 08:00, 09:00, 09:30
+    assert full["savings_pct"] == pytest.approx(100 * 5 / 35)
+    assert full["scheduled_start"] == pd.Timestamp("2025-06-10 08:00")
+    assert full["scheduled_end"] == pd.Timestamp("2025-06-10 10:00")
+    assert full["energy_scheduled"] == pytest.approx(15.0)
+
+    partial = opt.optimise(_one_session("2025-06-10 08:00", 2.0, 12.0), _signal(prices)).iloc[0]
+    assert partial["cost_plug"] == pytest.approx(5 * 1 + 5 * 4 + 2 * 2)     # last slot half full
+    assert partial["cost_smart"] == pytest.approx(5 * 1 + 5 * 2 + 2 * 3)
+    assert partial["scheduled_end"] == pd.Timestamp("2025-06-10 09:42")     # 2 kWh at 10 kW = 12 min
+
+
+def test_inv9_a_slot_only_partly_inside_the_window_offers_only_the_time_inside_it():
+    # 08:10 -> 09:10 at 10 kW: 3.33 kWh in the 08:00 slot, 5 in 08:30, 1.67 in 09:00.
+    result = SmartChargingOptimizer("price", 30).optimise(
+        _one_session("2025-06-10 08:10", 1.0, 10.0), _signal([3.0, 1.0, 2.0])
+    ).iloc[0]
+    assert result["energy_scheduled"] == pytest.approx(10.0)
+    assert result["cost_plug"] == pytest.approx(10 / 3 * 3 + 5 * 1 + 10 / 6 * 2)
+    # the session fills its whole window, so there is nothing to shift
+    assert result["cost_smart"] == pytest.approx(result["cost_plug"])
+    assert result["scheduled_start"] == pd.Timestamp("2025-06-10 08:10")
+    assert result["scheduled_end"] == pd.Timestamp("2025-06-10 09:10")
+
+
+def test_inv9_sessions_at_the_simulators_energy_cap_are_fully_scheduled():
+    """energy == power x duration whatever the duration and the alignment on the grid."""
+    rng = np.random.default_rng(0)
+    n = 200
+    duration = rng.uniform(0.3, 12.0, n)
+    power = rng.choice([3.7, 7.4, 22.0], n)
+    sess = pd.DataFrame({
+        "arrival_time": START + pd.to_timedelta(rng.uniform(0, 12, n), unit="h"),
+        "duration": duration, "energy": power * duration, "power_kw": power,
+    })
+    signal = make_price_signal(start=START, periods=48 * 3, resolution_min=RES_MIN)
+    result, msgs = _warnings_of(SmartChargingOptimizer("price", RES_MIN).optimise, sess, signal)
+    assert msgs == []
+    assert np.allclose(result["energy_scheduled"], result["energy"], rtol=1e-9)
+    assert np.allclose(result["cost_smart"], result["cost_plug"])   # no room to shift
+
+
+def test_inv9_a_session_that_cannot_be_completed_is_announced_and_partly_scheduled():
+    sess = _one_session("2025-06-10 08:00", 1.0, 25.0, power=10.0)       # 25 kWh in 1 h at 10 kW
+    result, msgs = _warnings_of(
+        SmartChargingOptimizer("price", 30).optimise, sess, _signal([1.0, 2.0, 3.0])
+    )
+    assert len(msgs) == 1 and "1 of 1 sessions cannot be completed" in msgs[0]
+    assert "energy_scheduled" in msgs[0]
+    assert result.iloc[0]["energy_scheduled"] == pytest.approx(10.0)       # what fits
+
+
+def test_inv9_efficiency_below_one_adds_losses_on_top_of_the_energy():
+    sess = _one_session("2025-06-10 08:00", 2.0, 18.0, power=10.0)       # 20 kWh capacity
+    prices = _signal([1.0, 1.0, 1.0, 1.0])
+    result, msgs = _warnings_of(SmartChargingOptimizer("price", 30, efficiency=0.9).optimise,
+                                sess, prices)
+    assert msgs == []
+    assert result.iloc[0]["cost_plug"] == pytest.approx(18.0 / 0.9)          # the charger draws more
+    assert result.iloc[0]["energy_scheduled"] == pytest.approx(18.0)
+    _, msgs = _warnings_of(SmartChargingOptimizer("price", 30, efficiency=0.9).optimise,
+                           _one_session("2025-06-10 08:00", 2.0, 20.0, power=10.0), prices)
+    assert any("energy / efficiency (0.9)" in m for m in msgs)               # 22.2 kWh > 20
 
 
 def test_inv9_sessions_outside_the_signal_are_announced_not_silently_nan(model):
@@ -702,6 +852,33 @@ def test_inv9_sessions_outside_the_signal_are_announced_not_silently_nan(model):
     result, msgs = _warnings_of(SmartChargingOptimizer("price").optimise, sess, late_signal)
     assert any("5 of 5 sessions were not optimised" in m and "covers" in m for m in msgs), msgs
     assert result["cost_smart"].isna().all()
+
+
+def test_inv9_unusable_sessions_are_counted_and_the_others_still_scheduled():
+    good = _one_session("2025-06-10 08:00", 2.0, 10.0)
+    bad = pd.concat([good, good, good], ignore_index=True)
+    bad.loc[1, "energy"] = np.nan
+    bad.loc[2, "duration"] = 0.0
+    result, msgs = _warnings_of(SmartChargingOptimizer("price", 30).optimise, bad,
+                                _signal([1.0, 2.0, 3.0, 4.0]))
+    assert any("2 of 3 sessions were not optimised" in m and "no usable arrival" in m for m in msgs)
+    assert result["cost_smart"].notna().tolist() == [True, False, False]
+
+
+def test_inv9_a_signal_with_another_step_than_resolution_min_is_announced():
+    sess = _one_session("2025-06-10 08:00", 2.0, 10.0)
+    _, msgs = _warnings_of(SmartChargingOptimizer("price", 15).optimise, sess,
+                           _signal([1.0, 2.0, 3.0, 4.0]))
+    assert any("30-minute step" in m and "resolution_min=15" in m for m in msgs)
+
+
+def test_inv9_bad_inputs_are_refused_with_a_clear_message():
+    sess = _one_session("2025-06-10 08:00", 2.0, 10.0)
+    with pytest.raises(TypeError, match="indexed by timestamps"):
+        SmartChargingOptimizer("price", 30).optimise(sess, pd.Series([1.0, 2.0]))
+    sess["power_kw"] = 0.0
+    with pytest.raises(ValueError, match="power_kw must be > 0"):
+        SmartChargingOptimizer("price", 30).optimise(sess, _signal([1.0, 2.0]))
 
 
 @pytest.mark.parametrize(
@@ -717,6 +894,10 @@ def test_inv9_sessions_outside_the_signal_are_announced_not_silently_nan(model):
 def test_optimiser_arguments_are_validated(kwargs, name):
     with pytest.raises(ValueError, match=name):
         SmartChargingOptimizer(**kwargs)
+
+
+def test_the_optimiser_assumes_no_extra_losses_by_default():
+    assert SmartChargingOptimizer().efficiency == 1.0
 
 
 # 10. Medium term -------------------------------------------------------------
