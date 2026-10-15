@@ -52,9 +52,9 @@ class Gear1Backend:
         Context columns for session-model stratification.
         Default: ``['day_of_week', 'season']``.
     forecaster_method : str
-        ``'sarima'`` (recommended; with fewer than 28 days of history, or if
-        pmdarima cannot be imported, a warning announces the substitute used —
-        see :class:`~gears.models.forecaster.SessionForecaster`) or
+        ``'sarima'`` (recommended; always tried, and if it cannot be fitted — very
+        short history — or pmdarima cannot be imported, a warning announces the
+        substitute used, see :class:`~gears.models.forecaster.SessionForecaster`) or
         ``'probabilistic'`` (fast, no extra deps).
     charger_mix : dict, optional
         Charger power distribution, e.g. ``{7.4: 0.3, 22.0: 0.7}``.

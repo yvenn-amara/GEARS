@@ -56,9 +56,10 @@ from gears._validation import as_naive_timestamp, check_int, not_fitted_error
 
 logger = logging.getLogger(__name__)
 
-# SARIMA with a weekly season needs several full weeks to estimate anything
-# meaningful; below this the forecaster announces a fall-back to 'probabilistic'.
-MIN_SARIMA_WEEKS = 4
+# A SARIMA forecast over one season whose largest value exceeds this multiple of the
+# largest observed daily count is treated as a failed fit (the fit "converged" but the
+# model diverges, which happens on very short histories).
+SARIMA_DIVERGENCE_FACTOR = 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -139,11 +140,12 @@ class SessionForecaster:
     ----------
     method : str
         ``'sarima'`` — auto-selects the best ARIMA+seasonal order via BIC with
-        pmdarima. If pmdarima cannot be imported, a fixed statsmodels
+        pmdarima. SARIMA is always tried, whatever the length of the history.
+        If pmdarima cannot be imported, a fixed statsmodels
         SARIMAX(1,1,1)x(1,1,0,7) is fitted instead and a ``UserWarning`` says
-        so. If the history is shorter than 4 seasonal periods (28 days for a
-        weekly season), SARIMA cannot be estimated reliably: the forecaster
-        warns and uses ``'probabilistic'`` instead.
+        so. If SARIMA cannot be fitted (very short histories: pmdarima refuses
+        below about two weeks) or its forecast diverges, a ``UserWarning``
+        says why and the forecaster switches to ``'probabilistic'``.
         ``'probabilistic'`` — samples from a normal distribution fitted on the
         historical mean and standard deviation. Fast, no dependencies.
 
@@ -151,8 +153,8 @@ class SessionForecaster:
     ----------
     method_ : str
         The method actually used after ``fit()`` (``'sarima'`` or
-        ``'probabilistic'``); differs from ``method`` only when the short-history
-        fall-back above was applied.
+        ``'probabilistic'``); differs from ``method`` only when the switch
+        described above happened.
     seasonal_period : int
         Seasonal period for SARIMA (7 = weekly, default).
     use_holidays : bool
@@ -224,9 +226,9 @@ class SessionForecaster:
         Warns
         -----
         UserWarning
-            When the requested SARIMA cannot be fitted as asked: history shorter
-            than 4 seasonal periods (``'probabilistic'`` is used, see ``method_``)
-            or pmdarima unavailable (fixed-order statsmodels SARIMAX is used).
+            When the requested SARIMA cannot be fitted as asked: the fit fails or
+            diverges (``'probabilistic'`` is used, see ``method_``), or pmdarima is
+            unavailable (fixed-order statsmodels SARIMAX is used).
         """
         self._daily_counts = sessions_to_daily_counts(df)
         self.mean_daily_ = float(self._daily_counts.mean())
@@ -238,29 +240,31 @@ class SessionForecaster:
         self.method_ = self.method
 
         n = len(self._daily_counts)
-        min_days = MIN_SARIMA_WEEKS * self.seasonal_period
-        if self.method == "sarima" and n < min_days:
-            warnings.warn(
-                f"SARIMA needs at least {MIN_SARIMA_WEEKS} seasonal periods "
-                f"({min_days} days) of history, but the data span only {n} day(s). "
-                "Falling back to method='probabilistic' (daily counts drawn from a "
-                "normal distribution fitted on their mean and standard deviation); "
-                "see forecaster.method_. Provide a longer history, or pass "
-                "forecaster_method='probabilistic' to silence this warning.",
-                UserWarning,
-                stacklevel=2,
-            )
-            self.method_ = "probabilistic"
+        if self.method == "sarima":
+            logger.info("Fitting SARIMA on %d days of data.", n)
+            failure = self._try_fit_sarima()
+            if failure is not None:
+                warnings.warn(
+                    f"SARIMA could not be fitted on these {n} day(s) of history ({failure}). "
+                    "Switching to method='probabilistic' (daily counts drawn from a normal "
+                    "distribution fitted on their mean and standard deviation); "
+                    "forecaster.method_ tells which method is used. A longer history "
+                    "(about 4 weeks or more) usually lets SARIMA fit; pass "
+                    "forecaster_method='probabilistic' to choose the simple method on purpose.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                self._model = None
+                self.method_ = "probabilistic"
 
         if self.method_ == "probabilistic":
             logger.info("Probabilistic mode: stored mean/std of daily counts.")
-            self.is_fitted_ = True
-            return self
+        self.is_fitted_ = True
+        return self
 
-        # Build holiday exogenous regressor for training dates
+    def _try_fit_sarima(self) -> str | None:
+        """Fit the SARIMA model; return ``None`` on success, else why it failed."""
         self._exog_train = self._build_holiday_exog(self._daily_counts.index)
-
-        logger.info("Fitting SARIMA on %d days of data.", n)
         try:
             import pmdarima as pm
         except Exception as e:  # noqa: BLE001 - a broken binary install raises more than ImportError
@@ -270,30 +274,55 @@ class SessionForecaster:
                 f"{self.seasonal_period}) is fitted instead. Install a working pmdarima "
                 "(pip install pmdarima) for the automatic order selection.",
                 UserWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
-            self._fit_statsmodels_fallback(exog=self._exog_train)
-        else:
-            self._model = pm.auto_arima(
-                self._daily_counts.values,
-                exogenous=self._exog_train,
-                seasonal=True,
-                m=self.seasonal_period,
-                max_p=self.max_p,
-                max_q=self.max_q,
-                max_P=self.max_P,
-                max_Q=self.max_Q,
-                information_criterion="bic",
-                stepwise=True,
-                suppress_warnings=True,
-                error_action="ignore",
-                random_state=self.random_state,
-            )
-            logger.info("SARIMA order: %s seasonal: %s", self._model.order,
-                        self._model.seasonal_order)
+            pm = None
 
-        self.is_fitted_ = True
-        return self
+        try:
+            if pm is None:
+                self._fit_statsmodels_fallback(exog=self._exog_train)
+            else:
+                self._model = pm.auto_arima(
+                    self._daily_counts.values,
+                    exogenous=self._exog_train,
+                    seasonal=True,
+                    m=self.seasonal_period,
+                    max_p=self.max_p,
+                    max_q=self.max_q,
+                    max_P=self.max_P,
+                    max_Q=self.max_Q,
+                    information_criterion="bic",
+                    stepwise=True,
+                    suppress_warnings=True,
+                    error_action="ignore",
+                    random_state=self.random_state,
+                )
+                logger.info("SARIMA order: %s seasonal: %s", self._model.order,
+                            self._model.seasonal_order)
+        except Exception as e:  # noqa: BLE001 - any fit failure means "switch to probabilistic"
+            return f"{type(e).__name__}: {str(e).split(' See ')[0]}"
+
+        return self._divergence_check()
+
+    def _divergence_check(self) -> str | None:
+        """Forecast one season ahead; ``None`` if it is finite and plausible."""
+        horizon = self.seasonal_period
+        dates = pd.date_range(
+            self._daily_counts.index[-1] + pd.Timedelta(days=1), periods=horizon, freq="D"
+        )
+        try:
+            fc = np.asarray(
+                self._point_forecast(horizon, self._build_holiday_exog(dates)), dtype=float
+            )
+        except Exception as e:  # noqa: BLE001 - a model that cannot forecast has failed
+            return f"it cannot forecast: {type(e).__name__}: {e}"
+        ceiling = SARIMA_DIVERGENCE_FACTOR * max(float(self._daily_counts.max()), 1.0)
+        if not np.isfinite(fc).all() or np.abs(fc).max() > ceiling:
+            return (
+                f"its forecast diverges: up to {np.nanmax(np.abs(fc)):,.0f} sessions/day "
+                f"against at most {int(self._daily_counts.max())} observed"
+            )
+        return None
 
     def _build_holiday_exog(
         self,
@@ -468,10 +497,7 @@ class SessionForecaster:
             return np.full(horizon, self.mean_daily_)
 
         try:
-            if hasattr(self._model, "_is_statsmodels"):
-                fc = self._model.forecast(horizon, exog=future_exog)
-            else:
-                fc = self._model.predict(n_periods=horizon, X=future_exog)
+            fc = self._point_forecast(horizon, future_exog)
         except Exception as e:  # noqa: BLE001 - any SARIMA failure falls back to the mean, announced below
             if not self._predict_failure_warned:
                 self._predict_failure_warned = True
@@ -492,6 +518,12 @@ class SessionForecaster:
         noise_scale = max(self.std_daily_, 1.0)
         fc = fc + rng.normal(0, noise_scale, horizon)
         return np.maximum(0, fc)
+
+    def _point_forecast(self, horizon: int, future_exog: np.ndarray | None) -> np.ndarray:
+        """Deterministic SARIMA forecast of the next ``horizon`` days (raises on failure)."""
+        if hasattr(self._model, "_is_statsmodels"):
+            return np.asarray(self._model.forecast(horizon, exog=future_exog))
+        return np.asarray(self._model.predict(n_periods=horizon, X=future_exog))
 
     def plot_forecast(self, horizon: int = 14, n_scenarios: int = 50,
                       seed: int = 0, ax=None, figsize: tuple = (12, 4)):
