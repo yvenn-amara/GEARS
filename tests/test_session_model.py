@@ -1,763 +1,288 @@
-"""Tests for gears.models.session_model."""
-import tempfile
-from pathlib import Path
+"""Tests for the GMM session model (gears.models.session_model).
+
+The VAE variant lives in ``test_vae.py``; the messages and fallbacks for unknown or sparse
+contexts, and for too little data, are checked in ``test_sanity.py``.
+"""
+
+from __future__ import annotations
+
+import pickle
 
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.mixture import GaussianMixture
 
 from gears.data.schemas import validate_dataframe
-from gears.models.session_model import EVSessionModel
+from gears.models.session_model import DEFAULT_RECENCY_RESAMPLE_CAP, EVSessionModel
 
 
-def make_df(n=500, seed=0):
+def make_df(n=500, seed=0, location_types=("work", "home", "public")):
     rng = np.random.default_rng(seed)
     df = pd.DataFrame({
         "arrival_time": pd.date_range("2025-01-01", periods=n, freq="1h"),
         "duration": rng.uniform(0.5, 8, n),
         "energy": rng.uniform(2, 40, n),
-        "location_type": rng.choice(["work", "home", "public"], n),
+        "location_type": rng.choice(list(location_types), n),
     })
     return validate_dataframe(df)
 
 
-def test_fit_basic():
-    df = make_df(300)
-    gmm = EVSessionModel(n_components=3, stratify_by=["day_of_week", "season"])
-    gmm.fit(df)
-    assert gmm.is_fitted_
-    assert len(gmm.models_) > 0
+def make_long_history(n, span_days, seed=0):
+    """One location, ``n`` sessions spread over ``span_days`` days."""
+    rng = np.random.default_rng(seed)
+    dates = pd.Timestamp("2024-01-01") + pd.to_timedelta(rng.integers(0, span_days, n), unit="D")
+    return validate_dataframe(pd.DataFrame({
+        "arrival_time": dates + pd.to_timedelta(rng.uniform(0, 23, n), unit="h"),
+        "duration": rng.uniform(0.5, 8, n),
+        "energy": rng.uniform(2, 40, n),
+        "location_type": "home",
+    }))
 
 
-def test_fit_auto():
+def make_regime_shift(n_old=800, n_recent=200, seed=0):
+    """Old sessions are short and small, the last three weeks are long and large."""
+    rng = np.random.default_rng(seed)
+
+    def block(n, first_day, n_days, duration, energy):
+        days = pd.Timestamp(first_day) + pd.to_timedelta(rng.integers(0, n_days, n), unit="D")
+        return pd.DataFrame({
+            "arrival_time": days + pd.to_timedelta(rng.uniform(0, 23, n), unit="h"),
+            "duration": rng.uniform(*duration, n),
+            "energy": rng.uniform(*energy, n),
+            "location_type": "home",
+        })
+
+    old = block(n_old, "2024-01-01", 300, (0.5, 2), (2, 8))
+    recent = block(n_recent, "2024-10-27", 21, (6, 10), (30, 45))
+    return validate_dataframe(pd.concat([old, recent], ignore_index=True))
+
+
+def _mean_log_energy(gmm: EVSessionModel, ctx: tuple) -> float:
+    """Weighted mean of the energy dimension (log1p space) of one context's mixture."""
+    sk = gmm.models_[ctx]
+    return float(np.sum(sk.weights_ * sk.means_[:, 2]))
+
+
+# ── Fit, sample, score, save ──────────────────────────────────────────────────
+
+def test_a_fitted_model_samples_scores_and_describes_itself():
     df = make_df(500)
-    gmm = EVSessionModel(n_components="auto", max_components=5)
+    gmm = EVSessionModel(n_components=3)
+    assert "fitted=False" in repr(gmm)
+
     gmm.fit(df)
-    bic = gmm.bic_summary()
-    assert all(bic["n_components"] >= 2)
 
+    assert gmm.is_fitted_ and "fitted=True" in repr(gmm)
+    contexts = gmm.list_contexts()
+    assert contexts and all(isinstance(c, tuple) for c in contexts)
+    assert isinstance(gmm.get_sklearn_component(), GaussianMixture)
+    assert np.isfinite(gmm.score(df))
 
-def test_sample_basic():
-    df = make_df(500)
-    gmm = EVSessionModel(n_components=3).fit(df)
     synth = gmm.sample(50, seed=0)
     assert len(synth) == 50
-    assert {"arrival_hour", "duration", "energy"}.issubset(synth.columns)
-    assert synth["duration"].min() >= 0
-    assert synth["energy"].min() >= 0
+    assert {"arrival_hour", "duration", "energy"} <= set(synth.columns)
+    assert synth["arrival_hour"].between(0, 24).all()
+    assert (synth["duration"] >= 0).all() and (synth["energy"] >= 0).all()
+    pd.testing.assert_frame_equal(synth, gmm.sample(50, seed=0))     # same seed, same sample
+
+    dated = gmm.sample(20, date="2025-06-15", seed=1)                # the date picks the context
+    assert (dated["arrival_time"].dt.date == pd.Timestamp("2025-06-15").date()).all()
 
 
-def test_sample_with_date():
-    df = make_df(500)
-    gmm = EVSessionModel(n_components=3).fit(df)
-    synth = gmm.sample(20, date="2025-06-15", seed=1)
-    assert "arrival_time" in synth.columns
+def test_each_mixture_is_the_best_of_three_initialisations():
+    df = make_df(500, location_types=("home",))
+    X = np.column_stack([
+        df["hour"].values, np.log1p(df["duration"].values), np.log1p(df["energy"].values),
+    ])
+
+    def reference(n_init):
+        return GaussianMixture(
+            n_components=4, covariance_type="full", random_state=0,
+            n_init=n_init, max_iter=300, reg_covar=1e-5,
+        ).fit(X)
+
+    fitted = EVSessionModel(
+        n_components=4, stratify_by=["location_type"], random_state=0
+    ).fit(df).models_[("home",)]
+
+    assert reference(1).score(X) < reference(3).score(X)         # the data tell the two apart
+    np.testing.assert_allclose(fitted.means_, reference(3).means_)
+    np.testing.assert_allclose(fitted.covariances_, reference(3).covariances_)
 
 
-def test_context_fallback():
-    """Unknown context should fall back gracefully."""
-    df = make_df(500)
-    gmm = EVSessionModel(n_components=3).fit(df)
-    # Non-existent context
-    synth = gmm.sample(10, context={"day_of_week": 99, "season": "unknown"})
-    assert len(synth) == 10
+def test_the_number_of_components_can_be_chosen_by_bic():
+    df = make_df(500, location_types=("home",))
+    gmm = EVSessionModel(
+        n_components="auto", max_components=5, stratify_by=["location_type"], random_state=0
+    ).fit(df)
+    assert gmm.bic_summary()["n_components"].between(2, 5).all()
+
+    # the model kept is the one with the lowest BIC, found here with scikit-learn alone
+    X = np.column_stack([
+        df["hour"].values, np.log1p(df["duration"].values), np.log1p(df["energy"].values),
+    ])
+    candidates = {
+        k: GaussianMixture(
+            n_components=k, covariance_type="full", random_state=0,
+            n_init=3, max_iter=300, reg_covar=1e-5,
+        ).fit(X)
+        for k in range(2, 6)
+    }
+    bic = {k: candidate.bic(X) for k, candidate in candidates.items()}
+    assert len(set(bic.values())) == 4                       # the choice is not a tie
+    best = candidates[min(bic, key=bic.get)]
+    kept = gmm.models_[("home",)]
+    assert kept.n_components == best.n_components
+    np.testing.assert_allclose(kept.means_, best.means_)
 
 
-def test_get_sklearn_component():
-    df = make_df(500)
-    gmm = EVSessionModel(n_components=3).fit(df)
-    from sklearn.mixture import GaussianMixture
-    sk = gmm.get_sklearn_component()
-    assert isinstance(sk, GaussianMixture)
-    assert hasattr(sk, "means_")
-    assert hasattr(sk, "weights_")
+def test_training_data_per_context_can_be_capped():
+    gmm = EVSessionModel(n_components=3, max_samples_per_context=50).fit(make_df(2000))
+    assert max(gmm.context_counts_.values()) == 50
+    # ... but the daily rate still describes the whole history, not the capped sample.
+    assert all(rate > 0 for rate in gmm.n_sessions_per_day_.values())
 
 
-def test_list_contexts():
-    df = make_df(500)
-    gmm = EVSessionModel(n_components=3).fit(df)
-    ctxs = gmm.list_contexts()
-    assert len(ctxs) > 0
-    assert all(isinstance(c, tuple) for c in ctxs)
+def test_save_then_load_gives_the_same_model(tmp_path):
+    gmm = EVSessionModel(n_components=3).fit(make_df(300), is_sample=True)
+    gmm.save(tmp_path / "gmm.joblib")
+    loaded = EVSessionModel.load(tmp_path / "gmm.joblib")
+
+    assert loaded.is_fitted_ and loaded.is_sample_ is True
+    assert set(loaded.models_) == set(gmm.models_)
+    pd.testing.assert_frame_equal(loaded.sample(20, seed=4), gmm.sample(20, seed=4))
 
 
-def test_score():
-    df = make_df(500)
-    gmm = EVSessionModel(n_components=3).fit(df)
-    score = gmm.score(df)
-    assert np.isfinite(score)
+# ── Stratification ────────────────────────────────────────────────────────────
+
+def test_stratify_by_drops_only_the_columns_that_are_missing():
+    full = ["location_type", "department", "day_of_week", "season"]
+    with_department = validate_dataframe(pd.DataFrame({
+        "arrival_time": pd.date_range("2025-01-01", periods=300, freq="1h"),
+        "duration": np.random.default_rng(0).uniform(0.5, 8, 300),
+        "energy": np.random.default_rng(1).uniform(2, 40, 300),
+        "department": np.random.default_rng(2).choice(["75", "92"], 300),
+    }))
+    no_department = make_df(300)
+
+    def stratified_by(df, columns):
+        return EVSessionModel(n_components=1, stratify_by=columns).fit(df).stratify_by
+
+    # a present `department` must survive a missing `location_type`
+    assert stratified_by(with_department, full) == ["department", "day_of_week", "season"]
+    assert stratified_by(no_department, full) == ["location_type", "day_of_week", "season"]
+    assert stratified_by(no_department.drop(columns="location_type"), full) == [
+        "day_of_week", "season"
+    ]
+    # nothing missing: left untouched
+    assert stratified_by(no_department, ["location_type", "day_of_week"]) == [
+        "location_type", "day_of_week"
+    ]
 
 
-def test_is_sample_flag():
-    df = make_df(200)
-    gmm = EVSessionModel(n_components=2).fit(df, is_sample=True)
-    assert gmm.is_sample_ is True
+# ── Recency weighting ─────────────────────────────────────────────────────────
 
-
-def test_save_load():
-    df = make_df(300)
-    gmm = EVSessionModel(n_components=3).fit(df)
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "gmm_test.joblib"
-        gmm.save(path)
-        loaded = EVSessionModel.load(path)
-    assert loaded.is_fitted_
-    assert len(loaded.models_) == len(gmm.models_)
-
-
-def test_max_samples_per_context():
-    df = make_df(2000)
-    gmm = EVSessionModel(n_components=3, max_samples_per_context=50).fit(df)
-    assert gmm.is_fitted_
-
-
-def test_repr_unfitted():
-    gmm = EVSessionModel()
-    r = repr(gmm)
-    assert "fitted=False" in r
-
-
-def test_repr_fitted():
-    df = make_df(300)
-    gmm = EVSessionModel(n_components=3).fit(df)
-    r = repr(gmm)
-    assert "fitted=True" in r
-
-
-# ── Recency-weighted GMM tests ───────────────────────────────────────────────
-
-def make_df_regime_shift(n_old=800, n_recent=200, seed=0):
-    """Synthetic dataset with a deliberate distribution shift over time.
-
-    Old sessions (first ~300 days): low duration/energy, one 'home' regime.
-    Recent sessions (last 21 days before the reference date): high
-    duration/energy, a shifted regime. Used to check that recency weighting
-    actually pulls the fit toward the recent cluster.
-    """
-    rng = np.random.default_rng(seed)
-    old_dates = pd.Timestamp("2024-01-01") + pd.to_timedelta(
-        rng.integers(0, 300, n_old), unit="D"
-    )
-    old = pd.DataFrame({
-        "arrival_time": old_dates + pd.to_timedelta(rng.uniform(0, 23, n_old), unit="h"),
-        "duration": rng.uniform(0.5, 2, n_old),
-        "energy": rng.uniform(2, 8, n_old),
-        "location_type": "home",
-    })
-    recent_dates = pd.Timestamp("2024-10-27") + pd.to_timedelta(
-        rng.integers(0, 21, n_recent), unit="D"
-    )
-    recent = pd.DataFrame({
-        "arrival_time": recent_dates + pd.to_timedelta(rng.uniform(0, 23, n_recent), unit="h"),
-        "duration": rng.uniform(6, 10, n_recent),
-        "energy": rng.uniform(30, 45, n_recent),
-        "location_type": "home",
-    })
-    df = pd.concat([old, recent], ignore_index=True)
-    return validate_dataframe(df)
-
-
-def _mean_feature(gmm_obj: EVSessionModel, ctx: tuple, feature_idx: int) -> float:
-    """Weighted mean of one GMM feature dimension (log1p-space) for a context."""
-    sk = gmm_obj.models_[ctx]
-    return float(np.sum(sk.weights_ * sk.means_[:, feature_idx]))
-
-
-def test_recency_none_matches_pristine_unmodified_code():
-    """recency=None must produce byte-for-byte identical results to the
-    pre-change code path.
-
-    Rather than only asserting internal self-consistency, this re-derives
-    the model with the *original* (pre-recency-feature) implementation of
-    the fit loop -- reconstructed here verbatim from the version of
-    EVSessionModel.fit()/._fit_single() that existed before recency weighting
-    was added -- and checks the new code, called with recency=None, matches
-    it exactly. This is the regression proof, not just a self-consistency
-    check.
-    """
-    from sklearn.mixture import GaussianMixture
-
+def test_without_recency_the_fit_is_exactly_the_plain_gmm_fit():
+    """Re-derive the fit with scikit-learn alone and compare: this is the regression
+    proof that adding recency weighting changed nothing for ``recency=None``."""
     df = make_df(500, seed=3)
-
-    # New code, recency explicitly disabled.
-    gmm_new = EVSessionModel(
-        n_components=3, stratify_by=["day_of_week", "season"], random_state=7,
-        recency=None,
+    gmm = EVSessionModel(
+        n_components=3, stratify_by=["day_of_week", "season"], random_state=7, recency=None
     ).fit(df)
 
-    # Pristine pre-change logic, reproduced independently: no recency
-    # concept at all, group -> optional uniform subsample -> _fit_single.
-    df2 = df.copy()
-    if "day_of_week" not in df2.columns:
-        df2["day_of_week"] = df2["arrival_time"].dt.dayofweek
-    groups = df2.groupby(["day_of_week", "season"], observed=True)
-    expected_models = {}
-    for ctx_key, group_df in groups:
-        ctx_tuple = ctx_key if isinstance(ctx_key, tuple) else (ctx_key,)
-        if len(group_df) < 10:
+    expected = {}
+    for ctx, group in df.groupby(["day_of_week", "season"], observed=True):
+        if len(group) < 10:
             continue
-        hour = group_df["hour"].values
-        log_dur = np.log1p(group_df["duration"].values)
-        log_ene = np.log1p(group_df["energy"].values)
-        X = np.column_stack([hour, log_dur, log_ene])
-        # gmm_new below is constructed with a *fixed* n_components=3, so the
-        # pre-change _fit_single takes its "else" branch (single fit, no BIC
-        # search) -- reproduce exactly that, not the auto-BIC branch.
-        best_gmm = GaussianMixture(
+        X = np.column_stack([
+            group["hour"].values, np.log1p(group["duration"].values),
+            np.log1p(group["energy"].values),
+        ])
+        expected[ctx] = GaussianMixture(
             n_components=3, covariance_type="full", random_state=7,
             n_init=3, max_iter=300, reg_covar=1e-5,
         ).fit(X)
-        expected_models[ctx_tuple] = best_gmm
 
-    assert set(gmm_new.models_.keys()) == set(expected_models.keys())
-    for ctx, expected in expected_models.items():
-        actual = gmm_new.models_[ctx]
-        assert np.array_equal(actual.means_, expected.means_)
-        assert np.array_equal(actual.covariances_, expected.covariances_)
-        assert np.array_equal(actual.weights_, expected.weights_)
+    assert set(gmm.models_) == set(expected)
+    for ctx, reference in expected.items():
+        assert np.array_equal(gmm.models_[ctx].means_, reference.means_)
+        assert np.array_equal(gmm.models_[ctx].covariances_, reference.covariances_)
+        assert np.array_equal(gmm.models_[ctx].weights_, reference.weights_)
 
-
-def test_recency_none_equals_default_omitted():
-    """Explicitly passing recency=None must equal simply omitting it."""
-    df = make_df(400, seed=1)
-    gmm_a = EVSessionModel(n_components=3, random_state=5, recency=None).fit(df)
-    gmm_b = EVSessionModel(n_components=3, random_state=5).fit(df)
-    for ctx in gmm_a.models_:
-        assert np.array_equal(gmm_a.models_[ctx].means_, gmm_b.models_[ctx].means_)
-        assert np.array_equal(gmm_a.models_[ctx].weights_, gmm_b.models_[ctx].weights_)
-    assert gmm_a.n_sessions_per_day_ == gmm_b.n_sessions_per_day_
-    assert gmm_a.context_counts_ == gmm_b.context_counts_
+    # and `recency=None` is the default
+    default = EVSessionModel(
+        n_components=3, stratify_by=["day_of_week", "season"], random_state=7
+    ).fit(df)
+    assert all(np.array_equal(default.models_[c].means_, gmm.models_[c].means_) for c in expected)
 
 
-def test_recency_pulls_fit_toward_recent_cluster():
-    """With a deliberate regime shift, the recency-weighted fit's means must
-    sit much closer to the recent cluster than the unweighted fit's."""
-    df = make_df_regime_shift()
+def test_recency_pulls_the_fit_towards_the_recent_regime():
+    df = make_regime_shift()
+    kwargs = {"n_components": 2, "stratify_by": ["location_type"], "random_state": 0}
+    plain = EVSessionModel(**kwargs).fit(df)
+    weighted = EVSessionModel(**kwargs, recency=True, half_life_days=7).fit(df)
     ctx = ("home",)
 
-    gmm_plain = EVSessionModel(
-        n_components=2, stratify_by=["location_type"], random_state=0,
-    ).fit(df)
-    gmm_recency = EVSessionModel(
-        n_components=2, stratify_by=["location_type"], random_state=0,
-        recency=True, half_life_days=7,
-    ).fit(df)
-
-    # energy is feature index 2 (log1p space); true recent-cluster energy
-    # range is [30, 45] kWh -> log1p in roughly [3.43, 3.83].
-    plain_energy_log = _mean_feature(gmm_plain, ctx, 2)
-    recency_energy_log = _mean_feature(gmm_recency, ctx, 2)
-
-    recent_target = np.log1p(37.5)  # midpoint of the recent regime's energy range
-    old_target = np.log1p(5.0)      # midpoint of the old regime's energy range
-
-    # The recency-weighted fit must be closer to the recent regime than the
-    # plain fit is, by a wide margin -- not just marginally closer.
-    assert abs(recency_energy_log - recent_target) < abs(plain_energy_log - recent_target)
-    assert abs(recency_energy_log - recent_target) < abs(recency_energy_log - old_target)
+    recent, old = np.log1p(37.5), np.log1p(5.0)          # mid-points of the two regimes
+    plain_energy, weighted_energy = _mean_log_energy(plain, ctx), _mean_log_energy(weighted, ctx)
+    assert abs(weighted_energy - recent) < abs(plain_energy - recent)
+    assert abs(weighted_energy - recent) < abs(weighted_energy - old)
+    assert "recency=True" in repr(weighted)
 
 
-def test_recency_resample_cap_respected():
-    """The recency-weighted resample must never exceed recency_resample_cap,
-    even when the pooled context has far more sessions than the cap."""
-    rng = np.random.default_rng(2)
-    n = 12_000
-    dates = pd.Timestamp("2024-01-01") + pd.to_timedelta(rng.integers(0, 200, n), unit="D")
-    df = pd.DataFrame({
-        "arrival_time": dates + pd.to_timedelta(rng.uniform(0, 23, n), unit="h"),
-        "duration": rng.uniform(0.5, 8, n),
-        "energy": rng.uniform(2, 40, n),
-        "location_type": "home",
-    })
-    df = validate_dataframe(df)
+def test_recency_resampling_is_capped_but_the_daily_rate_is_not():
+    df = make_long_history(n=5200, span_days=200)
+    home = ("home",)
 
-    small_cap = 500
-    gmm = EVSessionModel(
-        n_components=2, stratify_by=["location_type"], random_state=0,
-        recency=True, half_life_days=30, recency_resample_cap=small_cap,
-    ).fit(df)
+    def fit(**kwargs):
+        return EVSessionModel(
+            n_components=2, stratify_by=["location_type"], random_state=0,
+            recency=True, half_life_days=30, **kwargs,
+        ).fit(df)
 
-    ctx = ("home",)
-    assert gmm.context_counts_[ctx] == small_cap
-
-    # n_sessions_per_day_ must reflect the TRUE pool, not the capped
-    # training sample -- this is the exact bug pattern flagged elsewhere for
-    # the VAE path (n_sessions_per_day_ computed from a subsampled count
-    # instead of the true underlying count).
-    true_n_days = df["arrival_time"].dt.normalize().nunique()
-    true_rate = len(df) / true_n_days
-    assert abs(gmm.n_sessions_per_day_[ctx] - true_rate) < 1e-9
-
-
-def test_recency_default_cap_is_5000():
-    """Default recency_resample_cap must be DEFAULT_RECENCY_RESAMPLE_CAP (5000)
-    and must actually be applied without an explicit override."""
-    from gears.models.session_model import DEFAULT_RECENCY_RESAMPLE_CAP
+    capped = fit(recency_resample_cap=500)
+    assert capped.context_counts_[home] == 500
+    true_rate = len(df) / df["arrival_time"].dt.normalize().nunique()
+    assert capped.n_sessions_per_day_[home] == pytest.approx(true_rate)   # not the capped sample
 
     assert DEFAULT_RECENCY_RESAMPLE_CAP == 5000
-
-    rng = np.random.default_rng(4)
-    n = 8_000
-    dates = pd.Timestamp("2024-01-01") + pd.to_timedelta(rng.integers(0, 300, n), unit="D")
-    df = pd.DataFrame({
-        "arrival_time": dates + pd.to_timedelta(rng.uniform(0, 23, n), unit="h"),
-        "duration": rng.uniform(0.5, 8, n),
-        "energy": rng.uniform(2, 40, n),
-        "location_type": "home",
-    })
-    df = validate_dataframe(df)
-
-    gmm = EVSessionModel(
-        n_components=2, stratify_by=["location_type"], random_state=0,
-        recency=True, half_life_days=30,
-    ).fit(df)
-    assert gmm.context_counts_[("home",)] == DEFAULT_RECENCY_RESAMPLE_CAP
+    assert fit().context_counts_[home] == DEFAULT_RECENCY_RESAMPLE_CAP
+    assert fit(max_samples_per_context=1000).context_counts_[home] == 1000   # the smaller wins
 
 
-def test_recency_max_samples_per_context_lowers_effective_cap():
-    """If max_samples_per_context is also set and smaller than
-    recency_resample_cap, the smaller value governs the training size."""
-    rng = np.random.default_rng(5)
-    n = 8_000
-    dates = pd.Timestamp("2024-01-01") + pd.to_timedelta(rng.integers(0, 300, n), unit="D")
-    df = pd.DataFrame({
-        "arrival_time": dates + pd.to_timedelta(rng.uniform(0, 23, n), unit="h"),
-        "duration": rng.uniform(0.5, 8, n),
-        "energy": rng.uniform(2, 40, n),
-        "location_type": "home",
-    })
-    df = validate_dataframe(df)
+def test_the_default_half_life_scales_with_the_history_and_can_be_overridden():
+    home = ("home",)
 
-    gmm = EVSessionModel(
-        n_components=2, stratify_by=["location_type"], random_state=0,
-        recency=True, half_life_days=30,
-        max_samples_per_context=1000,
-    ).fit(df)
-    assert gmm.context_counts_[("home",)] == 1000
-
-
-def test_recency_half_life_default_scales_with_span():
-    """When half_life_days is not given, it must scale with the observed
-    per-context history span, per recency_halflife_divisor."""
-
-    def make(span_days, n=2000, seed=0):
-        r = np.random.default_rng(seed)
-        dates = pd.Timestamp("2024-01-01") + pd.to_timedelta(
-            r.integers(0, span_days, n), unit="D"
-        )
-        d = pd.DataFrame({
-            "arrival_time": dates + pd.to_timedelta(r.uniform(0, 23, n), unit="h"),
-            "duration": r.uniform(0.5, 8, n),
-            "energy": r.uniform(2, 40, n),
-            "location_type": "home",
-        })
-        return validate_dataframe(d)
-
-    df_short = make(56)   # X=8 weeks
-    df_long = make(364)   # X=52 weeks
-
-    gmm_short = EVSessionModel(
-        n_components=2, stratify_by=["location_type"], random_state=0, recency=True,
-    ).fit(df_short)
-    gmm_long = EVSessionModel(
-        n_components=2, stratify_by=["location_type"], random_state=0, recency=True,
-    ).fit(df_long)
-
-    hl_short = gmm_short.half_life_days_used_[("home",)]
-    hl_long = gmm_long.half_life_days_used_[("home",)]
-
-    # Longer history window -> longer default half-life.
-    assert hl_long > hl_short
-    # Matches the documented formula: span_days / recency_halflife_divisor.
-    assert hl_short == pytest.approx(55 / 3.5, rel=0.05)
-    assert hl_long == pytest.approx(363 / 3.5, rel=0.05)
-
-
-def test_recency_explicit_half_life_overrides_default():
-    df = make_df_regime_shift()
-    gmm = EVSessionModel(
-        n_components=2, stratify_by=["location_type"], random_state=0,
-        recency=True, half_life_days=99,
-    ).fit(df)
-    assert gmm.half_life_days_used_[("home",)] == 99.0
-
-
-def test_recency_ignored_for_vae_with_warning(caplog):
-    """recency=True with model_type='vae' must be ignored (loudly), not
-    silently applied -- the VAE path is out of scope for this feature."""
-    import logging
-
-    df = make_df_vae(300)
-    with caplog.at_level(logging.WARNING, logger="gears.models.session_model"):
-        model = EVSessionModel(
-            model_type="vae",
-            stratify_by=["location_type", "department", "day_of_week", "season"],
-            max_samples_per_context=30,
-            vae_epochs=3, vae_hidden_dim=32, vae_latent_dim=4, vae_batch_size=32,
-            random_state=0,
-            recency=True, half_life_days=7,
+    def half_life(df, **kwargs):
+        gmm = EVSessionModel(
+            n_components=2, stratify_by=["location_type"], random_state=0, recency=True, **kwargs
         ).fit(df)
-    assert model.is_fitted_
-    assert any("recency" in rec.message and "vae" in rec.message for rec in caplog.records)
-    # No recency diagnostics should have been populated for the ignored path.
-    assert model.recency_reference_date_used_ is None
-    assert model.half_life_days_used_ == {}
+        return gmm.half_life_days_used_[home]
+
+    short, long = half_life(make_long_history(2000, 56)), half_life(make_long_history(2000, 364))
+    assert short == pytest.approx(55 / 3.5, rel=0.05)       # span / recency_halflife_divisor
+    assert long == pytest.approx(363 / 3.5, rel=0.05)
+    assert half_life(make_long_history(500, 56), half_life_days=99) == 99.0
 
 
-def test_unpickling_old_bundle_backfills_recency_attrs():
-    """Regression test for the bug notebook 1 surfaced via ``load_pretrained()``.
+# ── Old pickles ───────────────────────────────────────────────────────────────
 
-    The committed ``gmm_french.joblib`` bundle was pickled before Session 2
-    added the recency-weighting attributes to ``EVSessionModel.__init__``, so
-    its pickled ``__dict__`` doesn't have them. Unpickling it and calling
-    ``repr()`` (which does ``if self.recency:``) raised
-    ``AttributeError: 'EVSessionModel' object has no attribute 'recency'``.
-    Simulates that exact situation: fit a model, strip the recency-era
-    attributes to mimic an old-style pickle, round-trip it through
-    ``pickle``, and confirm it loads cleanly with sane defaults.
-    """
-    import pickle
-
+def test_a_model_pickled_by_an_older_version_is_backfilled_on_load():
+    """The shipped ``gmm_french.joblib`` predates the ``recency*`` and ``model_type``
+    attributes: unpickling it and calling ``repr`` or ``plot_marginals`` used to raise
+    ``AttributeError``.  Strip those attributes to mimic that pickle."""
     gmm = EVSessionModel(n_components=2, stratify_by=["day_of_week"]).fit(make_df(200))
-
-    recency_attrs = [
-        "recency",
-        "half_life_days",
-        "recency_reference_date",
-        "recency_resample_cap",
-        "recency_halflife_divisor",
-        "half_life_days_used_",
-        "recency_reference_date_used_",
-    ]
-    for attr in recency_attrs:
+    for attr in ("recency", "half_life_days", "recency_reference_date", "recency_resample_cap",
+                 "recency_halflife_divisor", "half_life_days_used_",
+                 "recency_reference_date_used_", "model_type"):
         delattr(gmm, attr)
-
-    old_style_bytes = pickle.dumps(gmm)
-    loaded = pickle.loads(old_style_bytes)
-
-    assert loaded.recency is None
-    assert loaded.half_life_days is None
-    assert loaded.recency_resample_cap == 5000
-    assert loaded.half_life_days_used_ == {}
-    assert loaded.recency_reference_date_used_ is None
-    # The actual symptom reported: __repr__ must not raise AttributeError.
-    assert "EVSessionModel" in repr(loaded)
-
-
-def test_unpickling_old_bundle_backfills_model_type():
-    """Regression test for the bug Session 6's plot_marginals() fix surfaced.
-
-    ``gmm_french.joblib`` and ``gmm_french_sample.joblib`` (the models-v1
-    release's two oldest bundles) were pickled before ``model_type`` existed
-    as an attribute at all — confirmed by inspecting their unpickled
-    ``__dict__`` directly, unlike the newer bundles which all have it.
-    ``plot_marginals()`` reading ``self.model_type`` to pick a GMM/VAE-
-    consistent color raised ``AttributeError`` on these. Same
-    strip-then-round-trip approach as the recency backfill test above.
-    """
-    import pickle
-
-    gmm = EVSessionModel(n_components=2, stratify_by=["day_of_week"]).fit(make_df(200))
-    del gmm.model_type
 
     loaded = pickle.loads(pickle.dumps(gmm))
 
+    assert loaded.recency is None and loaded.half_life_days is None
+    assert loaded.recency_resample_cap == DEFAULT_RECENCY_RESAMPLE_CAP
+    assert loaded.half_life_days_used_ == {} and loaded.recency_reference_date_used_ is None
     assert loaded.model_type == "gmm"
-    fig = loaded.plot_marginals(n_samples=20)
-    assert "GMM" in fig._suptitle.get_text()
-
-
-def test_recency_repr_flag():
-    df = make_df_regime_shift()
-    gmm = EVSessionModel(
-        n_components=2, stratify_by=["location_type"], random_state=0,
-        recency=True, half_life_days=7,
-    ).fit(df)
-    assert "recency=True" in repr(gmm)
-
-
-# ── VAE tests (fast — tiny synthetic data) ───────────────────────────────────
-
-def make_df_vae(n=300, seed=0):
-    """Synthetic dataset with department column for VAE stratification."""
-    rng = np.random.default_rng(seed)
-    df = pd.DataFrame({
-        "arrival_time": pd.date_range("2025-01-01", periods=n, freq="2h"),
-        "duration": rng.uniform(0.5, 8, n),
-        "energy": rng.uniform(2, 40, n),
-        "location_type": rng.choice(["work", "home"], n),
-        "department": rng.choice(["75", "69"], n),
-    })
-    return validate_dataframe(df)
-
-
-def _fit_tiny_vae(n=300, seed=0):
-    """Helper: fit a minimal VAE for use in multiple tests."""
-    df = make_df_vae(n=n, seed=seed)
-    model = EVSessionModel(
-        model_type="vae",
-        stratify_by=["location_type", "department", "day_of_week", "season"],
-        max_samples_per_context=30,
-        vae_epochs=3,
-        vae_hidden_dim=32,
-        vae_latent_dim=4,
-        vae_batch_size=32,
-        random_state=seed,
-    )
-    model.fit(df)
-    return model, df
-
-
-def test_vae_fit_basic():
-    model, _ = _fit_tiny_vae()
-    assert model.is_fitted_
-    assert model.model_type == "vae"
-    assert len(model.models_) > 0
-
-
-def test_vae_models_are_context_slices():
-    """Each value in models_ must be a VAEContextSlice (not sklearn GMM)."""
-    from gears.models.vae import VAEContextSlice
-    model, _ = _fit_tiny_vae()
-    for slice_ in model.models_.values():
-        assert isinstance(slice_, VAEContextSlice)
-
-
-def test_vae_sample_shape():
-    model, _ = _fit_tiny_vae()
-    synth = model.sample(20, seed=0)
-    assert len(synth) == 20
-    assert {"arrival_hour", "duration", "energy"}.issubset(synth.columns)
-    assert synth["duration"].min() >= 0
-    assert synth["energy"].min() >= 0
-
-
-def test_vae_sample_prior_adds_observation_noise():
-    """Regression test for the variance-collapse bug.
-
-    ``ConditionalVAE.sample_prior`` used to return ``decode(z, ctx_emb)``
-    directly -- the decoder's mean output with zero observation noise --
-    even though the model has an explicit, learned observation variance
-    (``log_recon_var``) for exactly this purpose (used in ``elbo_loss`` and
-    ``iwae_log_prob``). This made generated samples collapse to far less
-    spread than the training data (empirically ~10-150x too narrow).
-
-    This test isolates the fix directly: it compares the variance of a
-    "decoder-only" draw (same z, no noise -- what the old, buggy
-    ``sample_prior`` effectively returned) against the variance of the real
-    ``sample_prior`` output using the *same* seed (so both draw the same
-    z's). The full sample's variance must exceed the decoder-only variance
-    by close to the learned ``recon_var`` -- if ``sample_prior`` regresses
-    to not adding observation noise, this assertion fails.
-    """
-    torch = pytest.importorskip("torch")
-    model, _ = _fit_tiny_vae()
-    ctx_key = next(iter(model.models_.keys()))
-    slice_ = model.models_[ctx_key]
-    cvae = slice_.cvae
-    n = 2000
-
-    ctx_idx = torch.tensor(slice_.ctx_index, dtype=torch.long).repeat(n, 1)
-
-    torch.manual_seed(123)
-    with torch.no_grad():
-        ctx_emb = cvae._embed_context(ctx_idx)
-        z = torch.randn(n, cvae.latent_dim)
-        decode_only = cvae.decode(z, ctx_emb)
-    decode_only_var = decode_only.var(dim=0)
-
-    full_samples = cvae.sample_prior(n, ctx_idx, seed=123)
-    full_var = full_samples.var(dim=0)
-
-    recon_var = torch.exp(cvae.log_recon_var).clamp(1e-4, 10.0)
-
-    # Full generative variance must exceed decoder-only variance by a
-    # meaningful fraction of the learned observation variance -- i.e. the
-    # noise term is actually being added, not silently dropped.
-    assert torch.all(full_var > decode_only_var + 0.3 * recon_var)
-
-
-def test_vae_score_finite():
-    model, df = _fit_tiny_vae()
-    s = model.score(df)
-    assert np.isfinite(s)
-
-
-def test_vae_save_load():
-    model, df = _fit_tiny_vae()
-    with tempfile.TemporaryDirectory() as tmp:
-        p = Path(tmp) / "vae_test.joblib"
-        model.save(p)
-        loaded = EVSessionModel.load(p)
-    assert loaded.is_fitted_
-    assert loaded.model_type == "vae"
-    assert len(loaded.models_) == len(model.models_)
-    synth = loaded.sample(10, seed=42)
-    assert len(synth) == 10
-    assert np.isfinite(loaded.score(df))
-
-
-def test_vae_list_contexts():
-    model, _ = _fit_tiny_vae()
-    ctxs = model.list_contexts()
-    assert len(ctxs) > 0
-    assert all(isinstance(c, tuple) for c in ctxs)
-
-
-def test_vae_bic_summary():
-    """bic_summary() must work for VAE — n_components=1 for all slices."""
-    model, _ = _fit_tiny_vae()
-    bic = model.bic_summary()
-    assert len(bic) > 0
-    assert "n_components" in bic.columns
-    assert (bic["n_components"] == 1).all()
-
-
-def test_vae_context_slice_sklearn_api():
-    """VAEContextSlice must satisfy the duck-type contract used by aggregator.py
-    and plotting.py: random_state, sample, score_samples, n_components,
-    means_, weights_."""
-    model, _ = _fit_tiny_vae()
-    slice_ = next(iter(model.models_.values()))
-
-    # random_state settable (aggregator / medium_term pattern)
-    slice_.random_state = 7
-    assert slice_.random_state == 7
-
-    # sample returns (ndarray, None)
-    raw, none_val = slice_.sample(5)
-    assert isinstance(raw, np.ndarray)
-    assert raw.shape == (5, 3)
-    assert none_val is None
-
-    # score_samples returns 1-D array
-    lp = slice_.score_samples(raw)
-    assert isinstance(lp, np.ndarray)
-    assert lp.shape == (5,)
-    assert np.all(np.isfinite(lp))
-
-    # plotting attributes
-    assert slice_.n_components == 1
-    assert np.allclose(slice_.weights_, [1.0])
-    assert slice_.means_.shape == (1, 3)
-
-
-def test_vae_n_sessions_per_day_populated():
-    """n_sessions_per_day_ must be populated identically to GMM path."""
-    model, _ = _fit_tiny_vae()
-    assert len(model.n_sessions_per_day_) == len(model.models_)
-    assert all(v > 0 for v in model.n_sessions_per_day_.values())
-
-
-def test_vae_context_counts_populated():
-    model, _ = _fit_tiny_vae()
-    assert len(model.context_counts_) == len(model.models_)
-    assert all(v > 0 for v in model.context_counts_.values())
-
-
-def test_vae_is_sample_flag():
-    df = make_df_vae(200)
-    model = EVSessionModel(
-        model_type="vae", vae_epochs=2, vae_hidden_dim=16,
-        vae_latent_dim=4, vae_batch_size=32,
-        stratify_by=["location_type", "day_of_week", "season"],
-        max_samples_per_context=20,
-    ).fit(df, is_sample=True)
-    assert model.is_sample_ is True
-
-
-# ── Regression: plot_marginals() color/title consistency (Session 6) --------
-#
-# plot_marginals() is shared by GMM and VAE EVSessionModel instances but used
-# to hardcode blue ("#2E86AB") for the "Simulated" series and the string "GMM"
-# in the figure title regardless of which instance called it — so a VAE call
-# rendered a plot both mislabeled and using the GMM color, breaking the
-# notebooks' "same color for GMM everywhere, same color for VAE everywhere"
-# convention. Fixed to key off self.model_type.
-
-def test_plot_marginals_uses_model_type_color_and_title():
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.colors as mcolors
-
-    gmm = EVSessionModel(n_components=2, stratify_by=["location_type"]).fit(make_df(300))
-    fig_gmm = gmm.plot_marginals(n_samples=50)
-    assert "GMM" in fig_gmm._suptitle.get_text()
-    # First histogram patch drawn is the "Simulated" series — should be GMM blue.
-    assert mcolors.to_hex(fig_gmm.axes[0].patches[0].get_facecolor()) == "#2e86ab"
-
-    vae, _ = _fit_tiny_vae()
-    fig_vae = vae.plot_marginals(n_samples=50)
-    assert "VAE" in fig_vae._suptitle.get_text()
-    assert "GMM" not in fig_vae._suptitle.get_text()
-    # Same series for a VAE instance should be VAE orange, not GMM blue.
-    assert mcolors.to_hex(fig_vae.axes[0].patches[0].get_facecolor()) == "#f4a261"
-
-
-# ── Regression: partial stratify_by fallback (Phase 2 Session 4) -------------
-#
-# Previously, if ANY stratify_by column was missing from the data,
-# EVSessionModel.fit() silently dropped ALL of them down to
-# ['day_of_week', 'season'] — even columns that were actually present. A
-# single-site export missing only `location_type` would also lose a present
-# `department` column with no warning distinguishing the two. Confirmed via a
-# real smoke test on office.csv (which has neither column): the caller's own
-# pre-fit log claimed the full 4-column stratify_by was in use while the
-# model had actually silently fallen back further, with no cross-reference
-# between the two log lines.
-
-def make_df_with_department(n=500, seed=0):
-    """Like make_df(), but with a `department` column and no `location_type` —
-    mirrors a single-site export that has department info but isn't
-    multi-site (the inverse of office.csv, which has neither)."""
-    rng = np.random.default_rng(seed)
-    df = pd.DataFrame({
-        "arrival_time": pd.date_range("2025-01-01", periods=n, freq="1h"),
-        "duration": rng.uniform(0.5, 8, n),
-        "energy": rng.uniform(2, 40, n),
-        "department": rng.choice(["75", "92"], n),
-    })
-    return validate_dataframe(df)
-
-
-def test_partial_stratify_fallback_keeps_present_columns():
-    """Only the missing column(s) should be dropped from stratify_by — a
-    present `department` must survive a missing `location_type`, not be
-    swept away by the old blanket fallback to ['day_of_week', 'season']."""
-    df = make_df_with_department(300)
-    gmm = EVSessionModel(
-        n_components=1,
-        stratify_by=["location_type", "department", "day_of_week", "season"],
-    ).fit(df)
-    assert gmm.stratify_by == ["department", "day_of_week", "season"]
-    assert "location_type" not in gmm.stratify_by
-
-
-def test_full_stratify_fallback_when_all_missing():
-    """When every extra column is missing (e.g. office.csv: neither
-    location_type nor department), stratify_by still collapses to
-    ['day_of_week', 'season'] — same end result as before, just reached via
-    the general "drop what's missing" rule rather than a special case."""
-    df = make_df(300)  # has location_type but not department
-    gmm = EVSessionModel(
-        n_components=1,
-        stratify_by=["location_type", "department", "day_of_week", "season"],
-    ).fit(df)
-    assert gmm.stratify_by == ["location_type", "day_of_week", "season"]
-
-    df_neither = df.drop(columns=["location_type"])
-    gmm2 = EVSessionModel(
-        n_components=1,
-        stratify_by=["location_type", "department", "day_of_week", "season"],
-    ).fit(df_neither)
-    assert gmm2.stratify_by == ["day_of_week", "season"]
-
-
-def test_stratify_fallback_no_missing_columns_unchanged():
-    """When nothing is missing, stratify_by is left untouched (no warning
-    path taken at all)."""
-    df = make_df(300)
-    gmm = EVSessionModel(
-        n_components=1, stratify_by=["location_type", "day_of_week", "season"],
-    ).fit(df)
-    assert gmm.stratify_by == ["location_type", "day_of_week", "season"]
+    assert "EVSessionModel" in repr(loaded)
+    assert "GMM" in loaded.plot_marginals(n_samples=20)._suptitle.get_text()

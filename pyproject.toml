@@ -52,4 +52,26 @@ include = ["gears*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `pytest` runs everything except the markers below; `pytest -m vae` / `pytest -m dl`
+# select one family explicitly (the last -m on the command line wins).
+addopts = "-ra --strict-markers --strict-config -m 'not dl and not slow'"
+markers = [
+    "vae: needs torch (pip install 'gears-ev[vae]'); skipped when torch is absent",
+    "dl: needs torch and neuralforecast (pip install 'gears-ev[dl]'); heavy, run on demand or weekly",
+    "slow: takes more than a few seconds; excluded from the default run",
+]
 filterwarnings = ["ignore::UserWarning", "ignore::FutureWarning"]
+
+[tool.coverage.run]
+source = ["gears"]
+branch = true
+# The code that needs torch / neuralforecast cannot be measured by the core job, which
+# runs without them; the extras jobs exercise it (pytest -m vae, pytest -m dl).
+omit = ["gears/models/vae.py", "gears/models/forecaster_dl.py"]
+
+[tool.coverage.report]
+# Measured without torch: 91 % (branch coverage). The floor is the measure minus 2 points, so
+# that noise does not break the build but a real drop does; raise it when coverage improves.
+fail_under = 89
+show_missing = true
+skip_covered = true
