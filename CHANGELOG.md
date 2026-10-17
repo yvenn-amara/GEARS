@@ -146,6 +146,38 @@ Pre-trained models: `ModelRegistry`, `NativeSessionModelRegistry`, `get_session_
   expected sessions.
 - `n_scenarios=0` is no longer replaced by the default (`n_scenarios or default`).
 
+### Added (S7 — a short, useful test suite)
+- **pytest markers** `vae` (needs torch), `dl` (needs torch and neuralforecast) and `slow`, declared in
+  `pyproject.toml` with `--strict-markers`. A plain `pytest` runs `-m "not dl and not slow"`;
+  `pytest -m vae` and `pytest -m dl` select one family. The modules that need an extra start with
+  `pytest.importorskip(...)`: without torch they are skipped instead of failing (14 failures before).
+- `tests/conftest.py`: any internet connection or DNS lookup raises `NetworkAccessError`; every test
+  runs with a private `GEARS_HOME` and without `GEARS_OFFLINE` (the real `~/.cache/gears` is never
+  touched, and an exported `GEARS_OFFLINE=1` does not change the results); two read-only
+  session fixtures (`demo`, `model`) replace the per-file fixtures.
+- `tests/test_vae.py` (8 tests, `-m vae`) and `tests/test_forecaster_dl.py` (2 tests, `-m dl`, run in a
+  temporary folder: no more `lightning_logs/` in the repository).
+- Coverage: `[tool.coverage]` (branch coverage; `models/vae.py` and `models/forecaster_dl.py` are left
+  to the extras jobs) and a floor `fail_under = 89`, applied by `pytest --cov`. Measured: 91 % without
+  torch, 93 % with torch.
+
+### Changed (S7)
+- **361 test functions (416 collected) → 127 functions (131 collected)**; without torch, 122 tests run in
+  about 45 s (before: 14 failures, 381 passed, 105 s; with torch 397 passed, 19 skipped, 209 s). Each
+  deleted test is accounted for in the pull request (merged, redundant, moved to the sandbox).
+- Tests check hand-computed values or independent recomputations (a scikit-learn BIC search, a
+  re-derived optimiser cost, the calendar of twelve months...) instead of "it returned something".
+  A mutation campaign (90 changes to the code, each of which must make a test fail) checked that:
+  85 are caught, the 5 others are redundant protections or only visible from a developer's shell.
+- `tests/test_sanity.py` is now 31 tests: the plan's table and the ten output invariants, regrouped by
+  behaviour.
+
+### Fixed (S7)
+- `OutputAggregator.build_load_profiles` raises a `ValueError` when `gmm.stratify_by` lacks
+  `day_of_week` or `season`. It used to return a whole year of **zero** load without a word (no context
+  was ever selected); the tests of this function were passing on that all-zero series.
+- The unseeded CLI test `test_simulate_cli_writes_sessions` failed intermittently; it is seeded.
+
 ## [2.0.0] — 2026-08 Phase 2 complete: GEAR architecture, naming, VAE integration, notebook overhaul, CI health
 
 Release-note-level summary of the full Phase 2 arc (11 sessions, 2026-08-02 → 2026-08-07).
