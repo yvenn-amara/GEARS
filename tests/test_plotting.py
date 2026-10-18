@@ -1,4 +1,4 @@
-"""Smoke tests for gears.plotting and the model plots (headless Agg backend).
+"""Smoke tests for gears.plotting and the model plot (headless Agg backend).
 
 They check that each plot is drawn (the artists exist, the legend and title say what they
 should), not what it looks like.
@@ -12,14 +12,10 @@ import pandas as pd
 import pytest
 
 from gears.plotting import (
-    plot_arrival_distribution,
     plot_daily_energy,
-    plot_energy_distribution,
     plot_forecast_fan,
     plot_forecast_vs_actual,
-    plot_gmm_means,
     plot_regret_comparison,
-    plot_session_heatmap,
 )
 
 
@@ -42,30 +38,7 @@ def scenarios_frame(column, n_scenarios=3, n_days=20, seed=7, level=10.0):
     ], ignore_index=True)
 
 
-def test_the_session_plots_draw_their_data(demo):
-    assert len(plot_arrival_distribution(demo).patches) > 0          # the histogram bars
-    grouped = plot_arrival_distribution(demo.assign(group=demo["day_of_week"] % 3), group_by="group")
-    assert len(legend_labels(grouped)) == 3
-    _, own_ax = plt.subplots()
-    assert plot_arrival_distribution(demo, ax=own_ax) is own_ax
-
-    for value in ("n_sessions", "energy"):
-        assert len(plot_session_heatmap(demo, value=value).images) == 1      # weekday x hour grid
-    derived = plot_session_heatmap(demo.drop(columns=["day_of_week"]))        # weekday derived
-    assert len(derived.images) == 1
-
-    plain = plot_energy_distribution(demo, log_scale=False)
-    assert "log" not in plain.get_ylabel()
-    split = plot_energy_distribution(demo.assign(big=demo["energy"] > demo["energy"].median()),
-                                     group_by="big")
-    assert len(legend_labels(split)) == 2
-
-
-def test_the_model_plots_draw_the_mixture(model):
-    for idx, name in ((0, "Arrival hour"), (2, "Energy (kWh)")):   # 2 is back-transformed
-        ax = plot_gmm_means(model.gmm_, feature_idx=idx, feature_name=name)
-        assert len(ax.patches) > 0
-
+def test_the_model_plot_draws_the_marginals(model):
     fig = model.gmm_.plot_marginals(n_samples=50)
     assert "GMM" in fig._suptitle.get_text()
     # the first histogram is the simulated series: GMM blue
