@@ -178,6 +178,37 @@ Pre-trained models: `ModelRegistry`, `NativeSessionModelRegistry`, `get_session_
   was ever selected); the tests of this function were passing on that all-zero series.
 - The unseeded CLI test `test_simulate_cli_writes_sessions` failed intermittently; it is seeded.
 
+### Added (S8 — toy examples)
+- `examples/`: four scripts that run on a laptop, each in under 20 s, without any external data and
+  without a network (`MPLBACKEND=Agg` is enough; figures and files go to `example_outputs/`, or to
+  `$GEARS_EXAMPLES_OUT`):
+  `01_quickstart.py` (demo data → `fit` → 7-day simulation → daily energy and hourly load → PNG),
+  `02_forecast_and_smart_charging.py` (probabilistic, persistence and SARIMA forecasters scored with
+  `forecast_metrics`; V1G on a `make_price_signal` tariff; `compute_regret`),
+  `03_medium_term_scenarios.py` (`MediumTermSimulator` with the linear, S-curve and Bass growth models;
+  the `CHARGER_PRESETS`), `04_bring_your_own_data.py` (CSV → `load_sessions` → `fit` → `save` → `load` →
+  `simulate` → `export`; `--pretrained` also draws one day of sessions from the official French model for a
+  named context (site type, département, weekday, season) with `ShortTermSimulator.simulate_single_day`:
+  it needs the network or a local file, and `GEARSModel.simulate_short_term` cannot choose that context).
+- `tests/test_examples.py` (5 tests, marker `slow`: `pytest -m slow tests/test_examples.py`, about 30 s):
+  runs every example with `runpy`, checks that each writes its figure or files, and that none raises a
+  `UserWarning`. A broken example fails the tests. `--pretrained` is tested on a fake local release.
+- `.gitignore`: `example_outputs/`.
+
+### Changed (S8)
+- `gears.plotting` draws with matplotlib directly instead of pandas' `.plot(ax=...)`: pandas registered
+  its own date converter and every plot of a date axis emitted "This axis already has a converter set
+  and is updating to a potentially incompatible converter" (a `UserWarning` on a standard use of the
+  library).
+- `plot_regret_comparison` leaves room above the tallest bar for the value labels.
+- `tests/test_plotting.py`: 3 tests for the 4 remaining functions.
+
+### Removed (S8)
+- Plotting functions that no example uses: `plot_arrival_distribution`, `plot_session_heatmap`,
+  `plot_energy_distribution`, `plot_gmm_means`, and the `DAY_LABELS` constant. `plot_daily_energy`,
+  `plot_forecast_vs_actual`, `plot_forecast_fan` (behind `plot_forecast`) and `plot_regret_comparison`
+  stay.
+
 ## [2.0.0] — 2026-08 Phase 2 complete: GEAR architecture, naming, VAE integration, notebook overhaul, CI health
 
 Release-note-level summary of the full Phase 2 arc (11 sessions, 2026-08-02 → 2026-08-07).

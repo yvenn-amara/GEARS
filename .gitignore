@@ -20,3 +20,6 @@ data/**
 
 # Fitted models are release assets, not source
 *.joblib
+
+# What the scripts in examples/ write (figures, a demo CSV, a model, simulated sessions)
+example_outputs/
