@@ -111,7 +111,7 @@ def _urlopen_cut_midway_first(monkeypatch, first_bytes):
         def __enter__(self):
             return self
 
-        def __exit__(self, *exc_info):
+        def __exit__(self, *_):
             return False
 
         def read(self, size=-1):
