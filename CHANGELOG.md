@@ -187,8 +187,9 @@ Pre-trained models: `ModelRegistry`, `NativeSessionModelRegistry`, `get_session_
   `forecast_metrics`; V1G on a `make_price_signal` tariff; `compute_regret`),
   `03_medium_term_scenarios.py` (`MediumTermSimulator` with the linear, S-curve and Bass growth models;
   the `CHARGER_PRESETS`), `04_bring_your_own_data.py` (CSV → `load_sessions` → `fit` → `save` → `load` →
-  `simulate` → `export`; `--pretrained` runs the same with `GEARSModel.from_pretrained("french")`, which
-  needs the network or a local file).
+  `simulate` → `export`; `--pretrained` also draws one day of sessions from the official French model for a
+  named context (site type, département, weekday, season) with `ShortTermSimulator.simulate_single_day`:
+  it needs the network or a local file, and `GEARSModel.simulate_short_term` cannot choose that context).
 - `tests/test_examples.py` (5 tests, marker `slow`: `pytest -m slow tests/test_examples.py`, about 30 s):
   runs every example with `runpy`, checks that each writes its figure or files, and that none raises a
   `UserWarning`. A broken example fails the tests. `--pretrained` is tested on a fake local release.

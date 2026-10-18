@@ -103,8 +103,11 @@ def test_a_file_goes_through_load_fit_save_load_and_simulate(run_example, out, c
 
 def test_the_french_model_is_used_on_request_and_only_then(run_example, capsys, tmp_path, monkeypatch):
     # a release served from a local file stands for the download
-    model = GEARSModel(n_components=2, forecaster_method="probabilistic", random_state=0)
-    model.fit(make_demo_data(n=600, seed=0), verbose=False)
+    # ... stratified like the French model: by site type, département, weekday and season
+    data = make_demo_data(n=600, location_type="work", seed=0).assign(department="75")
+    model = GEARSModel(n_components=2, forecaster_method="probabilistic", random_state=0,
+                       stratify_by=["location_type", "department", "day_of_week", "season"])
+    model.fit(data, verbose=False)
     release = tmp_path / "release" / "french.joblib"
     release.parent.mkdir()
     joblib.dump(model.gmm_, release)
@@ -117,4 +120,4 @@ def test_the_french_model_is_used_on_request_and_only_then(run_example, capsys, 
     assert "French model" not in capsys.readouterr().out      # no download without the flag
 
     run_example("04_bring_your_own_data.py", "--pretrained")
-    assert "French model:" in capsys.readouterr().out
+    assert "French model, workplaces of Paris: 40 sessions on 2025-06-02" in capsys.readouterr().out
