@@ -235,10 +235,12 @@ def plot_daily_energy(
             pivot.quantile(0.90, axis=1),
             alpha=0.15, color=color, label="80% CI",
         )
-        pivot.median(axis=1).plot(ax=ax_, label="Median", color=color, linewidth=2)
+        median = pivot.median(axis=1)
+        ax_.plot(median.index, median.to_numpy(), label="Median", color=color, linewidth=2)
     else:
         col = "total_energy_kwh" if "total_energy_kwh" in daily.columns else daily.columns[-1]
-        daily.set_index("date")[col].plot(ax=ax_, color=color, linewidth=1.5)
+        series = daily.set_index("date")[col]
+        ax_.plot(series.index, series.to_numpy(), color=color, linewidth=1.5, label=col)
 
     ax_.set_ylabel("Energy (kWh)")
     ax_.set_title(title)
@@ -358,6 +360,8 @@ def plot_regret_comparison(
             f"€{val:.2f}", ha="center", va="bottom", fontsize=11, fontweight="bold",
         )
 
+    if max(values) > 0:
+        ax_.set_ylim(top=max(values) * 1.12)  # room for the value labels above the bars
     ax_.set_ylabel("Total cost (€)")
     ax_.set_title("Regret analysis: charging strategies")
     ax_.grid(True, alpha=0.3, axis="y")
@@ -397,7 +401,8 @@ def plot_forecast_vs_actual(
     fig, ax_ = (None, ax) if ax is not None else plt.subplots(figsize=figsize)
     ax_ = ax_ or plt.gca()
 
-    actual.plot(ax=ax_, color=BLUE, linewidth=2, label="Actual", zorder=3)
+    ax_.plot(pd.to_datetime(actual.index), actual.to_numpy(), color=BLUE, linewidth=2,
+             label="Actual", zorder=3)
 
     if "scenario" in forecast.columns:
         pivot = forecast.pivot_table(
@@ -410,8 +415,9 @@ def plot_forecast_vs_actual(
             pivot.quantile(0.90, axis=1),
             alpha=0.2, color=RED, label="80% CI",
         )
-        pivot.median(axis=1).plot(ax=ax_, color=RED, linewidth=2,
-                                  linestyle="--", label="Median forecast")
+        median = pivot.median(axis=1)
+        ax_.plot(median.index, median.to_numpy(), color=RED, linewidth=2,
+                 linestyle="--", label="Median forecast")
 
     ax_.set_ylabel("Daily sessions")
     ax_.set_title(title)
@@ -454,14 +460,16 @@ def plot_forecast_fan(
 
     history = getattr(forecaster, "_daily_counts", None)
     if history is not None:
-        history.plot(ax=ax_, label="Historical", color=BLUE, linewidth=1.2)
+        ax_.plot(pd.to_datetime(history.index), history.to_numpy(), label="Historical",
+                 color=BLUE, linewidth=1.2)
     ax_.fill_between(
         pivot.index,
         pivot.quantile(0.1, axis=1),
         pivot.quantile(0.9, axis=1),
         alpha=0.2, color=color, label="80% CI",
     )
-    pivot.median(axis=1).plot(ax=ax_, label=label, color=color, linewidth=2)
+    median = pivot.median(axis=1)
+    ax_.plot(pd.to_datetime(median.index), median.to_numpy(), label=label, color=color, linewidth=2)
     ax_.set_ylabel("Daily sessions")
     ax_.set_title(title)
     ax_.legend()

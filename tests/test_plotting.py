@@ -77,7 +77,9 @@ def test_the_model_plots_draw_the_mixture(model):
 def test_the_time_series_plots_draw_bands_and_labels(model):
     energy = scenarios_frame("total_energy_kwh", n_scenarios=4, n_days=30, level=1000.0)
     assert len(plot_daily_energy(energy, ci=True).collections) > 0        # the confidence band
-    assert plot_daily_energy(energy.drop(columns="scenario").iloc[:10], ci=True).lines
+    one_series = plot_daily_energy(energy.drop(columns="scenario").iloc[:10], ci=True)
+    assert one_series.lines
+    assert legend_labels(one_series) == ["total_energy_kwh"]    # a lone series is still named
 
     index = pd.date_range("2025-01-01", periods=20, freq="D")
     actual = pd.Series(np.arange(20, dtype=float), index=index)
