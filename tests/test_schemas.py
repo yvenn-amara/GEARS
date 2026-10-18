@@ -1,18 +1,22 @@
-"""Tests for gears.data.schemas."""
+"""Tests for gears.data.schemas: column aliases, unit conversion, enrichment, filtering.
+
+The error and warning *messages* (missing columns, units, time zones, dropped rows...)
+are checked in ``test_sanity.py``.
+"""
+
+from __future__ import annotations
+
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from gears.data.loader import load_sessions, make_demo_data
-from gears.data.schemas import (
-    _find_column,
-    _normalize_key,
-    _season,
-    summary_stats,
-    validate_dataframe,
-)
+from gears.data.loader import load_sessions
+from gears.data.schemas import summary_stats, validate_dataframe
+
+REQUIRED = {"arrival_time", "duration", "energy"}
 
 
 def make_generic(n=100):
@@ -36,106 +40,14 @@ def make_french(n=50):
     })
 
 
-def test_season():
-    assert _season(1) == "winter"
-    assert _season(4) == "spring"
-    assert _season(7) == "summer"
-    assert _season(10) == "autumn"
-    assert _season(12) == "winter"
-
-
-def test_generic_validate():
-    df = make_generic()
-    out = validate_dataframe(df)
-    assert "hour" in out.columns
-    assert "day_of_week" in out.columns
-    assert "season" in out.columns
-    assert "is_weekend" in out.columns
-    assert out["duration"].min() > 0
-    assert out["energy"].min() >= 0
-    assert len(out) == len(df)
-
-
-def test_french_autodetect():
-    raw = make_french()
-    out = validate_dataframe(raw)
-    assert "energy" in out.columns
-    assert "duration" in out.columns
-    assert "location_type" in out.columns
-    assert out["energy"].iloc[0] == pytest.approx(raw["energie_delivree_wh"].iloc[0] / 1000)
-    assert out["duration"].iloc[0] == pytest.approx(raw["duree_min"].iloc[0] / 60)
-
-
-def test_french_location_mapping():
-    raw = make_french()
-    out = validate_dataframe(raw)
-    assert set(out["location_type"].unique()).issubset({"work", "home", "public", "heavy", "unknown"})
-    assert out[out["location_type"] == "work"].shape[0] > 0
-
-
-def test_failed_sessions_filtered():
-    raw = make_french(n=10)
-    raw.loc[0:4, "succes_session"] = "f"  # 5 failed
-    out = validate_dataframe(raw, filter_failed=True)
-    assert len(out) == 5
-
-
-def test_quality_filters():
-    df = make_generic(100)
-    df.loc[0, "duration"] = -1    # invalid
-    df.loc[1, "energy"] = -5      # invalid
-    df.loc[2, "duration"] = 200   # too long
-    out = validate_dataframe(df)
-    assert len(out) == 97
-
-
-def test_alias_resolution():
-    df = pd.DataFrame({
-        "start_time": pd.date_range("2025-01-01", periods=5, freq="8h"),
-        "duration_hours": [2.0, 3.0, 1.5, 4.0, 2.5],
-        "energy_kwh": [10.0, 15.0, 8.0, 20.0, 12.0],
-    })
-    out = validate_dataframe(df)
-    assert "arrival_time" in out.columns
-    assert "duration" in out.columns
-    assert "energy" in out.columns
-
-
-def test_derive_duration_from_end_time():
-    df = pd.DataFrame({
-        "arrival_time": pd.date_range("2025-01-01", periods=3, freq="8h"),
-        "end_time": pd.date_range("2025-01-01 02:00", periods=3, freq="8h"),
-        "energy": [10.0, 12.0, 8.0],
-    })
-    out = validate_dataframe(df)
-    assert "duration" in out.columns
-    assert all(out["duration"] > 0)
-
-
-def test_summary_stats():
-    df = make_generic()
-    out = validate_dataframe(df)
-    stats = summary_stats(out)
-    assert "mean" in stats.columns
-    assert "missing_%" in stats.columns
-
-
-# --------------------------------------------------------------------------
-# Session 1 — EVSE-style raw schema (Start/End/Arrival/Park.Duration/Energy),
-# the case/punctuation-insensitive alias matching that supports it, and the
-# guards it depends on (Arrival never -> arrival_time, noise columns dropped,
-# combined-site acn.csv warning). See gears_persistence_vs_gmm_benchmark_prompt.md §1.7/§2.
-# --------------------------------------------------------------------------
-
 def make_evse(n=20, seed=0):
-    """Mirrors the 11 preprocessed_data/*.csv datasets' raw schema."""
+    """The raw schema of the EVSE datasets: Start/End/Arrival/Park.Duration/Energy."""
     rng = np.random.default_rng(seed)
     starts = pd.Timestamp("2023-01-02") + pd.to_timedelta(rng.uniform(0, 200, n), unit="D")
     park_duration_min = rng.uniform(10, 600, n)
-    ends = starts + pd.to_timedelta(park_duration_min, unit="m")
     return pd.DataFrame({
         "Start": starts,
-        "End": ends,
+        "End": starts + pd.to_timedelta(park_duration_min, unit="m"),
         "Day": starts.day_name(),
         "Weekend": (starts.dayofweek >= 5).astype(int),
         "Arrival": starts.hour + starts.minute / 60.0,
@@ -146,109 +58,119 @@ def make_evse(n=20, seed=0):
     })
 
 
-def test_evse_style_schema_end_to_end():
-    raw = make_evse()
+def test_a_generic_export_gets_its_calendar_features():
+    # the 15th of each month of 2025 (a Wednesday for January), at 09:30 ... 12:30 or 08:30
+    df = pd.DataFrame({
+        "arrival_time": pd.to_datetime(
+            [f"2025-{month:02d}-15 {8 + month % 5}:30" for month in range(1, 13)]
+        ),
+        "duration": 2.0,
+        "energy": 10.0,
+    })
+    out = validate_dataframe(df)
+
+    assert out["hour"].tolist() == [9.5, 10.5, 11.5, 12.5, 8.5, 9.5, 10.5, 11.5, 12.5, 8.5, 9.5, 10.5]
+    assert out["day_of_week"].tolist() == [2, 5, 5, 1, 3, 6, 1, 4, 0, 2, 5, 0]       # 0 = Monday
+    assert out["is_weekend"].tolist() == [0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0]
+    assert out["season"].tolist() == (
+        ["winter"] * 2 + ["spring"] * 3 + ["summer"] * 3 + ["autumn"] * 3 + ["winter"]
+    )                                                              # meteorological seasons
+    assert len(validate_dataframe(make_generic())) == 100       # a clean file loses nothing
+
+    stats = summary_stats(validate_dataframe(make_generic()))
+    assert {"mean", "missing_%"} <= set(stats.columns)
+
+
+def test_a_french_export_is_detected_and_converted_to_kwh_and_hours():
+    raw = make_french()
+    raw.loc[0:4, "succes_session"] = "f"                        # 5 failed sessions
     out = validate_dataframe(raw)
-    assert {"arrival_time", "duration", "energy"}.issubset(out.columns)
-    assert len(out) == len(raw)
-    assert out["duration"].max() < 24  # hours, not raw minutes
+    assert len(out) == 45                                        # failed ones are filtered
+
+    assert out["energy"].iloc[0] == pytest.approx(raw["energie_delivree_wh"].iloc[5] / 1000)
+    assert out["duration"].iloc[0] == pytest.approx(raw["duree_min"].iloc[5] / 60)
+    # id_domaine_subvention: "en_pri" (private company) -> work, "en_opu" (open to the public)
+    assert out["location_type"].value_counts().to_dict() == {"public": 25, "work": 20}
+    assert len(validate_dataframe(raw, filter_failed=False)) == 50
 
 
-def test_evse_style_via_load_sessions():
-    raw = make_evse()
-    out = load_sessions(raw, verbose=False)
-    assert {"arrival_time", "duration", "energy"}.issubset(out.columns)
+def test_sessions_that_cannot_be_physical_are_filtered():
+    df = make_generic(100)
+    df.loc[0, "duration"] = -1       # not positive
+    df.loc[1, "energy"] = -5         # negative
+    df.loc[2, "duration"] = 200      # longer than a week
+    df.loc[3, "energy"] = 1000       # more than any vehicle can take
+    df.loc[4, "energy"] = 0          # a session that delivered nothing is a valid session
+    assert len(validate_dataframe(df)) == 96
 
 
-def test_park_duration_minutes_converted_to_hours():
-    raw = make_evse()
+@pytest.mark.parametrize("names", [
+    {"arrival_time": "start_time", "duration": "duration_hours", "energy": "energy_kwh"},
+    {"arrival_time": "START", "duration": "Duration_H", "energy": "ENERGY_KWH"},
+    {"arrival_time": "Start", "duration": "duration", "energy": "Energy"},
+])
+def test_column_aliases_are_matched_whatever_the_case(names):
+    raw = make_generic(5).rename(columns=names)
     out = validate_dataframe(raw)
-    assert np.allclose(out["duration"].to_numpy(), (raw["Park.Duration"] / 60.0).to_numpy())
+    assert REQUIRED <= set(out.columns)
+    assert out["duration"].tolist() == make_generic(5)["duration"].tolist()
 
 
-def test_arrival_column_never_resolved_as_arrival_time():
-    """`Arrival` is a float hour-of-day (e.g. 4.13), not a timestamp — must
-    never be aliased to arrival_time, which must come from `Start` instead."""
-    raw = make_evse()
-    out = validate_dataframe(raw)
-    assert (out["arrival_time"].dt.date == raw["Start"].dt.date).all()
-    assert "Arrival" in out.columns
-    assert np.allclose(out["Arrival"], raw["Arrival"])
+def test_duration_is_derived_from_the_end_time():
+    df = pd.DataFrame({
+        "arrival_time": pd.date_range("2025-01-01", periods=3, freq="8h"),
+        "end_time": pd.date_range("2025-01-01 02:00", periods=3, freq="8h"),
+        "energy": [10.0, 12.0, 8.0],
+    })
+    assert validate_dataframe(df)["duration"].tolist() == [2.0, 2.0, 2.0]
 
 
-def test_find_column_excludes_arrival_alias_explicitly():
-    df = pd.DataFrame({"Arrival": [4.13, 6.75], "duration": [1.0, 2.0], "energy": [1.0, 2.0]})
-    assert _find_column(df, "arrival_time") is None
-
-
-def test_noise_columns_dropped():
+def test_the_evse_raw_schema_is_understood():
+    """``Arrival`` is an hour of the day (4.13), never a timestamp; ``Park.Duration`` is
+    in minutes; ``Day``, ``Weekend`` and index leftovers are noise that is dropped."""
     raw = make_evse()
     raw["Unnamed: 0"] = range(len(raw))
     raw["Start_Date"] = raw["Start"].dt.date.astype(str)
+
     out = validate_dataframe(raw)
+
+    assert REQUIRED <= set(out.columns) and len(out) == len(raw)
+    assert np.allclose(out["duration"], raw["Park.Duration"] / 60.0)         # minutes -> hours
+    assert (out["arrival_time"].dt.date == raw["Start"].dt.date).all()       # from Start
+    assert np.allclose(out["Arrival"], raw["Arrival"])                       # kept as it is
     for noisy in ("Day", "Weekend", "Unnamed: 0", "Start_Date"):
         assert noisy not in out.columns
+    assert REQUIRED <= set(load_sessions(raw, verbose=False).columns)        # and via the loader
+
+    # with only the hour of the day there is no arrival time: it is not guessed from `Arrival`
+    hour_only = pd.DataFrame({"Arrival": [4.13, 6.75], "duration": [1.0, 2.0], "energy": [1.0, 2.0]})
+    with pytest.raises(ValueError, match="arrival_time"):
+        validate_dataframe(hour_only)
 
 
-def test_normalize_key():
-    assert _normalize_key("Park.Duration") == "park_duration"
-    assert _normalize_key("Start Time") == "start_time"
-    assert _normalize_key("Unnamed: 0") == "unnamed_0"
-
-
-@pytest.mark.parametrize("cols", [
-    {"START": "arrival_time", "Duration_H": "duration", "ENERGY_KWH": "energy"},
-    {"Start": "arrival_time", "duration": "duration", "Energy": "energy"},
-])
-def test_case_insensitive_generic_aliasing(cols):
-    keys = list(cols)
-    raw = pd.DataFrame({
-        keys[0]: ["2023-01-01 08:00:00", "2023-01-02 09:00:00"],
-        keys[1]: [2.0, 3.0],
-        keys[2]: [10.0, 12.0],
-    })
-    out = validate_dataframe(raw)
-    assert {"arrival_time", "duration", "energy"}.issubset(out.columns)
-
-
-def test_combined_site_dataset_warns():
-    """acn.csv-style data (union of caltech+jpl+office, flagged by a `data`
-    site column) must warn so it isn't silently double/triple-counted
-    alongside the individual site files."""
-    raw = make_evse(n=6)
-    raw["data"] = ["caltech", "caltech", "jpl", "jpl", "office", "office"]
+def test_a_combined_multi_site_file_warns_but_a_single_site_does_not():
+    """acn.csv-style data (several sites in one file, flagged by a `data` column) would be
+    counted several times next to the individual site files."""
+    combined = make_evse(n=6)
+    combined["data"] = ["caltech", "caltech", "jpl", "jpl", "office", "office"]
     with pytest.warns(UserWarning, match="combined multi-site"):
-        validate_dataframe(raw)
+        validate_dataframe(combined)
 
-
-def test_single_site_dataset_does_not_warn():
-    raw = make_evse(n=6)
-    raw["data"] = "caltech"
-    import warnings
+    single = make_evse(n=6)
+    single["data"] = "caltech"
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
-        validate_dataframe(raw)  # must not raise
+        validate_dataframe(single)       # must not warn
 
 
-def test_make_demo_data_unaffected():
-    df = make_demo_data(n=50, location_type="work", seed=0)
-    assert len(df) == 50
-    assert {"arrival_time", "duration", "energy", "location_type"}.issubset(df.columns)
-
-
-ALL_11_DATASETS = [
-    "acn", "boulder", "caltech", "domestics", "dundee", "jpl",
-    "office", "palo_alto", "paris", "perth", "sap",
-]
-_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "preprocessed_data"
-
-
-@pytest.mark.skipif(not _DATA_DIR.exists(), reason="data/preprocessed_data/ not present in this checkout")
-@pytest.mark.parametrize("name", ALL_11_DATASETS)
-def test_all_11_real_csvs_load_without_error(name):
-    path = _DATA_DIR / f"{name}.csv"
-    if not path.exists():
-        pytest.skip(f"{path} not present in this checkout")
-    out = load_sessions(str(path), verbose=False)
-    assert {"arrival_time", "duration", "energy"}.issubset(out.columns)
-    assert len(out) > 0
+@pytest.mark.slow
+def test_the_real_datasets_load_when_they_are_present():
+    """The CSVs are not versioned (data/ only holds a README); run this on a checkout
+    that has data/preprocessed_data/ with ``pytest -m slow``."""
+    data_dir = Path(__file__).resolve().parent.parent / "data" / "preprocessed_data"
+    files = sorted(data_dir.glob("*.csv")) if data_dir.exists() else []
+    if not files:
+        pytest.skip("data/preprocessed_data/ is not present in this checkout")
+    for path in files:
+        out = load_sessions(str(path), verbose=False)
+        assert REQUIRED <= set(out.columns) and len(out) > 0, path.name

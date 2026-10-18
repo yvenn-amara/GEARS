@@ -1,142 +1,76 @@
-"""Integration tests for GEARSModel pipeline."""
+"""Tests for the GEARSModel facade: the whole chain, construction helpers and dispatch.
+
+Saving then loading a model reproduces the simulation (invariant 8) and every entry point
+refuses an unfitted model: both are checked in ``test_sanity.py``.
+"""
+
+from __future__ import annotations
+
+import joblib
 import pandas as pd
 import pytest
-from sklearn.exceptions import NotFittedError
 
 from gears import GEARSModel
 from gears.data.loader import make_demo_data
+from gears.models.session_model import EVSessionModel
+from gears.utils import make_price_signal
 
 
-def make_df(n=800, seed=0):
-    return make_demo_data(n=n, location_type="work", seed=seed)
+def test_a_fitted_model_simulates_aggregates_optimises_and_exports(model, tmp_path):
+    sessions = model.simulate_short_term("2025-06-01", horizon=3, n_scenarios=2, seed=0)
+    assert {"date", "scenario", "arrival_time", "duration", "energy"} <= set(sessions.columns)
 
-
-def test_fit_and_simulate_short():
-    df = make_df(800)
-    model = GEARSModel(n_components=3, n_scenarios=3)
-    model.fit(df, verbose=False)
-    assert model.is_fitted_
-
-    sessions = model.simulate_short_term("2025-06-01", horizon=3, n_scenarios=3, seed=0)
-    assert len(sessions) > 0
-    assert {"date", "scenario", "arrival_hour", "duration", "energy"}.issubset(sessions.columns)
-
-
-def test_fit_and_simulate_medium():
-    df = make_df(500)
-    model = GEARSModel(n_components=3, n_scenarios=3)
-    model.fit(df, verbose=False)
-    result = model.simulate_medium_term(years=0.1, output="daily_energy", n_scenarios=3)
-    assert len(result) > 0
-    assert "total_energy_kwh" in result.columns
-
-
-def test_daily_energy_aggregator():
-    df = make_df(500)
-    model = GEARSModel(n_components=3, n_scenarios=2).fit(df, verbose=False)
-    sessions = model.simulate_short_term("2025-06-01", horizon=3, n_scenarios=2)
     daily = model.daily_energy(sessions)
-    assert "total_energy_kwh" in daily.columns
-    assert "n_sessions" in daily.columns
+    assert daily["n_sessions"].sum() == len(sessions)
+    assert daily["total_energy_kwh"].sum() == pytest.approx(sessions["energy"].sum())
+    assert {"hour", "energy_kwh"} <= set(model.hourly_profile(sessions).columns)
+
+    signal = make_price_signal(start="2025-06-01", periods=5 * 48, resolution_min=30)
+    assert {"cost_smart", "cost_plug"} <= set(model.smart_charge(sessions, signal).columns)
+
+    yearly = model.simulate_medium_term(years=0.1, output="daily_energy", n_scenarios=2)
+    assert len(yearly) > 0 and "total_energy_kwh" in yearly.columns
+
+    model.export(sessions, tmp_path / "sessions.csv")
+    assert len(pd.read_csv(tmp_path / "sessions.csv")) == len(sessions)
 
 
-def test_from_session_model():
-    from gears.models.session_model import EVSessionModel
-
-    gmm = EVSessionModel(n_components=3).fit(make_df(500))
-    model = GEARSModel.from_session_model(gmm, n_scenarios=2)
-    assert model.is_fitted_
-    sessions = model.simulate_short_term("2025-06-01", horizon=2, n_scenarios=2)
-    assert len(sessions) > 0
+def test_the_summary_tells_whether_the_model_is_fitted(model):
+    assert "NOT FITTED" in GEARSModel(n_components=3).summary()
+    summary = model.summary()
+    assert "fitted" in summary and "NOT FITTED" not in summary
 
 
-def test_simulate_without_fit():
-    model = GEARSModel()
-    with pytest.raises(NotFittedError):
-        model.simulate_short_term("2025-06-01")
+def test_a_model_can_be_built_from_a_fitted_session_model():
+    gmm = EVSessionModel(n_components=3).fit(make_demo_data(n=500, location_type="work", seed=0))
+
+    model = GEARSModel.from_session_model(gmm, n_scenarios=2, forecaster_method="probabilistic")
+
+    assert model.is_fitted_ and model.gmm_ is gmm
+    assert len(model.simulate_short_term("2025-06-01", horizon=2, n_scenarios=2)) > 0
 
 
-def test_summary():
-    model = GEARSModel(n_components=3)
-    s = model.summary()
-    assert "NOT FITTED" in s
-    df = make_df(300)
-    model.fit(df, verbose=False)
-    s = model.summary()
-    assert "fitted" in s
+def test_gear_1_is_the_default_and_the_other_gears_are_refused_in_one_line():
+    data = make_demo_data(n=400, location_type="work", seed=0)
+    kwargs = {"n_components": 3, "n_scenarios": 2, "random_state": 0,
+              "forecaster_method": "probabilistic"}
+    implicit, explicit = GEARSModel(**kwargs), GEARSModel(gear=1, **kwargs)
+    assert implicit.gear == explicit.gear == 1
 
-
-def test_smart_charge():
-    from gears.utils import make_price_signal
-    df = make_df(300)
-    model = GEARSModel(n_components=3, n_scenarios=2).fit(df, verbose=False)
-    sessions = model.simulate_short_term("2025-06-01", horizon=2, n_scenarios=1, seed=0)
-    if "arrival_time" not in sessions.columns and "arrival_hour" in sessions.columns:
-        sessions["arrival_time"] = (
-            pd.to_datetime(sessions["date"])
-            + pd.to_timedelta(sessions["arrival_hour"], unit="h")
-        )
-    signal = make_price_signal(start="2025-06-01", periods=96, resolution_min=30)
-    result = model.smart_charge(sessions, signal)
-    assert "cost_smart" in result.columns
-
-
-# ---------------------------------------------------------------------------
-# GEAR dispatch (Phase 2 / Session 3)
-# ---------------------------------------------------------------------------
-
-def test_gear_defaults_to_one_and_is_backward_compatible():
-    """Omitting `gear` (or passing gear=1 explicitly) must be behaviorally
-    identical to the pre-Session-3 GEARSModel — same attributes, same
-    fit/simulate behavior."""
-    df = make_df(400)
-    implicit = GEARSModel(n_components=3, n_scenarios=2, random_state=0)
-    explicit = GEARSModel(gear=1, n_components=3, n_scenarios=2, random_state=0)
-
-    assert implicit.gear == 1
-    assert explicit.gear == 1
-
-    implicit.fit(df, verbose=False)
-    explicit.fit(df, verbose=False)
-
-    assert implicit.is_fitted_ and explicit.is_fitted_
-    # Same seed, same data, same gear -> identical GMM repr.
-    assert repr(implicit.gmm_) == repr(explicit.gmm_)
-
-
-@pytest.mark.parametrize("gear", [0, 2, 3])
-def test_unimplemented_gears_raise_short_not_implemented_error(gear):
-    with pytest.raises(NotImplementedError, match=rf"GEAR {gear} is not implemented") as exc:
-        GEARSModel(gear=gear)
-    assert "[1]" in str(exc.value)
-    assert len(str(exc.value)) < 100
-
-
-def test_gear1_supports_vae_model_type_end_to_end():
-    """model_type is a first-class GEARSModel constructor param (previously
-    only reachable via EVSessionModel directly) and must work end-to-end,
-    including through simulate_short_term."""
-    df = make_df(400)
-    model = GEARSModel(
-        gear=1, model_type="vae", n_scenarios=2,
-        forecaster_method="probabilistic", random_state=0,
+    implicit.fit(data, verbose=False)
+    explicit.fit(data, verbose=False)
+    pd.testing.assert_frame_equal(
+        implicit.simulate_short_term("2025-06-01", horizon=2, n_scenarios=1, seed=0),
+        explicit.simulate_short_term("2025-06-01", horizon=2, n_scenarios=1, seed=0),
     )
-    assert model.model_type == "vae"
-    model.fit(df, verbose=False)
-    assert model.is_fitted_
-    assert model.gmm_.model_type == "vae"
 
-    sessions = model.simulate_short_term("2025-06-01", horizon=2, n_scenarios=1, seed=0)
-    assert len(sessions) > 0
+    for gear in (0, 2, 3):
+        with pytest.raises(NotImplementedError, match=rf"GEAR {gear} is not implemented") as err:
+            GEARSModel(gear=gear)
+        assert "[1]" in str(err.value) and len(str(err.value)) < 100
 
 
-def test_recency_and_half_life_days_are_constructor_params():
-    """recency/half_life_days must be settable on GEARSModel directly,
-    without reaching into EVSessionModel."""
-    model = GEARSModel(gear=1, recency=True, half_life_days=45.0, n_components=2)
-    assert model.recency is True
-    assert model.half_life_days == 45.0
-
-    df = make_df(400)
-    model.fit(df, verbose=False)
-    assert model.gmm_.recency is True
+def test_load_refuses_a_file_that_is_not_a_gears_model(tmp_path):
+    joblib.dump({"not": "a model"}, tmp_path / "other.joblib")
+    with pytest.raises(TypeError, match="Expected GEARSModel"):
+        GEARSModel.load(tmp_path / "other.joblib")

@@ -1,167 +1,87 @@
-"""Tests for smart charging optimizer — including Section 7 regression tests
-and the R3 compute_regret() scalar-value regression guards (relocated here
-from tests/test_regression.py; see test_compute_regret_basic
-for the bug this guards against)."""
-import pytest
+"""Tests for the V1G optimiser's summaries: savings_summary and compute_regret.
+
+How sessions are scheduled (window, power, cost against an independent recomputation,
+efficiency, warnings, invalid input) is checked in ``test_sanity.py`` (invariant 9).
+All the figures below are computed by hand.
+"""
+
+from __future__ import annotations
+
+import pandas as pd
 
 from gears.data.loader import make_demo_data
 from gears.smart_charging.optimizer import SmartChargingOptimizer
-from gears.utils import make_price_signal, make_res_signal
+from gears.utils import make_price_signal
+
+# 10 kW is 5 kWh per half-hour slot; the slots from 08:00 cost 1, 4, 2 and 3 EUR/kWh.
+PRICES = pd.Series(
+    [1.0, 4.0, 2.0, 3.0], index=pd.date_range("2025-06-10 08:00", periods=4, freq="30min")
+)
 
 
-def make_sessions(n=20, seed=0, start="2025-06-01", end="2025-06-07"):
-    """Create sessions whose date range aligns with the default price signal."""
-    df = make_demo_data(n=n, seed=seed, start_date=start, end_date=end)
-    return df
+def sessions(*energies_kwh):
+    """Sessions plugged in at 08:00 for two hours on a 10 kW charger."""
+    return pd.DataFrame({
+        "arrival_time": [pd.Timestamp("2025-06-10 08:00")] * len(energies_kwh),
+        "duration": [2.0] * len(energies_kwh),
+        "energy": list(energies_kwh),
+        "power_kw": [10.0] * len(energies_kwh),
+    })
 
 
-def make_signal(start="2025-06-01", days=7):
-    return make_price_signal(
-        start=start, periods=days * 48, resolution_min=30, pattern="day_night"
-    )
+def test_savings_summary_adds_up_the_sessions():
+    opt = SmartChargingOptimizer("price", resolution_min=30)
+    # 15 kWh: plug 5*(1+4+2) = 35, smart 5*(1+2+3) = 30 (-14.29 %); 5 kWh twice: 5 in both (0 %)
+    result = opt.optimise(sessions(15.0, 5.0, 5.0), PRICES)
 
-
-# ── Basic optimisation ────────────────────────────────────────────────────────
-
-def test_optimise_returns_expected_columns():
-    sessions = make_sessions(20)
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price")
-    result = opt.optimise(sessions, signal)
-    for col in ["cost_smart", "cost_plug", "savings_pct", "scheduled_start"]:
-        assert col in result.columns
-
-
-def test_optimise_sessions_aligned_with_signal():
-    """All sessions should be optimised when signal covers the session dates."""
-    sessions = make_sessions(30)
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price")
-    result = opt.optimise(sessions, signal)
-    valid = result["cost_plug"].notna().sum()
-    assert valid > 0, "Optimizer: 0 sessions optimised — signal/sessions date mismatch?"
-    assert valid == len(sessions), f"Expected all sessions optimised, got {valid}/{len(sessions)}"
-
-
-def test_smart_cheaper_than_plug():
-    """Smart charging must be cheaper than or equal to plug-and-charge."""
-    sessions = make_sessions(30)
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price")
-    result = opt.optimise(sessions, signal)
-    valid = result[result["cost_plug"].notna()].copy()
-    assert (valid["cost_smart"] <= valid["cost_plug"] + 1e-6).all()
-
-
-def test_savings_summary_keys():
-    sessions = make_sessions(30)
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price")
-    result = opt.optimise(sessions, signal)
-    summary = opt.savings_summary(result)
-    for key in ["total_cost_smart_eur", "total_cost_plug_eur",
-                "total_savings_eur", "mean_savings_pct", "n_sessions_optimised"]:
-        assert key in summary
-    assert summary["total_savings_eur"] >= 0
-
-
-def test_without_power_kw_uses_default():
-    """Sessions without power_kw column should use default_power_kw."""
-    sessions = make_sessions(10)
-    sessions = sessions.drop(columns=["power_kw"], errors="ignore")
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price", default_power_kw=7.4)
-    result = opt.optimise(sessions, signal)
-    assert result["cost_plug"].notna().sum() > 0
-
-
-def test_res_signal():
-    sessions = make_sessions(20)
-    signal = make_res_signal(start="2025-06-01", periods=7 * 48, resolution_min=30)
-    opt = SmartChargingOptimizer(signal_type="res")
-    result = opt.optimise(sessions, signal)
-    assert result["cost_plug"].notna().sum() > 0
-
-
-def test_date_as_object_dtype():
-    """date column as Python date objects (from validate_dataframe) must work."""
-    sessions = make_sessions(15)
-    assert sessions["date"].dtype == object  # date objects, not datetime
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price")
-    result = opt.optimise(sessions, signal)
-    assert result["cost_plug"].notna().sum() > 0
-
-
-def test_invalid_signal_type():
-    with pytest.raises(ValueError, match="signal_type"):
-        SmartChargingOptimizer(signal_type="carbon")
-
-
-# ── Regret analysis ───────────────────────────────────────────────────────────
-
-def test_compute_regret_basic():
-    """R3: compute_regret()'s dict values must all be Python float scalars.
-    The old bug used double-bracket indexing (oracle_opt[["cost_smart"]],
-    a one-column DataFrame) instead of oracle_opt["cost_smart"] (a Series);
-    .sum() on the former returns a Series, not a scalar, so downstream
-    arithmetic raised KeyError: 0."""
-    oracle = make_sessions(20, seed=0)
-    predicted = make_sessions(20, seed=1)
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price")
-    regret = opt.compute_regret(oracle, predicted, signal)
-    expected_keys = {
-        "cost_oracle_smart", "cost_predicted_smart", "cost_predicted_plug",
-        "regret_smart_vs_oracle", "regret_plug_vs_oracle", "value_of_smart_charging",
+    assert opt.savings_summary(result) == {
+        "total_cost_smart_eur": 40.0,
+        "total_cost_plug_eur": 45.0,
+        "total_savings_eur": 5.0,
+        "mean_savings_pct": 4.76,                    # the mean of 14.29, 0 and 0 (not their median)
+        "n_sessions_optimised": 3,
     }
-    assert expected_keys <= set(regret.keys())
-    for key in expected_keys:
-        assert isinstance(regret[key], float), (
-            f"compute_regret['{key}'] is {type(regret[key]).__name__} — R3 regressed."
-        )
+    # sessions the signal does not cover are not optimised: there is nothing to summarise
+    not_covered = opt.optimise(sessions(5.0), PRICES.shift(freq="30D"))
+    assert opt.savings_summary(not_covered) == {}
 
 
-def test_compute_regret_with_persistence():
-    """R3: same scalar check, for the extra persistence_sessions branch."""
-    oracle = make_sessions(20, seed=0)
-    predicted = make_sessions(20, seed=1)
-    persistence = make_sessions(20, seed=2)
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price")
-    regret = opt.compute_regret(oracle, predicted, signal,
-                                persistence_sessions=persistence)
-    for key in ("cost_persistence_smart", "value_of_forecast_vs_persistence"):
-        assert key in regret
-        assert isinstance(regret[key], float)
+def test_a_session_without_power_uses_the_default_charger_power():
+    demo = make_demo_data(n=20, seed=0, start_date="2025-06-01", end_date="2025-06-07")
+    signal = make_price_signal(start="2025-06-01", periods=7 * 48, resolution_min=30)
+    without = demo.drop(columns=["power_kw"], errors="ignore")
+
+    default = SmartChargingOptimizer("price").optimise(without, signal)
+    explicit = SmartChargingOptimizer("price").optimise(without.assign(power_kw=7.4), signal)
+    slower = SmartChargingOptimizer("price", default_power_kw=3.7).optimise(without, signal)
+    slower_explicit = SmartChargingOptimizer("price").optimise(without.assign(power_kw=3.7), signal)
+
+    assert default["cost_plug"].notna().all()
+    for column in ("cost_smart", "cost_plug"):
+        pd.testing.assert_series_equal(default[column], explicit[column])        # 7.4 kW
+        pd.testing.assert_series_equal(slower[column], slower_explicit[column])  # the argument
+    assert not default["cost_plug"].equals(slower["cost_plug"])                  # and it matters
 
 
-def test_compute_regret_same_sessions_zero_regret():
-    """R3: when oracle == predicted, regret must be ~0 as a scalar float,
-    not an empty/misshapen array from the double-bracket bug."""
-    sessions = make_sessions(25, seed=5)
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price")
-    regret = opt.compute_regret(sessions, sessions, signal)
-    assert isinstance(regret["regret_smart_vs_oracle"], float)
-    assert abs(regret["regret_smart_vs_oracle"]) < 1e-3
+def test_regret_compares_what_the_forecast_costs_with_what_the_real_sessions_cost():
+    opt = SmartChargingOptimizer("price", resolution_min=30)
+    oracle, predicted, naive = sessions(15.0), sessions(10.0), sessions(5.0)
+    # smart costs: 15 kWh -> 30, 10 kWh -> 5*1 + 5*2 = 15, 5 kWh -> 5; plug cost of 10 kWh: 25
 
+    regret = opt.compute_regret(oracle, predicted, PRICES, persistence_sessions=naive)
 
-def test_v1g_ordering():
-    """Oracle <= GEARS+V1G <= GEARS+Plug must hold (R3: also confirms the
-    arithmetic doesn't raise on the fixed scalar values)."""
-    oracle = make_sessions(40, seed=0)
-    predicted = make_sessions(40, seed=1)
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price")
-    regret = opt.compute_regret(oracle, predicted, signal)
-    assert regret["value_of_smart_charging"] >= -1e-3   # smart <= plug
+    assert regret == {
+        "cost_oracle_smart": 30.0,
+        "cost_predicted_smart": 15.0,
+        "cost_predicted_plug": 25.0,
+        "regret_smart_vs_oracle": -15.0,
+        "regret_plug_vs_oracle": -5.0,
+        "value_of_smart_charging": 10.0,
+        "cost_persistence_smart": 5.0,
+        "value_of_forecast_vs_persistence": -10.0,
+    }
+    assert all(type(v) is float for v in regret.values())    # scalars, not one-column frames
 
-
-def test_savings_nonnegative():
-    sessions = make_sessions(30)
-    signal = make_signal()
-    opt = SmartChargingOptimizer(signal_type="price")
-    result = opt.optimise(sessions, signal)
-    summary = opt.savings_summary(result)
-    assert summary.get("total_savings_eur", 0) >= -1e-6
+    same = opt.compute_regret(oracle, oracle, PRICES)
+    assert same["regret_smart_vs_oracle"] == 0.0 and same["value_of_smart_charging"] == 5.0
+    assert "cost_persistence_smart" not in same

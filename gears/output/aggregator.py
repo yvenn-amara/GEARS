@@ -439,7 +439,9 @@ class OutputAggregator:
         ------
         ValueError
             Unknown ``charging_mode`` or missing required argument (``"by_location"``
-            also needs ``location_type`` in ``gmm.stratify_by``).
+            also needs ``location_type`` in ``gmm.stratify_by``); ``day_of_week`` or
+            ``season`` missing from ``gmm.stratify_by`` (the annual series is built per
+            weekday and season, so the load would be zero all year).
         """
         if charging_mode not in _CHARGING_MODES:
             raise ValueError(
@@ -454,6 +456,14 @@ class OutputAggregator:
         gmm._check_fitted()
 
         indices = _context_indices(gmm.stratify_by)
+        absent = [name for name, i in zip(("day_of_week", "season"), indices[1:]) if i is None]
+        if absent:
+            raise ValueError(
+                f"build_load_profiles needs {' and '.join(map(repr, absent))} in "
+                f"gmm.stratify_by (the annual series is built per weekday and season), but it "
+                f"is {list(gmm.stratify_by)}: the load would be zero all year. Refit the model "
+                "with stratify_by including 'day_of_week' and 'season'."
+            )
         if charging_mode == "by_location" and indices[0] is None:
             raise ValueError(
                 "charging_mode='by_location' requires 'location_type' in "
