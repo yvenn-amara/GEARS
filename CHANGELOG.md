@@ -43,8 +43,8 @@ versions are in `docs/archive/CHANGELOG_detailed.md` of the private `GEARS_sandb
   sparse contexts listed and served by the closest one; an unknown context warns once (`strict=True` raises).
 - `gears fit --stratify-by --max-components --max-samples-per-context --seed`; `gears._optional.require`
   (a missing extra gives one `ImportError` naming `gears-ev[vae]` or `[dl]`).
-- `examples/` (four toy scripts), a README whose code blocks are tested, and a short test suite
-  (under a minute by default; markers `vae`, `dl`, `slow`; no network; a coverage floor).
+- `examples/` (four toy scripts), a README whose code blocks are tested, and a test suite that runs
+  them in a minute or two by default (markers `vae`, `dl`, `slow`; no network; a coverage floor).
 
 ### Fixed
 - The checksum of the French model was that of an empty file, so every `load_pretrained` failed; a download

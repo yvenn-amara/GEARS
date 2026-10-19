@@ -2,7 +2,7 @@
 files it announces. A broken example breaks this test.
 
 The scripts run in this process with ``runpy``, in a temporary folder (``GEARS_EXAMPLES_OUT``).
-They take a few seconds each, so the module is marked ``slow``: ``pytest -m slow`` runs it.
+They take a few seconds each (about half a minute in all), and are part of the default run.
 """
 
 from __future__ import annotations
@@ -17,8 +17,6 @@ import pandas as pd
 import pytest
 
 from gears import GEARSModel
-
-pytestmark = pytest.mark.slow
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"

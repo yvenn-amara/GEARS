@@ -21,7 +21,7 @@ those features.
 ```bash
 pytest                                   # the default run: everything except the markers below
 pytest --cov                             # same, with branch coverage (fails below the floor in pyproject.toml)
-pytest -m slow                           # the examples and the README blocks
+pytest -m slow                           # the few tests that need data files not in the repository
 pytest -m vae                            # needs torch
 pytest -m dl                             # needs torch and neuralforecast; heavy, run on demand
 pytest tests/test_sanity.py -k sarima    # one file, or the tests matching a word
@@ -62,7 +62,7 @@ are pickles, so a pull request never contains one.
 ## Pull request checklist
 
 - [ ] The change does one thing; the pull request says what was added, removed, moved or changed.
-- [ ] Tests added or updated; `pytest` and `pytest -m slow` pass.
+- [ ] Tests added or updated; `pytest` passes (it includes the examples and the README blocks).
 - [ ] `ruff check gears tests examples` is clean.
 - [ ] Docstrings, the README and `examples/` still describe what the code does.
 - [ ] `CHANGELOG.md` has a line under `[Unreleased]`.

@@ -58,7 +58,7 @@ addopts = "-ra --strict-markers --strict-config -m 'not dl and not slow'"
 markers = [
     "vae: needs torch (pip install 'gears-ev[vae]'); skipped when torch is absent",
     "dl: needs torch and neuralforecast (pip install 'gears-ev[dl]'); heavy, run on demand or weekly",
-    "slow: takes more than a few seconds; excluded from the default run",
+    "slow: heavy, or needs files that are not in the repository (e.g. the real CSVs of data/); excluded from the default run",
 ]
 filterwarnings = ["ignore::UserWarning", "ignore::FutureWarning"]
 

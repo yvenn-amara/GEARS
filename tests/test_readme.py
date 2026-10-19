@@ -10,7 +10,7 @@ file (``french_release``): no download.
 Three more rules keep it honest: every ``python`` block must be marked (an unmarked block would be
 untested), every file the README links to or names must exist, and it stays under 250 lines.
 
-The module is marked ``slow`` (the blocks fit several models): ``pytest -m slow tests/test_readme.py``.
+It is part of the default run: ``pytest tests/test_readme.py``.
 """
 
 from __future__ import annotations
@@ -25,8 +25,6 @@ from click.testing import CliRunner
 
 from gears.cli import main
 from gears.data.loader import make_demo_data
-
-pytestmark = pytest.mark.slow
 
 ROOT = Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
