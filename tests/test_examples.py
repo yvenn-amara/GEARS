@@ -7,19 +7,16 @@ They take a few seconds each, so the module is marked ``slow``: ``pytest -m slow
 
 from __future__ import annotations
 
-import hashlib
 import runpy
 import sys
 import warnings
 from pathlib import Path
 
-import joblib
 import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
-from gears import GEARSModel, pretrained
-from gears.data.loader import make_demo_data
+from gears import GEARSModel
 
 pytestmark = pytest.mark.slow
 
@@ -101,21 +98,8 @@ def test_a_file_goes_through_load_fit_save_load_and_simulate(run_example, out, c
     assert f"sessions file: {out / 'my_sessions.csv'}" in capsys.readouterr().out
 
 
-def test_the_french_model_is_used_on_request_and_only_then(run_example, capsys, tmp_path, monkeypatch):
-    # a release served from a local file stands for the download
-    # ... stratified like the French model: by site type, département, weekday and season
-    data = make_demo_data(n=600, location_type="work", seed=0).assign(department="75")
-    model = GEARSModel(n_components=2, forecaster_method="probabilistic", random_state=0,
-                       stratify_by=["location_type", "department", "day_of_week", "season"])
-    model.fit(data, verbose=False)
-    release = tmp_path / "release" / "french.joblib"
-    release.parent.mkdir()
-    joblib.dump(model.gmm_, release)
-    monkeypatch.setattr(pretrained, "_CATALOGUE", {"french": {
-        "file": release.name, "url": release.as_uri(),
-        "sha256": hashlib.sha256(release.read_bytes()).hexdigest(),
-    }})
-
+@pytest.mark.usefixtures("french_release")
+def test_the_french_model_is_used_on_request_and_only_then(run_example, capsys):
     run_example("04_bring_your_own_data.py")
     assert "French model" not in capsys.readouterr().out      # no download without the flag
 
