@@ -1,58 +1,92 @@
 # Contributing to GEARS
 
-Thank you for your interest in contributing! This document explains the process.
+Thank you for helping. This page is the short version: how to set up, how to check your work, what a
+pull request must contain, and how a finding from the (private) `GEARS_sandbox` repository comes back
+here.
 
----
-
-## Development setup
+## Set up
 
 ```bash
-git clone https://github.com/yvenn-amara/GEARS.git
+git clone https://github.com/EDF-Lab/GEARS.git
 cd GEARS
+python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-## Running tests
+Python 3.10 or later. The `[vae]` and `[dl]` extras (see the README) are only needed to run the tests of
+those features.
+
+## Run the tests
 
 ```bash
-# All tests
-pytest tests/ -v
-
-# With coverage
-pytest tests/ --cov=gears --cov-report=term-missing
-
-# One module only
-pytest tests/test_session_model.py -v
+pytest                                   # the default run: everything except the markers below
+pytest --cov                             # same, with branch coverage (fails below the floor in pyproject.toml)
+pytest -m slow                           # the examples and the README blocks
+pytest -m vae                            # needs torch
+pytest -m dl                             # needs torch and neuralforecast; heavy, run on demand
+pytest tests/test_sanity.py -k sarima    # one file, or the tests matching a word
 ```
 
-## Code style
+- A test file that needs an extra starts with `pytest.importorskip(...)`: without the extra it is
+  skipped, never failing.
+- Tests never use the network (any connection raises `NetworkAccessError`) and never touch your real
+  `~/.cache/gears` (each test has a private `GEARS_HOME`).
+- Prefer a test that checks a value you can compute by hand, or against an independent recomputation,
+  to one that only checks that something was returned.
+- `tests/test_examples.py` runs every script of `examples/`, and `tests/test_readme.py` runs every code
+  block of the README marked `<!-- test -->`. If you change an API those use, they fail: fix the
+  example or the README in the same pull request. Mark every new `python` block of the README.
+
+## Style and design rules
 
 ```bash
-ruff check gears/ tests/          # lint
-ruff format gears/ tests/         # format
-mypy gears/ --ignore-missing-imports  # type hints (non-blocking)
+ruff check gears tests examples
 ```
 
-## Adding a new pre-trained model
+- `import gears` must stay instant: no import of `torch`, `neuralforecast`, `pmdarima`, `matplotlib` or
+  `requests` at module level, and no network or disk access (`tests/test_imports.py` checks it). Import
+  an optional dependency inside the function that needs it, through `gears._optional.require`, so that
+  the error says which extra to install.
+- The library does not `print`: use `logging`. Warnings are `UserWarning`s that say what happened and what
+  to do; errors are one line, name the argument, and say the expected value.
+- No silent fallback to a substitute model or to made-up data: raise, or warn with the consequence.
+- New public names go in `gears/__init__.py` (`_EXPORTS` and `__all__`) only if a user needs them at top
+  level; keep that list short.
 
-1. Prepare a sessions DataFrame (CSV/Parquet).
-2. Fit a `GEARSModel` on it.
-3. Add an entry to `_CATALOGUE` in `gears/models/registry.py`.
-4. Call `registry.save_bundle(...)` then `registry.upload_to_hub(...)`.
-5. Update `README.md` model table.
+## Pre-trained models
 
-## Pull Request checklist
+The official models are release files listed in `_CATALOGUE` (`gears/pretrained.py`) with their SHA-256.
+A new or changed model means a new release asset and a new checksum: open an issue first. Model files
+are pickles, so a pull request never contains one.
 
-- [ ] Tests added / updated for new functionality
-- [ ] All 300+ existing tests still pass
-- [ ] Docstrings updated
-- [ ] `CHANGELOG.md` entry added under `[Unreleased]`
-- [ ] `ruff check` and `ruff format --check` pass with no errors
+## Pull request checklist
 
-## Reporting bugs
+- [ ] The change does one thing; the pull request says what was added, removed, moved or changed.
+- [ ] Tests added or updated; `pytest` and `pytest -m slow` pass.
+- [ ] `ruff check gears tests examples` is clean.
+- [ ] Docstrings, the README and `examples/` still describe what the code does.
+- [ ] `CHANGELOG.md` has a line under `[Unreleased]`.
+- [ ] No data, no `.joblib` file, no notebook output, no personal path or secret is committed.
 
-Open a GitHub issue with:
-- GEARS version (`python -c "import gears; print(gears.__version__)"`)
-- Python version and OS
-- Minimal reproducible example
-- Full traceback
+## Reporting a bug
+
+Open an issue with the GEARS version (`python -c "import gears; print(gears.__version__)"`), your Python
+version and OS, a minimal example that fails (`make_demo_data()` gives sessions to build it on), and the
+full traceback.
+
+## Reporting a bug found in the sandbox
+
+Experiments live in the private `GEARS_sandbox` repository, which depends on a pinned version of GEARS.
+When one of them finds a bug:
+
+1. **Reproduce it here, as a failing test**: the smallest test on `make_demo_data()` or a few lines of
+   data that fails (`@pytest.mark.xfail(strict=True)` is fine while the fix is pending). Do not paste
+   real data.
+2. **Fix it** on a branch `fix/<short-name>` and open a pull request that links the sandbox entry
+   (`docs/FINDINGS.md`) and restates the finding in a few lines, since reviewers may not see the
+   sandbox. Add the line to `CHANGELOG.md`.
+3. **After the release** that contains the fix, bump the pinned GEARS version in the sandbox and mark the
+   entry as fixed.
+
+An idea for an improvement is a GitHub issue labelled `enhancement`, with a link to the sandbox result.
+It enters GEARS only once it is shown to work in the sandbox, and with tests.
