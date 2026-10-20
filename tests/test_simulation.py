@@ -27,10 +27,11 @@ def test_the_number_of_sessions_per_day_comes_from_the_forecaster(model, demo):
     assert [per_day.get(d.date(), 0) for d in pd.date_range(start, periods=5)] == expected
 
 
-def test_without_a_forecaster_every_day_gets_the_default_number_of_sessions(model):
-    sessions = ShortTermSimulator(model.gmm_).simulate(
-        "2025-06-10", horizon=3, n_scenarios=2, seed=0
-    )
+def test_without_a_forecaster_every_day_gets_the_default_number_of_sessions_and_says_so(model):
+    with pytest.warns(UserWarning, match="No fitted forecaster.*20 sessions"):
+        sessions = ShortTermSimulator(model.gmm_).simulate(
+            "2025-06-10", horizon=3, n_scenarios=2, seed=0
+        )
     assert len(sessions) == 3 * 2 * 20
     assert (sessions.groupby(["scenario", "date"]).size() == 20).all()
 

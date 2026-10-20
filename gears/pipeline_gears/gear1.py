@@ -252,6 +252,7 @@ class Gear1Backend:
         n_scenarios: int | None = None,
         n_sessions: int | None = None,
         seed: int | None = None,
+        context: dict | None = None,
         strict: bool = False,
     ) -> pd.DataFrame:
         """
@@ -275,6 +276,17 @@ class Gear1Backend:
         seed : int, optional
             Random seed. The same seed gives the same sessions; ``None`` draws
             fresh randomness on every call.
+        context : dict, optional
+            Which context to simulate, for a model fitted per site:
+            ``{"location_type": "work", "department": "75"}`` (the pre-trained
+            French model has both). Each day completes it with its own
+            ``day_of_week`` and ``season``; a key you give wins over the date's.
+            Keys must be among the session model's ``stratify_by``
+            (``model.gmm_.stratify_by``). Without ``context``, a model fitted
+            per site cannot know which site you mean and serves the most
+            populous one, with a warning. The daily counts come from the
+            forecaster, which was fitted on all the sessions: to simulate one
+            site, fit on that site's sessions, or give ``n_sessions``.
         strict : bool, default False
             Raise ``ValueError`` instead of warning when the session model has
             no mixture for a day's context and the closest one would be used.
@@ -285,7 +297,8 @@ class Gear1Backend:
             If the model is not fitted.
         ValueError
             If ``horizon``, ``n_scenarios`` or ``n_sessions`` is not an integer
-            >= 1, or ``start_date`` is not a valid date.
+            >= 1, ``start_date`` is not a valid date, or ``context`` is not a
+            dict or has a key the session model is not stratified by.
         """
         self._check_fitted()
         horizon = check_int(horizon, "horizon", minimum=1, meaning="number of days to simulate")
@@ -304,6 +317,7 @@ class Gear1Backend:
                     date=start + pd.Timedelta(days=day_offset),
                     n_sessions=n_sessions,
                     seed=int(day_seeds[day_offset]),
+                    context=context,
                     strict=strict,
                 )
                 for day_offset in range(horizon)
@@ -315,6 +329,7 @@ class Gear1Backend:
             horizon=horizon,
             n_scenarios=n_sc,
             seed=seed,
+            context=context,
             strict=strict,
         )
 
@@ -329,8 +344,14 @@ class Gear1Backend:
         n_scenarios: int | None = None,
         charger_mix: dict[float, float] | None = None,
         saturation_factor: float = 3.0,
+        context: dict | None = None,
     ) -> pd.DataFrame:
         """Simulate aggregated EV demand over a multi-year horizon.
+
+        ``context`` chooses the site of a model fitted per site, as in
+        :meth:`simulate_short_term` (e.g. ``{"location_type": "work",
+        "department": "75"}``); the starting level is then the mean daily
+        count of the matching fitted contexts.
 
         Raises
         ------
@@ -355,6 +376,7 @@ class Gear1Backend:
             start_date=start_date,
             output=output,
             weather_factor=weather_factor,
+            context=context,
             saturation_factor=saturation_factor,
         )
 

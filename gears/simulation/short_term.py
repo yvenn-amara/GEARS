@@ -9,6 +9,7 @@ and the SessionForecaster for daily session counts.
 from __future__ import annotations
 
 import logging
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -29,8 +30,8 @@ class ShortTermSimulator:
     gmm : EVSessionModel
         Fitted GMM for sampling session properties.
     forecaster : SessionForecaster, optional
-        Fitted count forecaster.  When None, each day falls back to a
-        hard-coded default of 20 sessions.
+        Fitted count forecaster.  When None (or not fitted), ``simulate`` warns
+        and gives each day a default of 20 sessions.
     charger_mix : dict, optional
         Power distribution ``{power_kw: proportion}``.  Proportions are
         normalised automatically.  Default: ``{7.4: 0.5, 22.0: 0.5}``.
@@ -68,6 +69,7 @@ class ShortTermSimulator:
         horizon: int = 7,
         n_scenarios: int = 10,
         seed: int | None = None,
+        context: dict | None = None,
         strict: bool = False,
     ) -> pd.DataFrame:
         """
@@ -84,6 +86,14 @@ class ShortTermSimulator:
             Number of stochastic scenarios (an integer >= 1).
         seed : int, optional
             Master random seed.
+        context : dict, optional
+            The part of the context that dates cannot give, for a model
+            stratified by site: ``{"location_type": "work", "department": "75"}``.
+            Each day completes it with its own ``day_of_week`` and ``season``
+            (a key you give wins over the date's). Keys must be among the
+            session model's ``stratify_by``. The daily counts come from the
+            forecaster, which was fitted on all the sessions it was given: to
+            simulate one site, fit the forecaster on that site's sessions.
         strict : bool, default False
             Raise ``ValueError`` instead of falling back to the closest fitted
             context when the session model has no mixture for a day's context.
@@ -98,8 +108,14 @@ class ShortTermSimulator:
         Raises
         ------
         ValueError
-            If ``horizon`` or ``n_scenarios`` is not an integer >= 1, or
-            ``start_date`` is not a valid date.
+            If ``horizon`` or ``n_scenarios`` is not an integer >= 1,
+            ``start_date`` is not a valid date, or ``context`` is not a dict
+            or has a key the session model is not stratified by.
+
+        Warns
+        -----
+        UserWarning
+            When there is no fitted forecaster: every day then gets 20 sessions.
         """
         horizon = check_int(horizon, "horizon", minimum=1, meaning="number of days to simulate")
         n_scenarios = check_int(
@@ -124,6 +140,14 @@ class ShortTermSimulator:
             counts_pivot.index = pd.to_datetime(counts_pivot.index).normalize()
         else:
             counts_pivot = None
+            warnings.warn(
+                "No fitted forecaster: every simulated day gets the default of 20 sessions. "
+                "Give ShortTermSimulator a fitted SessionForecaster, or choose the number of "
+                "sessions yourself with simulate_single_day(n_sessions=...) "
+                "(GEARSModel.simulate_short_term(n_sessions=...)).",
+                UserWarning,
+                stacklevel=2,
+            )
 
         frames = []
         for sc in range(n_scenarios):
@@ -147,6 +171,7 @@ class ShortTermSimulator:
                     date=date,
                     n_sessions=n_today,
                     seed=int(sc_rng.integers(0, 2**31)),
+                    context=context,
                     strict=strict,
                 )
                 day_sessions["scenario"] = sc
@@ -172,14 +197,17 @@ class ShortTermSimulator:
         Parameters
         ----------
         date : str or Timestamp
-            Target date; used to infer the GMM context and to anchor
-            ``arrival_time`` values.
+            Target date; gives the ``day_of_week`` and ``season`` that
+            ``context`` leaves out, and anchors ``arrival_time`` values.
         n_sessions : int
             Number of sessions to generate.
         seed : int, optional
             Random seed passed to the GMM sampler.
         context : dict, optional
-            Explicit GMM context (overrides date-derived context).
+            GMM context to simulate, e.g. ``{"location_type": "work",
+            "department": "75"}``; may be partial (the date completes it, and
+            a key you give wins over the date's). Keys must be among the
+            session model's ``stratify_by``.
         strict : bool, default False
             Raise ``ValueError`` if the session model has no mixture for the
             context, instead of using the closest fitted one.
@@ -192,7 +220,8 @@ class ShortTermSimulator:
         Raises
         ------
         ValueError
-            If ``n_sessions`` is not an integer >= 1 or ``date`` is not valid.
+            If ``n_sessions`` is not an integer >= 1, ``date`` is not valid, or
+            ``context`` is not a dict or has a key the model is not stratified by.
         """
         n_sessions = check_int(n_sessions, "n_sessions", minimum=1)
         date = as_naive_timestamp(date, "date")
