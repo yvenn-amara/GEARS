@@ -102,4 +102,4 @@ def test_the_french_model_is_used_on_request_and_only_then(run_example, capsys):
     assert "French model" not in capsys.readouterr().out      # no download without the flag
 
     run_example("04_bring_your_own_data.py", "--pretrained")
-    assert "French model, workplaces of Paris: 40 sessions on 2025-06-02" in capsys.readouterr().out
+    assert "French model, workplaces of Paris: 280 sessions over 7 days from 2025-06-02" in capsys.readouterr().out

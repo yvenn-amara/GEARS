@@ -20,6 +20,7 @@ import shlex
 import warnings
 from pathlib import Path
 
+import pandas as pd
 import pytest
 from click.testing import CliRunner
 
@@ -95,7 +96,8 @@ def test_every_marked_block_of_the_readme_runs(tmp_path, monkeypatch):
 
     # what the commands wrote, and what the blocks computed, is there
     assert (tmp_path / "my_model.joblib").exists() and (tmp_path / "simulated.csv").exists()
-    assert len(namespace["simulated"]) > 0 and len(namespace["day"]) == 40
+    assert len(pd.read_csv(tmp_path / "paris.csv")) == 7 * 40          # `gears simulate --pretrained`
+    assert len(namespace["simulated"]) > 0 and len(namespace["paris_week"]) == 7 * 40
     assert {"total_energy_kwh", "scenario"} <= set(namespace["daily"].columns)
 
     # a README that teaches users to ignore warnings is not clean: none of its code may warn

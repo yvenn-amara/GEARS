@@ -1,8 +1,7 @@
 # Changelog
 
-[Keep a Changelog](https://keepachangelog.com) format, [SemVer](https://semver.org) versions. 2.0.0 is the
-first public release. The detailed notes of the clean-up (with measurements) and of the earlier internal
-versions are in `docs/archive/CHANGELOG_detailed.md` of the private `GEARS_sandbox` repository.
+[Keep a Changelog](https://keepachangelog.com) format, [SemVer](https://semver.org) versions; 2.0.0 is the first public
+release. The clean-up in detail and the earlier versions: `docs/archive/CHANGELOG_detailed.md` (private `GEARS_sandbox`).
 
 ## [Unreleased] — becomes 2.0.0
 
@@ -18,8 +17,7 @@ versions are in `docs/archive/CHANGELOG_detailed.md` of the private `GEARS_sandb
 - Removed because unused: `EVSessionModel.plot_components`, `MediumTermSimulator.plot_energy_trajectory`,
   `ShortTermSimulator.compute_load_curve`, `SmartChargingOptimizer.plot_load_curve`, and the plotting
   functions `plot_arrival_distribution`, `plot_session_heatmap`, `plot_energy_distribution`, `plot_gmm_means`.
-- `NHiTSForecaster` and `TransformerForecaster` live in `gears.models.forecaster_dl` (import them from
-  `gears.models`).
+- `NHiTSForecaster` and `TransformerForecaster` moved to `gears.models.forecaster_dl` (import from `gears.models`).
 
 ### Changed
 - **`import gears` is lazy**: no `torch`, `neuralforecast`, `pmdarima`, `matplotlib` or `requests`, no
@@ -31,8 +29,8 @@ versions are in `docs/archive/CHANGELOG_detailed.md` of the private `GEARS_sandb
 - **Results differ from earlier versions**: the smart-charging optimiser no longer assumes a hidden 0.9
   efficiency, allocates energy slot by slot and bills only the energy delivered (costs 20–25 % lower on
   simulated data); `simulate_short_term(n_sessions=...)` seeds its days from `seed`, not `seed + day`.
-- `OutputAggregator` is about 40 % shorter with identical output; `gears.plotting` no longer emits a
-  converter `UserWarning`.
+- `OutputAggregator` is about 40 % shorter with identical output; `gears.plotting` no longer warns about
+  converters; a simulation without a fitted forecaster (any pre-trained model) warns that each day gets 20 sessions.
 
 ### Added
 - `load_pretrained(model_id, path=..., cache_dir=...)`: SHA-256 checked before the file is opened,
@@ -41,6 +39,9 @@ versions are in `docs/archive/CHANGELOG_detailed.md` of the private `GEARS_sandb
 - Data checks in `load_sessions` and `fit`: fewer than 10 sessions refused; impossible rows dropped and
   counted in one warning (`strict=True` raises); Wh / minutes heuristics; time zones dropped with a warning;
   sparse contexts listed and served by the closest one; an unknown context warns once (`strict=True` raises).
+- `context=` on `simulate_short_term`, `simulate_medium_term` and both simulators, `gears simulate -c KEY=VALUE
+  --strict`: choose the site type and département of a model fitted per site (the French one), the dates giving
+  weekday and season; a key the model is not stratified by raises instead of being ignored.
 - `gears fit --stratify-by --max-components --max-samples-per-context --seed`; `gears._optional.require`
   (a missing extra gives one `ImportError` naming `gears-ev[vae]` or `[dl]`).
 - `examples/` (four toy scripts), a README whose code blocks are tested, and a test suite that runs
@@ -55,6 +56,5 @@ versions are in `docs/archive/CHANGELOG_detailed.md` of the private `GEARS_sandb
   default; a one-day history gave `NaN` counts.
 
 ### Known limits
-- `GEARSModel.simulate_short_term` cannot choose the site type or département of a model fitted per
-  département (the French model): it uses the most populous context and warns. Use
-  `ShortTermSimulator.simulate_single_day(context=...)`.
+- The daily counts come from one forecaster fitted on all the sessions it is given: for one site of a
+  multi-site file, fit on that site or give `n_sessions`.

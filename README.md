@@ -106,19 +106,23 @@ model = GEARSModel(n_components=3, forecaster_method="probabilistic").fit(sessio
 
 GEARS ships no data and no model. The official French model is downloaded on first use,
 checked against its SHA-256 before it is opened, and cached in `~/.cache/gears`
-(`GEARS_HOME` changes the folder). It is fitted per site type, département, weekday and season,
-so name the context you want:
+(`GEARS_HOME` changes the folder). It is fitted per site type, département, weekday and season:
+`context` says which site you want, the dates give the weekday and the season, and `n_sessions`
+is the number of sessions per day (the model holds no forecaster of daily counts).
 
 <!-- test -->
 ```python
-from gears import GEARSModel, ShortTermSimulator
+from gears import GEARSModel
 
 french = GEARSModel.from_pretrained("french")
-paris_monday = {"location_type": "work", "department": "75", "day_of_week": 0, "season": "summer"}
-day = ShortTermSimulator(french.gmm_).simulate_single_day(
-    "2025-06-02", n_sessions=40, context=paris_monday, seed=0, strict=True
+paris_workplaces = {"location_type": "work", "department": "75"}
+paris_week = french.simulate_short_term(
+    "2025-06-02", horizon=7, n_sessions=40, context=paris_workplaces, seed=0, strict=True
 )
 ```
+
+`strict=True` raises if the model has no mixture for a day's context, instead of serving the closest one.
+Any model fitted per site takes `context` the same way (`model.gmm_.stratify_by` lists its keys).
 
 - **Without internet**: download the file on another machine, then
   `load_pretrained("french", path="/where/gmm_french.joblib")`, or copy it into `GEARS_HOME`.
@@ -178,9 +182,12 @@ print(optimiser.savings_summary(scheduled))  # plug-and-charge cost vs smart cos
 ```bash
 gears fit data/sessions.csv --output my_model.joblib --forecaster probabilistic --n-components 3
 gears simulate --model my_model.joblib --start 2025-10-01 --horizon 7 --output simulated.csv
+# the French model: which site (`-c KEY=VALUE`, repeatable), and how many sessions a day
+gears simulate --pretrained french --start 2025-06-02 --n-sessions 40 \
+    -c location_type=work -c department=75 --output paris.csv
 ```
 
-`gears --help` lists the options (`--stratify-by`, `--scenarios`, `--seed`, `--pretrained french`...).
+`gears --help` lists the options (`--stratify-by`, `--scenarios`, `--seed`, `--strict`...).
 
 ## Examples
 
@@ -202,8 +209,8 @@ Each script runs in well under a minute, on simulated data, and writes its figur
   the grid (no V2G).
 - Three session models are available (Gaussian mixture, recency-weighted mixture, VAE). This README
   does not rank them: no comparison is claimed here.
-- `GEARSModel.simulate_short_term` cannot yet choose the site type or département of a model fitted per
-  département (the French model): use `ShortTermSimulator.simulate_single_day(context=...)` as above.
+- The daily number of sessions comes from one forecaster fitted on all the sessions it is given: to
+  simulate one site of a multi-site file, fit on that site's sessions, or give `n_sessions`.
 - Timestamps are naive local times; a time zone in your file is dropped, not converted.
 
 ## Contributing, tests, citation, licence
