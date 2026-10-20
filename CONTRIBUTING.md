@@ -36,6 +36,10 @@ pytest tests/test_sanity.py -k sarima    # one file, or the tests matching a wor
 - `tests/test_examples.py` runs every script of `examples/`, and `tests/test_readme.py` runs every code
   block of the README marked `<!-- test -->`. If you change an API those use, they fail: fix the
   example or the README in the same pull request. Mark every new `python` block of the README.
+- `examples/quickstart.ipynb` is `examples/01_quickstart.py` (its `# %%` lines are the cells). After
+  editing the script, rebuild the notebook, which stays without outputs (the test checks both):
+  `pip install jupytext`, then
+  `jupytext --set-kernel python3 --to ipynb examples/01_quickstart.py -o examples/quickstart.ipynb`.
 
 ## Style and design rules
 

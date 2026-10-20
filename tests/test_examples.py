@@ -7,6 +7,8 @@ They take a few seconds each (about half a minute in all), and are part of the d
 
 from __future__ import annotations
 
+import json
+import re
 import runpy
 import sys
 import warnings
@@ -19,6 +21,7 @@ import pytest
 from gears import GEARSModel
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+NOTEBOOK = EXAMPLES / "quickstart.ipynb"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
@@ -103,3 +106,35 @@ def test_the_french_model_is_used_on_request_and_only_then(run_example, capsys):
 
     run_example("04_bring_your_own_data.py", "--pretrained")
     assert "French model, workplaces of Paris: 280 sessions over 7 days from 2025-06-02" in capsys.readouterr().out
+
+
+def percent_cells(script: str) -> list[tuple[str, str]]:
+    """The cells of a script in jupytext's *percent* format: ``# %%`` opens a code cell,
+    ``# %% [markdown]`` a text cell written as comments. Returns ``(kind, source)`` pairs."""
+    cells: list[tuple[str, list[str]]] = []
+    for line in script.splitlines():
+        marker = re.fullmatch(r"# %%( \[markdown\])?", line.rstrip())
+        if marker:
+            cells.append(("markdown" if marker.group(1) else "code", []))
+        elif cells:
+            kind, lines = cells[-1]
+            lines.append(re.sub(r"^# ?", "", line) if kind == "markdown" else line)
+    return [(kind, "\n".join(lines).strip("\n")) for kind, lines in cells]
+
+
+def test_the_quickstart_notebook_is_the_quickstart_script_and_carries_no_output():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    assert notebook["nbformat"] == 4
+
+    cells = [(cell["cell_type"], "".join(cell["source"]).strip("\n")) for cell in notebook["cells"]]
+    assert cells == percent_cells((EXAMPLES / "01_quickstart.py").read_text(encoding="utf-8")), (
+        "examples/quickstart.ipynb is not examples/01_quickstart.py: rebuild it with "
+        "`jupytext --set-kernel python3 --to ipynb examples/01_quickstart.py -o examples/quickstart.ipynb`"
+    )
+
+    code = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
+    assert code, "the notebook has no code cell"
+    assert all(cell["outputs"] == [] and cell["execution_count"] is None for cell in code), (
+        "the notebook was saved with its outputs: clear them (nothing executed is committed)"
+    )
+    assert NOTEBOOK.stat().st_size < 50_000

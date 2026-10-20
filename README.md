@@ -197,6 +197,7 @@ Each script runs in well under a minute, on simulated data, and writes its figur
 | Script | Shows |
 |---|---|
 | `examples/01_quickstart.py` | demo data → fit → a week of sessions → daily energy and hourly load |
+| `examples/quickstart.ipynb` | the same as 01, as a notebook (no outputs: run it cell by cell) |
 | `examples/02_forecast_and_smart_charging.py` | three forecasters compared, V1G savings, regret |
 | `examples/03_medium_term_scenarios.py` | linear, S-curve and Bass growth; charger presets |
 | `examples/04_bring_your_own_data.py` | your file → fit → save → load → simulate (`--pretrained`: the French model) |

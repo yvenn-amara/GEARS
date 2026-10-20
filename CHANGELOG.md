@@ -44,8 +44,8 @@ release. The clean-up in detail and the earlier versions: `docs/archive/CHANGELO
   weekday and season; a key the model is not stratified by raises instead of being ignored.
 - `gears fit --stratify-by --max-components --max-samples-per-context --seed`; `gears._optional.require`
   (a missing extra gives one `ImportError` naming `gears-ev[vae]` or `[dl]`).
-- `examples/` (four toy scripts), a README whose code blocks are tested, and a test suite that runs
-  them in a minute or two by default (markers `vae`, `dl`, `slow`; no network; a coverage floor).
+- `examples/` (four toy scripts and a quickstart notebook), a README whose code blocks are tested, and a test
+  suite that runs them in a minute or two by default (markers `vae`, `dl`, `slow`; no network; a coverage floor).
 
 ### Fixed
 - The checksum of the French model was that of an empty file, so every `load_pretrained` failed; a download
