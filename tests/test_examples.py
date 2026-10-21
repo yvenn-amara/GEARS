@@ -2,28 +2,26 @@
 files it announces. A broken example breaks this test.
 
 The scripts run in this process with ``runpy``, in a temporary folder (``GEARS_EXAMPLES_OUT``).
-They take a few seconds each, so the module is marked ``slow``: ``pytest -m slow`` runs it.
+They take a few seconds each (about half a minute in all), and are part of the default run.
 """
 
 from __future__ import annotations
 
-import hashlib
+import json
+import re
 import runpy
 import sys
 import warnings
 from pathlib import Path
 
-import joblib
 import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
-from gears import GEARSModel, pretrained
-from gears.data.loader import make_demo_data
-
-pytestmark = pytest.mark.slow
+from gears import GEARSModel
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+NOTEBOOK = EXAMPLES / "quickstart.ipynb"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
@@ -101,23 +99,42 @@ def test_a_file_goes_through_load_fit_save_load_and_simulate(run_example, out, c
     assert f"sessions file: {out / 'my_sessions.csv'}" in capsys.readouterr().out
 
 
-def test_the_french_model_is_used_on_request_and_only_then(run_example, capsys, tmp_path, monkeypatch):
-    # a release served from a local file stands for the download
-    # ... stratified like the French model: by site type, département, weekday and season
-    data = make_demo_data(n=600, location_type="work", seed=0).assign(department="75")
-    model = GEARSModel(n_components=2, forecaster_method="probabilistic", random_state=0,
-                       stratify_by=["location_type", "department", "day_of_week", "season"])
-    model.fit(data, verbose=False)
-    release = tmp_path / "release" / "french.joblib"
-    release.parent.mkdir()
-    joblib.dump(model.gmm_, release)
-    monkeypatch.setattr(pretrained, "_CATALOGUE", {"french": {
-        "file": release.name, "url": release.as_uri(),
-        "sha256": hashlib.sha256(release.read_bytes()).hexdigest(),
-    }})
-
+@pytest.mark.usefixtures("french_release")
+def test_the_french_model_is_used_on_request_and_only_then(run_example, capsys):
     run_example("04_bring_your_own_data.py")
     assert "French model" not in capsys.readouterr().out      # no download without the flag
 
     run_example("04_bring_your_own_data.py", "--pretrained")
-    assert "French model, workplaces of Paris: 40 sessions on 2025-06-02" in capsys.readouterr().out
+    assert "French model, workplaces of Paris: 280 sessions over 7 days from 2025-06-02" in capsys.readouterr().out
+
+
+def percent_cells(script: str) -> list[tuple[str, str]]:
+    """The cells of a script in jupytext's *percent* format: ``# %%`` opens a code cell,
+    ``# %% [markdown]`` a text cell written as comments. Returns ``(kind, source)`` pairs."""
+    cells: list[tuple[str, list[str]]] = []
+    for line in script.splitlines():
+        marker = re.fullmatch(r"# %%( \[markdown\])?", line.rstrip())
+        if marker:
+            cells.append(("markdown" if marker.group(1) else "code", []))
+        elif cells:
+            kind, lines = cells[-1]
+            lines.append(re.sub(r"^# ?", "", line) if kind == "markdown" else line)
+    return [(kind, "\n".join(lines).strip("\n")) for kind, lines in cells]
+
+
+def test_the_quickstart_notebook_is_the_quickstart_script_and_carries_no_output():
+    notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+    assert notebook["nbformat"] == 4
+
+    cells = [(cell["cell_type"], "".join(cell["source"]).strip("\n")) for cell in notebook["cells"]]
+    assert cells == percent_cells((EXAMPLES / "01_quickstart.py").read_text(encoding="utf-8")), (
+        "examples/quickstart.ipynb is not examples/01_quickstart.py: rebuild it with "
+        "`jupytext --set-kernel python3 --to ipynb examples/01_quickstart.py -o examples/quickstart.ipynb`"
+    )
+
+    code = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
+    assert code, "the notebook has no code cell"
+    assert all(cell["outputs"] == [] and cell["execution_count"] is None for cell in code), (
+        "the notebook was saved with its outputs: clear them (nothing executed is committed)"
+    )
+    assert NOTEBOOK.stat().st_size < 50_000

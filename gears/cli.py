@@ -5,13 +5,15 @@ Usage examples
 --------------
     gears fit data/sessions.csv --output models/my_model.joblib
     gears simulate --model models/my_model.joblib --start 2024-06-01 --horizon 7
-    gears simulate --pretrained french --start 2024-06-01 --output out/sessions.csv
+    gears simulate --pretrained french --start 2025-06-02 --n-sessions 40 -c location_type=work -c department=75
 
 Medium-term scenarios and smart charging are available from Python
 (``GEARSModel.simulate_medium_term`` / ``GEARSModel.smart_charge``).
 """
 
 from __future__ import annotations
+
+import numbers
 
 import click
 
@@ -96,8 +98,15 @@ def fit(data_path, output, n_components, max_components, stratify_by,
               help="Fixed session count per day (bypasses forecaster).")
 @click.option("--output", "-o", default="sessions.csv", show_default=True,
               help="Output file path (CSV/Parquet/JSON).")
+@click.option("--context", "-c", "context_items", multiple=True, metavar="KEY=VALUE",
+              help="Context to simulate, repeatable: -c location_type=work -c department=75. "
+                   "Needed for a model fitted per site (the French one). The weekday and season "
+                   "come from the dates. Keys are those of the model's --stratify-by.")
+@click.option("--strict", is_flag=True,
+              help="Fail, instead of warning, when no mixture was fitted for a day's context.")
 @click.option("--seed", default=None, type=int)
-def simulate(model, pretrained, start, horizon, scenarios, n_sessions, output, seed):
+def simulate(model, pretrained, start, horizon, scenarios, n_sessions, output, context_items,
+             strict, seed):
     """Run short-term session simulation."""
     if bool(model) == bool(pretrained):
         raise click.UsageError("provide exactly one of --model or --pretrained.")
@@ -109,15 +118,56 @@ def simulate(model, pretrained, start, horizon, scenarios, n_sessions, output, s
         m = GEARSModel.from_pretrained(pretrained) if pretrained else GEARSModel.load(model)
     except PretrainedModelError as e:
         raise click.ClickException(str(e)) from e
-    sessions = m.simulate_short_term(
-        start_date=start,
-        horizon=horizon,
-        n_scenarios=scenarios,
-        n_sessions=n_sessions,
-        seed=seed,
-    )
+    context = _parse_context(context_items, m.gmm_)
+    try:
+        sessions = m.simulate_short_term(
+            start_date=start,
+            horizon=horizon,
+            n_scenarios=scenarios,
+            n_sessions=n_sessions,
+            seed=seed,
+            context=context,
+            strict=strict,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
     m.export(sessions, output)
     click.echo(f"✓ {len(sessions):,} sessions written to {output}")
+
+
+def _parse_context(items: tuple[str, ...], gmm) -> dict | None:
+    """Turn ``("department=75", "day_of_week=0")`` into a context dict for this model.
+
+    A value is an integer when the model's fitted contexts hold integers for that key
+    (``day_of_week``), a string otherwise (``department``, ``location_type``).
+    """
+    if not items:
+        return None
+    keys = list(gmm.stratify_by)
+    example = next(iter(gmm.models_))
+    context: dict = {}
+    for item in items:
+        key, sep, value = (part.strip() for part in item.partition("="))
+        if not (sep and key and value):
+            raise click.BadParameter(
+                f"{item!r}: expected KEY=VALUE, e.g. department=75.", param_hint="--context"
+            )
+        if key not in keys:
+            raise click.BadParameter(
+                f"{key!r} is not a context key of this model; its keys are {keys}.",
+                param_hint="--context",
+            )
+        if key in context:
+            raise click.BadParameter(f"{key!r} is given twice.", param_hint="--context")
+        if isinstance(example[keys.index(key)], numbers.Integral):   # also numpy integers
+            try:
+                value = int(value)
+            except ValueError:
+                raise click.BadParameter(
+                    f"{key}={value}: {key} is a whole number in this model.", param_hint="--context"
+                ) from None
+        context[key] = value
+    return context
 
 
 def _split_columns(value: str | None) -> list[str] | None:

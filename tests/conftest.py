@@ -15,15 +15,18 @@ Rules every test file relies on:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import socket
+from pathlib import Path
 
 os.environ.setdefault("MPLBACKEND", "Agg")  # before anything imports matplotlib
 
+import joblib
 import pandas as pd
 import pytest
 
-from gears import GEARSModel
+from gears import GEARSModel, pretrained
 from gears.data.loader import make_demo_data
 
 
@@ -75,3 +78,33 @@ def model(demo) -> GEARSModel:
     return GEARSModel(
         n_components=3, forecaster_method="probabilistic", n_scenarios=3, random_state=0
     ).fit(demo, verbose=False)
+
+
+# ---------------------------------------------------------------------------
+# A stand-in for the official French model (no download)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def french_like_model_file(tmp_path_factory) -> Path:
+    """A small session model stratified like the French one (site type, département, weekday,
+    season), with Paris workplaces only: the same code runs on it as on the real model."""
+    data = make_demo_data(n=600, location_type="work", seed=0).assign(department="75")
+    stand_in = GEARSModel(
+        n_components=2, forecaster_method="probabilistic", random_state=0,
+        stratify_by=["location_type", "department", "day_of_week", "season"],
+    ).fit(data, verbose=False)
+    path = tmp_path_factory.mktemp("release") / "french.joblib"
+    joblib.dump(stand_in.gmm_, path)
+    return path
+
+
+@pytest.fixture
+def french_release(french_like_model_file, monkeypatch) -> Path:
+    """``load_pretrained("french")`` is served from ``french_like_model_file`` (a ``file://``
+    URL with its real SHA-256), the way a download would be."""
+    monkeypatch.setattr(pretrained, "_CATALOGUE", {"french": {
+        "file": french_like_model_file.name,
+        "url": french_like_model_file.as_uri(),
+        "sha256": hashlib.sha256(french_like_model_file.read_bytes()).hexdigest(),
+    }})
+    return french_like_model_file

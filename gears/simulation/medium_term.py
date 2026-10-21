@@ -328,6 +328,7 @@ class MediumTermSimulator:
         total = sum(cm.values())
         self.charger_mix = {k: v / total for k, v in cm.items()}
 
+        self._base_given = base_sessions_per_day is not None
         if base_sessions_per_day is not None:
             self._base = float(base_sessions_per_day)
         elif gmm.n_sessions_per_day_:
@@ -347,6 +348,7 @@ class MediumTermSimulator:
         output: str = "daily_energy",
         weather_factor: dict[str, float] | None = None,
         n_scenarios: int | None = None,
+        context: dict | None = None,
         **growth_kwargs,
     ) -> pd.DataFrame:
         """
@@ -372,6 +374,14 @@ class MediumTermSimulator:
             Seasonal multipliers e.g. ``{'winter': 1.1, 'summer': 0.9}``.
         n_scenarios : int, optional
             Override the instance default.
+        context : dict, optional
+            The part of the context that dates cannot give, for a session model
+            stratified by site: ``{"location_type": "work", "department": "75"}``.
+            Every simulated day completes it with its own ``day_of_week`` and
+            ``season``. Keys must be among the session model's ``stratify_by``.
+            Unless ``base_sessions_per_day`` was given, the starting level is then
+            the mean daily count of the fitted contexts that match ``context``,
+            not of all of them.
         **growth_kwargs
             Extra keyword arguments forwarded to the growth profile function
             (e.g. ``saturation_factor``, ``midpoint_year``, ``p``, ``q``).
@@ -388,14 +398,18 @@ class MediumTermSimulator:
         ValueError
             If *output* or *growth_model* is not recognised, ``years`` is not a
             finite number > 0, ``annual_growth_rate`` is not a finite number
-            > -1, ``n_scenarios`` is not an integer >= 1, or ``start_date`` is
-            not a valid date.
+            > -1, ``n_scenarios`` is not an integer >= 1, ``start_date`` is
+            not a valid date, ``context`` is not a dict or has a key the session
+            model is not stratified by, or no fitted context matches it.
         """
         if output not in ("daily_energy", "hourly_energy", "sessions"):
             raise ValueError(
                 f"output must be 'daily_energy', 'hourly_energy' or 'sessions', got {output!r}."
             )
         self.gmm._check_fitted()
+        fixed = dict(context) if context else {}
+        self.gmm._resolve_context(context, None)          # refuses a bad or unknown key now
+        base = self._base_for(fixed)
         years = check_float(years, "years", gt=0, meaning="simulation horizon in years")
         annual_growth_rate = check_float(
             annual_growth_rate, "annual_growth_rate", gt=-1,
@@ -431,7 +445,7 @@ class MediumTermSimulator:
             if k in valid_keys
         }
 
-        growth = profile_fn(self._base, years, start_date=start, **filtered_kwargs)
+        growth = profile_fn(base, years, start_date=start, **filtered_kwargs)
 
         seasonal_weights = {"winter": 1.0, "spring": 1.0, "summer": 1.0, "autumn": 1.0}
         if weather_factor:
@@ -446,6 +460,7 @@ class MediumTermSimulator:
                 output=output,
                 scenario_id=scenario_id,
                 seed=sc_seed,
+                fixed_context=fixed,
             )
             results.extend(rows)
 
@@ -457,6 +472,23 @@ class MediumTermSimulator:
             return pd.concat(results, ignore_index=True)
         return pd.DataFrame(results)
 
+    def _base_for(self, fixed: dict) -> float:
+        """Starting sessions per day: the given one, or the mean over the contexts matching ``fixed``."""
+        if self._base_given or not fixed:
+            return self._base
+        stratify = list(self.gmm.stratify_by)
+        counts = [
+            n for ctx, n in self.gmm.n_sessions_per_day_.items()
+            if all(ctx[stratify.index(k)] == v for k, v in fixed.items())
+        ]
+        if not counts:
+            raise ValueError(
+                f"No fitted context matches {fixed}, so there is no starting level to grow from. "
+                "Check the values (model.gmm_.bic_summary()['context'] lists the fitted contexts), "
+                "or pass base_sessions_per_day."
+            )
+        return float(np.mean(counts))
+
     def _simulate_scenario(
         self,
         growth: pd.Series,
@@ -464,6 +496,7 @@ class MediumTermSimulator:
         output: str,
         scenario_id: int,
         seed: int,
+        fixed_context: dict | None = None,
     ) -> list:
         """
         Vectorised scenario: batch all same-context days together.
@@ -488,6 +521,9 @@ class MediumTermSimulator:
             Scenario index written into every output row.
         seed : int
             Random seed for this scenario's draws.
+        fixed_context : dict, optional
+            Context keys that hold for every day (site type, département...);
+            each batch adds its ``day_of_week`` / ``season``.
 
         Returns
         -------
@@ -517,7 +553,11 @@ class MediumTermSimulator:
             if total_n == 0:
                 continue
 
-            context = {"day_of_week": dow, "season": season}
+            by_date = {"day_of_week": dow, "is_weekend": int(dow >= 5), "season": season}
+            context = {
+                **{k: v for k, v in by_date.items() if k in self.gmm.stratify_by},
+                **(fixed_context or {}),
+            }
             sessions_batch = self.gmm.sample(
                 n_sessions=total_n,
                 context=context,

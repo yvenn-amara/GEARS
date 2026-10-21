@@ -818,11 +818,17 @@ class EVSessionModel:
         n_sessions : int
             Number of sessions to generate (an integer >= 1).
         context : dict, optional
-            Explicit context, e.g. {'day_of_week': 1, 'season': 'winter'}.
-            If None, inferred from ``date``.
+            The context to sample, e.g. ``{'day_of_week': 1, 'season': 'winter'}``
+            or, for a model stratified by site, ``{'location_type': 'work',
+            'department': '75'}``. It may be partial: the keys it leaves out
+            (``day_of_week``, ``is_weekend``, ``season``) are read from ``date``,
+            and the others are "not given" (see ``strict``). Its keys must be
+            among ``stratify_by``.
         date : str or Timestamp, optional
-            Reference date used to infer context if context is None. Read as
-            local wall-clock time (a time zone is dropped, not converted).
+            Date that completes ``context`` (a value in ``context`` wins over
+            the one the date gives). Read as local wall-clock time (a time zone
+            is dropped, not converted). With neither, the most populous context
+            is used.
         seed : int, optional
             Random seed.
         strict : bool, default False
@@ -841,8 +847,8 @@ class EVSessionModel:
             If the model is not fitted.
         ValueError
             If ``n_sessions`` is not an integer >= 1, ``context`` is not a
-            dict, ``date`` is not a valid date, or ``strict`` is True and the
-            context was not fitted.
+            dict or has a key the model is not stratified by, ``date`` is not
+            a valid date, or ``strict`` is True and the context was not fitted.
         """
         self._check_fitted()
         n_sessions = check_int(n_sessions, "n_sessions", minimum=1)
@@ -1116,6 +1122,17 @@ class EVSessionModel:
                 "gears.load_pretrained('french').",
             )
 
+    def _date_context(self, date: pd.Timestamp) -> dict:
+        """The part of the context that a date determines, for the keys this model uses."""
+        derived: dict = {}
+        if "day_of_week" in self.stratify_by:
+            derived["day_of_week"] = date.dayofweek
+        if "is_weekend" in self.stratify_by:
+            derived["is_weekend"] = int(date.dayofweek >= 5)
+        if "season" in self.stratify_by:
+            derived["season"] = _season(date.month)
+        return derived
+
     def _resolve_context(
         self,
         context: dict | None,
@@ -1123,10 +1140,15 @@ class EVSessionModel:
     ) -> tuple:
         """Return a context tuple matching the stratify_by keys.
 
-        Resolution order:
-        1. Explicit *context* dict.
-        2. Date-derived context (day_of_week, season, is_weekend).
-        3. Most populous context as fallback.
+        Resolution order, key by key:
+        1. The value given in *context*.
+        2. The value the *date* determines (``day_of_week``, ``is_weekend``,
+           ``season``). A partial context such as
+           ``{"location_type": "work", "department": "75"}`` is therefore
+           completed by the date, day after day.
+        3. Nothing: the key stays ``None`` (``location_type`` and ``department``
+           cannot be read from a date) and :meth:`_get_model` serves the closest
+           fitted context. With neither context nor date, the most populous one.
 
         Parameters
         ----------
@@ -1137,6 +1159,12 @@ class EVSessionModel:
         -------
         tuple
             Values ordered according to ``stratify_by``.
+
+        Raises
+        ------
+        ValueError
+            If *context* is not a dict, or names a key this model is not
+            stratified by (it would have no effect, so it is refused).
         """
         if context is not None:
             if not isinstance(context, Mapping):
@@ -1146,20 +1174,18 @@ class EVSessionModel:
                     f"of type {type(context).__name__}. This model is stratified by "
                     f"{self.stratify_by}."
                 )
-            return tuple(context.get(k) for k in self.stratify_by)
+            unknown = [k for k in context if k not in self.stratify_by]
+            if unknown:
+                raise ValueError(
+                    f"context has key(s) {unknown} that this model is not stratified by "
+                    f"(its context keys are {self.stratify_by}), so they would have no effect. "
+                    "Check the spelling, or fit the model with these keys in stratify_by."
+                )
 
-        if date is not None:
-            ts = as_naive_timestamp(date, "date")
-            ctx: dict = {}
-            if "day_of_week" in self.stratify_by:
-                ctx["day_of_week"] = ts.dayofweek
-            if "is_weekend" in self.stratify_by:
-                ctx["is_weekend"] = int(ts.dayofweek >= 5)
-            if "season" in self.stratify_by:
-                ctx["season"] = _season(ts.month)
-            # location_type cannot be inferred from a date alone; it is left
-            # as None so the fallback chain in _get_model can handle it.
-            return tuple(ctx.get(k) for k in self.stratify_by)
+        derived = self._date_context(as_naive_timestamp(date, "date")) if date is not None else {}
+        if context is not None or date is not None:
+            given = context if context is not None else {}
+            return tuple(given[k] if k in given else derived.get(k) for k in self.stratify_by)
 
         # Fallback: most populous context
         if self.context_counts_:

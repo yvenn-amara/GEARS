@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from gears import GEARSModel, ShortTermSimulator, load_sessions, make_demo_data
+from gears import GEARSModel, load_sessions, make_demo_data
 
 parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 parser.add_argument("csv", nargs="?", help="your sessions file (default: a demo file is written)")
@@ -62,15 +62,15 @@ print(f"{len(simulated)} simulated sessions from {next_day:%Y-%m-%d}, "
       f"saved to {OUT / 'my_simulated_sessions.csv'}")
 
 # 5. Optional: the official model of French charging sessions, no data of your own needed. It is
-#    fitted per site type and per département, and GEARSModel.simulate_short_term cannot choose
-#    them: draw one day from the session model and name the whole context you want. (A warning about
-#    the scikit-learn version it was trained with appears if yours differs.)
+#    fitted per site type and per département: `context` says which one (the weekday and the season
+#    come from the dates), and `n_sessions` gives the sessions per day, since it holds no forecaster
+#    of daily counts. (A warning about the scikit-learn version it was trained with appears if yours
+#    differs.)
 if args.pretrained:
     french = GEARSModel.from_pretrained("french")  # downloads on first use, then cached
-    paris_monday_in_summer = {"location_type": "work", "department": "75",
-                              "day_of_week": 0, "season": "summer"}  # 2025-06-02
-    day = ShortTermSimulator(french.gmm_).simulate_single_day(
-        "2025-06-02", n_sessions=40, context=paris_monday_in_summer, seed=0, strict=True
+    paris_workplaces = {"location_type": "work", "department": "75"}
+    week = french.simulate_short_term(
+        "2025-06-02", horizon=7, n_sessions=40, context=paris_workplaces, seed=0, strict=True
     )
-    print(f"French model, workplaces of Paris: {len(day)} sessions on 2025-06-02, "
-          f"median energy {day['energy'].median():.1f} kWh")
+    print(f"French model, workplaces of Paris: {len(week)} sessions over {week['date'].nunique()} "
+          f"days from 2025-06-02, median energy {week['energy'].median():.1f} kWh")
