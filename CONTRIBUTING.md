@@ -57,6 +57,16 @@ ruff check gears tests examples
 - New public names go in `gears/__init__.py` (`_EXPORTS` and `__all__`) only if a user needs them at top
   level; keep that list short.
 
+## Adding a gear
+
+`GEARSModel(gear=N)` hands every call to a backend class listed in `_GEAR_BACKENDS` (`gears/pipeline.py`).
+GEAR 1st is `Gear1Backend` (`gears/pipeline_gears/gear1.py`); 2nd to 5th are reserved, and a number that is not
+in the dict raises `NotImplementedError`. To add one, write `gears/pipeline_gears/gearN.py`, register the class
+in the dict and test it. The facade forwards `*args, **kwargs`, so a gear is free to define its own `simulate_*`
+signatures; only `fit(data, ...)` is expected to take a DataFrame or a path first. No abstract base class is
+imposed, on purpose: the internals of the next gear are not known. The reasoning is in
+`docs/archive/PROPOSAL_GEAR_ARCHITECTURE.md` of the private `GEARS_sandbox`.
+
 ## Pre-trained models
 
 The official models are release files listed in `_CATALOGUE` (`gears/pretrained.py`) with their SHA-256.

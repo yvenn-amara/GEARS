@@ -23,7 +23,7 @@ release. The clean-up in detail and the earlier versions: `docs/archive/CHANGELO
 - **`import gears` is lazy**: no `torch`, `neuralforecast`, `pmdarima`, `matplotlib` or `requests`, no
   network, no disk access. The library logs instead of printing; `verbose=True` shows it on stderr.
 - Bad arguments raise a `ValueError` saying what was received and what is valid; unfitted objects raise
-  `NotFittedError`.
+  `NotFittedError`; `GEARSModel(gear=2..5)` is reserved (`NotImplementedError`), other values are refused.
 - SARIMA is always tried; if it cannot be fitted or diverges, a warning gives the reason and the forecaster
   switches to `"probabilistic"` (`forecaster.method_` tells which one ran).
 - **Results differ from earlier versions**: the smart-charging optimiser no longer assumes a hidden 0.9
