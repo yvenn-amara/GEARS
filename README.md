@@ -102,6 +102,13 @@ from gears import GEARSModel
 model = GEARSModel(n_components=3, forecaster_method="probabilistic").fit(sessions)
 ```
 
+## GEAR levels
+
+`GEARSModel(gear=1)` is the default: GEAR 1st, the pipeline this README describes. `gear=2` to `gear=5` are
+reserved for future model families that differ structurally: today they raise `NotImplementedError`, and what
+they will model is not decided. The facade only forwards calls to the chosen gear, so a new gear defines its own
+`fit` and `simulate_*` signatures ("Adding a gear" in [CONTRIBUTING.md](CONTRIBUTING.md)).
+
 ## The pre-trained French model
 
 GEARS ships no data and no model. The official French model is downloaded on first use,

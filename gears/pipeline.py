@@ -2,8 +2,8 @@
 GEARSModel – thin, gear-dispatching facade over per-gear backends.
 
 GEAR 1st (GMM/VAE session modeling + SARIMA/probabilistic forecasting +
-simulation + smart charging) is the only gear implemented today; GEAR 2nd is
-planned. ``GEARSModel``'s public methods are thin dispatchers to the active
+simulation + smart charging) is the only gear implemented today; GEAR 2nd to
+5th are reserved for future model families. ``GEARSModel``'s public methods are thin dispatchers to the active
 gear's backend (see ``gears/pipeline_gears/``), so a future gear is free to
 define its own ``fit()``/``simulate_*()`` signatures.
 """
@@ -13,13 +13,17 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from gears._validation import check_int
 from gears.pipeline_gears.gear1 import Gear1Backend
 
 logger = logging.getLogger(__name__)
 
-# Gears that are not in this dict yet raise the NotImplementedError below.
+# GEAR 1st is the only backend today. GEAR 2nd to 5th are reserved: the facade accepts the numbers
+# (so that a new family of models can be added without changing GEARSModel) and raises
+# NotImplementedError for those that are not in this dict yet. See CONTRIBUTING.md, "Adding a gear".
 _GEAR_BACKENDS: dict[int, type] = {1: Gear1Backend}
 _IMPLEMENTED_GEARS = sorted(_GEAR_BACKENDS)
+_MAX_GEAR = 5
 
 
 class GEARSModel:
@@ -33,8 +37,11 @@ class GEARSModel:
     Parameters
     ----------
     gear : int
-        Which GEAR backend to use. Only ``1`` (the default) is implemented
-        today; any other value raises ``NotImplementedError``.
+        Which GEAR backend to use, from 1 to 5. ``1`` (the default) is GEAR 1st,
+        the pipeline described in the README. ``2`` to ``5`` are reserved for
+        future, structurally different model families and raise
+        ``NotImplementedError`` until they exist; any other value raises
+        ``ValueError``.
     **kwargs
         Forwarded to the selected gear's backend constructor. For GEAR 1st,
         see :class:`gears.pipeline_gears.gear1.Gear1Backend` for the full
@@ -60,10 +67,13 @@ class GEARSModel:
     """
 
     def __init__(self, gear: int = 1, **kwargs):
+        gear = check_int(gear, "gear", minimum=1, meaning=f"1 to {_MAX_GEAR}; GEAR 1st is the default")
+        if gear > _MAX_GEAR:
+            raise ValueError(f"gear must be between 1 and {_MAX_GEAR}, got {gear}.")
         if gear not in _GEAR_BACKENDS:
             raise NotImplementedError(
-                f"GEAR {gear} is not implemented. Available gears: {_IMPLEMENTED_GEARS} "
-                "(GEAR 1st is the default)."
+                f"GEAR {gear} is reserved for a future release and is not implemented yet. "
+                f"Implemented gears: {_IMPLEMENTED_GEARS}."
             )
         self.gear = gear
         self._backend = _GEAR_BACKENDS[gear](**kwargs)

@@ -50,7 +50,7 @@ def test_a_model_can_be_built_from_a_fitted_session_model():
     assert len(model.simulate_short_term("2025-06-01", horizon=2, n_scenarios=2)) > 0
 
 
-def test_gear_1_is_the_default_and_the_other_gears_are_refused_in_one_line():
+def test_gear_1_is_the_default_gears_2_to_5_are_reserved_and_other_values_are_refused():
     data = make_demo_data(n=400, location_type="work", seed=0)
     kwargs = {"n_components": 3, "n_scenarios": 2, "random_state": 0,
               "forecaster_method": "probabilistic"}
@@ -64,10 +64,13 @@ def test_gear_1_is_the_default_and_the_other_gears_are_refused_in_one_line():
         explicit.simulate_short_term("2025-06-01", horizon=2, n_scenarios=1, seed=0),
     )
 
-    for gear in (0, 2, 3):
-        with pytest.raises(NotImplementedError, match=rf"GEAR {gear} is not implemented") as err:
+    for gear in (2, 3, 4, 5):            # reserved for future model families
+        with pytest.raises(NotImplementedError, match=rf"GEAR {gear} is reserved for a future release") as err:
             GEARSModel(gear=gear)
-        assert "[1]" in str(err.value) and len(str(err.value)) < 100
+        assert "[1]" in str(err.value) and len(str(err.value)) < 120
+    for gear in (0, 6, True, 1.5, "1", None):   # not a gear at all
+        with pytest.raises(ValueError, match="gear must be"):
+            GEARSModel(gear=gear)
 
 
 def test_load_refuses_a_file_that_is_not_a_gears_model(tmp_path):
