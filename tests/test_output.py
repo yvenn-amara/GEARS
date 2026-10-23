@@ -161,9 +161,8 @@ def test_power_levels_are_drawn_from_the_declared_mix_whatever_its_scale():
 
 def test_the_smart_profile_is_rebuilt_from_the_scheduled_start_of_each_session():
     day = pd.Timestamp("2025-06-10")
-    rebuild = lambda frame: _reconstruct_smart_profile_hourly(
-        frame, day, n_sessions_per_day=1.0, n_total=1
-    )
+    def rebuild(frame):
+        return _reconstruct_smart_profile_hourly(frame, day, n_sessions_per_day=1.0, n_total=1)
 
     unscheduled = pd.DataFrame({
         "scheduled_start": [pd.NaT, pd.NaT], "energy": [10.0, 5.0], "power_kw": [7.4, 7.4],
