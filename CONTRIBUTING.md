@@ -13,8 +13,8 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Python 3.10 or later. The `[vae]` and `[dl]` extras (see the README) are only needed to run the tests of
-those features.
+Python 3.10 or later. `[dev]` holds the test and lint tools, not `torch`: to run the tests of an extra, install
+it too (`pip install -e ".[dev,vae]"`, or `[dev,dl]`; see the README).
 
 ## Run the tests
 
@@ -44,7 +44,8 @@ pytest tests/test_sanity.py -k sarima    # one file, or the tests matching a wor
 ## Style and design rules
 
 ```bash
-ruff check gears tests examples
+ruff check gears tests examples          # the rules are in pyproject.toml
+vulture                                  # unused code (also in pyproject.toml)
 ```
 
 - `import gears` must stay instant: no import of `torch`, `neuralforecast`, `pmdarima`, `matplotlib` or
@@ -56,6 +57,22 @@ ruff check gears tests examples
 - No silent fallback to a substitute model or to made-up data: raise, or warn with the consequence.
 - New public names go in `gears/__init__.py` (`_EXPORTS` and `__all__`) only if a user needs them at top
   level; keep that list short.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request: `core` (lint and the suite with coverage, Python 3.10 to
+3.13, no torch), `extras` (`pytest -m vae` with torch), `lowest` (the suite with every dependency at the minimum
+version in `pyproject.toml`) and `build` (the wheel is built, checked and installed in a clean environment).
+`weekly.yml` runs the `dl` tests and the download of the French model.
+
+A lower bound in `pyproject.toml` is a promise, and `lowest` keeps it. To raise or check one (the test tools go
+in a second install: they must not be lowered too):
+
+```bash
+uv venv --python 3.10 /tmp/lowest && . /tmp/lowest/bin/activate
+uv pip install --resolution lowest-direct -e . && uv pip install pytest pyarrow
+pytest
+```
 
 ## Adding a gear
 
@@ -77,7 +94,7 @@ are pickles, so a pull request never contains one.
 
 - [ ] The change does one thing; the pull request says what was added, removed, moved or changed.
 - [ ] Tests added or updated; `pytest` passes (it includes the examples and the README blocks).
-- [ ] `ruff check gears tests examples` is clean.
+- [ ] `ruff check gears tests examples` and `vulture` are clean.
 - [ ] Docstrings, the README and `examples/` still describe what the code does.
 - [ ] `CHANGELOG.md` has a line under `[Unreleased]`.
 - [ ] No data, no `.joblib` file, no notebook output, no personal path or secret is committed.

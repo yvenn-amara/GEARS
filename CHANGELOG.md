@@ -31,6 +31,8 @@ release. The clean-up in detail and the earlier versions: `docs/archive/CHANGELO
   simulated data); `simulate_short_term(n_sessions=...)` seeds its days from `seed`, not `seed + day`.
 - `OutputAggregator` is about 40 % shorter with identical output; `gears.plotting` no longer warns about
   converters; a simulation without a fitted forecaster (any pre-trained model) warns that each day gets 20 sessions.
+- Packaging: SPDX licence, version read from `gears.__version__`, project URLs; `[dev]` no longer installs `torch`
+  or `mypy` (`pip install -e ".[dev,vae]"` for the VAE tests).
 
 ### Added
 - `load_pretrained(model_id, path=..., cache_dir=...)`: SHA-256 checked before the file is opened,
@@ -54,7 +56,5 @@ release. The clean-up in detail and the earlier versions: `docs/archive/CHANGELO
   `day_of_week` or `season`; it now raises.
 - `linear_growth_profile` gave negative sessions for a negative rate; `n_scenarios=0` was replaced by the
   default; a one-day history gave `NaN` counts.
-
-### Known limits
-- The daily counts come from one forecaster fitted on all the sessions it is given: for one site of a
-  multi-site file, fit on that site or give `n_sessions`.
+- Two lower bounds were wrong: `pandas>=2.1` (`OutputAggregator.export` to JSON fails on 2.0) and `pmdarima>=2.0.4`
+  (2.0.0 to 2.0.3 do not import with a current `setuptools`, so SARIMA fell back to `probabilistic`).
