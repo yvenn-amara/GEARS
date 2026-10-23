@@ -1,19 +1,26 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "gears-ev"
-version = "2.0.0"
+dynamic = ["version"]
 description = "Generating Electric vehicle recharging Sessions – simulation, forecasting and smart charging"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{name = "Yvenn Amara-Ouali"}]
 requires-python = ">=3.10"
 keywords = ["electric vehicles", "EV", "simulation", "GMM", "smart charging", "forecasting"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
@@ -33,22 +40,52 @@ dependencies = [
 [project.optional-dependencies]
 dl = ["neuralforecast>=2.0", "torch>=2.0"]
 vae = ["torch>=2.0"]
+# `dev` has no torch: the core CI job runs without it. To run the VAE tests too: pip install -e ".[dev,vae]".
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.4",
-    "mypy>=1.9",
+    "vulture>=2.10",
     "pyarrow>=15.0",
-    "torch>=2.0",
+    "build>=1.0",
+    "twine>=5.0",
 ]
 all = ["gears-ev[dl,vae,dev]"]
+
+[project.urls]
+Homepage = "https://github.com/EDF-Lab/GEARS"
+Repository = "https://github.com/EDF-Lab/GEARS"
+Issues = "https://github.com/EDF-Lab/GEARS/issues"
+Changelog = "https://github.com/EDF-Lab/GEARS/blob/main/CHANGELOG.md"
 
 [project.scripts]
 gears = "gears.cli:main"
 
+[tool.setuptools.dynamic]
+# One source for the version: `gears.__version__` (read from the file, not imported).
+version = {attr = "gears.__version__"}
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["gears*"]
+
+[tool.ruff]
+target-version = "py310"
+extend-exclude = ["example_outputs"]
+
+[tool.ruff.lint]
+# Written down so that a ruff upgrade cannot change them silently (ruff 0.17's own default set is
+# broader and moves between versions): pycodestyle errors, pyflakes, import order.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# A test module that needs an extra starts with `pytest.importorskip(...)`, before the imports
+# of what it tests (CONTRIBUTING.md): that is not an E402 mistake.
+"tests/*" = ["E402"]
+
+[tool.vulture]
+paths = ["gears", "tests"]
+min_confidence = 80
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
