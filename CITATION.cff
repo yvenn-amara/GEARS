@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use GEARS in your work, please cite it as below."
+title: "GEARS: Generating Electric vehicle recharging Sessions"
+type: software
+authors:
+  - family-names: "Amara-Ouali"
+    given-names: "Yvenn"
+    affiliation: "EDF R&D"
+repository-code: "https://github.com/EDF-Lab/GEARS"
+url: "https://github.com/EDF-Lab/GEARS"
+license: MIT
+version: 2.0.0
+abstract: >-
+  GEARS learns from charging-session records what a session looks like (when it starts, how long it
+  lasts, how much energy it takes) and how many sessions a day to expect. It simulates new sessions,
+  from a week to several years ahead, and tests smart-charging strategies on them.
+keywords:
+  - electric vehicles
+  - charging sessions
+  - simulation
+  - Gaussian mixture model
+  - smart charging
+  - forecasting

@@ -117,6 +117,11 @@ checked against its SHA-256 before it is opened, and cached in `~/.cache/gears`
 `context` says which site you want, the dates give the weekday and the season, and `n_sessions`
 is the number of sessions per day (the model holds no forecaster of daily counts).
 
+It is fitted on the 2025 sessions of the open dataset
+[*Sessions de charges Advenir et ADEME départements*](https://www.data.gouv.fr/datasets/sessions-de-charges-advenir-et-ademe-departements)
+(Avere-France, data.gouv.fr, [Licence Ouverte 2.0](https://www.data.gouv.fr/pages/legal/licences/etalab-2.0)). The file holds
+fitted parameters only: no session of the dataset is in it. Avere-France, Advenir and ADEME do not endorse GEARS.
+
 <!-- test -->
 ```python
 from gears import GEARSModel
@@ -226,6 +231,8 @@ Each script runs in well under a minute, on simulated data, and writes its figur
 - **Contributing**: see [CONTRIBUTING.md](CONTRIBUTING.md) (setup, tests, style, pull-request checklist).
 - **Tests**: `pip install -e ".[dev]"`, then `pytest`. The Python blocks marked in this README run
   in `tests/test_readme.py`, so they cannot drift from the code.
-- **Citation**: if you use GEARS in a publication, please cite the software: Amara-Ouali, Y., *GEARS:
-  Generating Electric vehicle recharging Sessions*, https://github.com/EDF-Lab/GEARS.
+- **Citation**: if you use GEARS in a publication, please cite the software ([CITATION.cff](CITATION.cff), or
+  GitHub's "Cite this repository"): Amara-Ouali, Y., *GEARS: Generating Electric vehicle recharging Sessions*,
+  https://github.com/EDF-Lab/GEARS.
+- **Security**: see [SECURITY.md](SECURITY.md) (model files are pickles).
 - **Licence**: MIT, see [LICENSE](LICENSE). Changes: [CHANGELOG.md](CHANGELOG.md).
