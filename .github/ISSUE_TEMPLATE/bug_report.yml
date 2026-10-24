@@ -1,0 +1,42 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting. A security problem is not a bug report: see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: GEARS version
+      description: 'Run `python -c "import gears; print(gears.__version__)"`.'
+      placeholder: "2.0.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Python, operating system, how you installed GEARS
+      placeholder: "Python 3.12, Ubuntu 24.04, pip from GitHub"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: A minimal example that fails
+      description: "`make_demo_data()` gives sessions to build it on. Please do not paste real data."
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: traceback
+    attributes:
+      label: What happened (the full traceback or warning)
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
