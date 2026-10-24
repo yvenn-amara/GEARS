@@ -1,0 +1,21 @@
+name: Idea or improvement
+description: Something GEARS could do, or do better
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like GEARS to do?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: A link to a result or a script showing that it helps. An idea enters GEARS once it is shown to work, with tests.

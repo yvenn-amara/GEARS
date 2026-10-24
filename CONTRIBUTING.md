@@ -101,9 +101,9 @@ are pickles, so a pull request never contains one.
 
 ## Reporting a bug
 
-Open an issue with the GEARS version (`python -c "import gears; print(gears.__version__)"`), your Python
-version and OS, a minimal example that fails (`make_demo_data()` gives sessions to build it on), and the
-full traceback.
+A security problem is not an issue: see [SECURITY.md](SECURITY.md). Otherwise open an issue (the form asks for
+all of this): the GEARS version (`python -c "import gears; print(gears.__version__)"`), your Python version
+and OS, a minimal example that fails (`make_demo_data()` gives sessions to build it on), and the full traceback.
 
 ## Reporting a bug found in the sandbox
 

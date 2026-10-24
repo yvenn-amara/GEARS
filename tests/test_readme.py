@@ -65,7 +65,8 @@ def test_the_readme_is_short_and_points_only_to_files_that_exist():
 
     targets = re.findall(r"\]\(([^)#\s]+)\)", text)                 # [label](path)
     targets += re.findall(r"`((?:examples|data|tests|gears)/[\w./-]+)`", text)  # `examples/01_x.py`
-    local = [t for t in targets if not t.startswith(("http://", "https://"))]
+    targets += re.findall(r'(?:src|srcset)="([^"]+)"', text)                    # the logo: <img src="assets/...">
+    local =[t for t in targets if not t.startswith(("http://", "https://"))]
     assert local, "no local link found: the pattern is broken"
     missing = [t for t in local if not (ROOT / t).exists()]
     assert not missing, f"the README names files that do not exist: {missing}"
