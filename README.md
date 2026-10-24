@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img alt="GEARS" src="assets/logo-light.svg" width="360">
+  </picture>
+</p>
+
 # GEARS — Generating Electric vehicle recharging Sessions
 
 [![CI](https://github.com/EDF-Lab/GEARS/actions/workflows/ci.yml/badge.svg)](https://github.com/EDF-Lab/GEARS/actions/workflows/ci.yml)
