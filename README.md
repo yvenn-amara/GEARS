@@ -126,8 +126,9 @@ is the number of sessions per day (the model holds no forecaster of daily counts
 
 It is fitted on the 2025 sessions of the open dataset
 [*Sessions de charges Advenir et ADEME départements*](https://www.data.gouv.fr/datasets/sessions-de-charges-advenir-et-ademe-departements)
-(Avere-France, data.gouv.fr, [Licence Ouverte 2.0](https://www.data.gouv.fr/pages/legal/licences/etalab-2.0)). The file holds
-fitted parameters only: no session of the dataset is in it. Avere-France, Advenir and ADEME do not endorse GEARS.
+(Avere-France, data.gouv.fr, [Licence Ouverte 2.0](https://www.data.gouv.fr/pages/legal/licences/etalab-2.0); downloaded
+around March-April 2026). The file holds fitted parameters only: no session of the dataset is in it.
+Avere-France, Advenir and ADEME do not endorse GEARS.
 
 <!-- test -->
 ```python
