@@ -31,7 +31,7 @@
 - `OutputAggregator` is about 40 % shorter with identical output; `gears.plotting` no longer warns about
   converters; a simulation without a fitted forecaster (any pre-trained model) warns that each day gets 20 sessions.
 - Packaging: SPDX licence, version read from `gears.__version__`, project URLs; `[dev]` no longer installs `torch`
-  or `mypy` (`pip install -e ".[dev,vae]"` for the VAE tests). `LICENSE` names EDF R&D (2024-2026).
+  or `mypy` (`pip install -e ".[dev,vae]"` for the VAE tests). `LICENSE` names Électricité de France (2024-2026).
 
 ### Added
 - `load_pretrained(model_id, path=..., cache_dir=...)`: SHA-256 checked before the file is opened,
