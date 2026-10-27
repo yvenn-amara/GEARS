@@ -286,3 +286,14 @@ def test_a_model_pickled_by_an_older_version_is_backfilled_on_load():
     assert loaded.model_type == "gmm"
     assert "EVSessionModel" in repr(loaded)
     assert "GMM" in loaded.plot_marginals(n_samples=20)._suptitle.get_text()
+
+
+def test_the_daily_session_rate_is_the_true_one_when_the_training_sample_is_capped():
+    # 2000 sessions in 100 days, whatever the cap on the sample the mixtures are fitted on
+    df = make_long_history(2000, span_days=100)
+    uncapped = EVSessionModel(n_components=2, random_state=0).fit(df)
+    capped = EVSessionModel(n_components=2, max_samples_per_context=100, random_state=0).fit(df)
+    assert capped.n_sessions_per_day_ == uncapped.n_sessions_per_day_
+    assert max(capped.context_counts_.values()) == 100           # the cap did bind
+    assert max(uncapped.context_counts_.values()) > 100
+    assert 15 < np.mean(list(capped.n_sessions_per_day_.values())) < 25
