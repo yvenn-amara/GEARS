@@ -15,6 +15,7 @@ from gears.output.aggregator import (
     _draw_power_levels,
     _overlap_profile_24h,
     _reconstruct_smart_profile_hourly,
+    _session_powers,
 )
 from gears.utils import make_price_signal
 
@@ -252,3 +253,34 @@ def test_a_price_signal_adds_a_smart_charging_series_with_about_the_same_energy(
     assert isinstance(smart, pd.Series) and smart.index.equals(ts.index) and (smart >= 0).all()
     assert (smart != ts).any()                                   # the load really moved ...
     assert smart.sum() == pytest.approx(ts.sum(), rel=0.05)      # ... but it is the same energy
+
+
+def test_the_presets_name_the_location_types_that_load_sessions_produces(load_model):
+    for preset in LOCATION_POWER_PRESETS.values():
+        assert set(preset) == {"home", "work", "public"}
+
+    # a home session is charged at one of the home levels, not at its mean power
+    rng = np.random.default_rng(0)
+    energies, durations = np.full(200, 10.0), np.full(200, 8.0)
+    powers, active = _session_powers(
+        "by_location", energies, durations, rng, None, LOCATION_POWER_PRESETS["french_2024"], "home"
+    )
+    assert set(powers) <= {3.7, 7.4, 11.0} and len(set(powers)) > 1
+    assert (active <= durations).all() and (active < durations).any()
+
+    # and the load of the "home" contexts of a fitted model is not the mean-power one
+    by_location = OutputAggregator().build_load_profiles(
+        load_model, year=2025, n_days_mc=2, charging_mode="by_location",
+        location_power_map=LOCATION_POWER_PRESETS["french_2024"],
+    )
+    mean_power = OutputAggregator().build_load_profiles(load_model, year=2025, n_days_mc=2)
+    assert not np.allclose(by_location["loc_profiles"]["home"], mean_power["loc_profiles"]["home"])
+
+
+def test_a_location_type_missing_from_the_power_map_is_announced(load_model):
+    only_work = {"work": {7.4: 1.0}}
+    with pytest.warns(UserWarning, match=r"no charger-power mix for location type\(s\) \['home'\]"):
+        OutputAggregator().build_load_profiles(
+            load_model, year=2025, n_days_mc=1, charging_mode="by_location",
+            location_power_map=only_work,
+        )

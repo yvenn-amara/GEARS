@@ -10,6 +10,7 @@ Output aggregation for GEARS.
 from __future__ import annotations
 
 import logging
+import warnings
 from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -32,17 +33,18 @@ _CHARGING_MODES = ("mean_power", "fixed_power", "by_location")
 # ---------------------------------------------------------------------------
 
 #: Charger-power presets for ``build_load_profiles(charging_mode="by_location")``:
-#: ``{preset: {location_type: {power_kw: proportion}}}`` (proportions are normalised).
+#: ``{preset: {location_type: {power_kw: proportion}}}`` (proportions are normalised), with the
+#: location types that ``load_sessions`` produces (``"home"``, ``"work"``, ``"public"``).
 #: ``"french_2024"`` is a representative mix of the French network in 2024,
 #: ``"french_2030_target"`` a scenario aligned with the 2030 national targets.
 LOCATION_POWER_PRESETS: dict[str, dict[str, dict[float, float]]] = {
     "french_2024": {
-        "residential": {3.7: 0.30, 7.4: 0.60, 11.0: 0.10},
+        "home":        {3.7: 0.30, 7.4: 0.60, 11.0: 0.10},
         "work":        {7.4: 0.55, 11.0: 0.25, 22.0: 0.20},
         "public":      {22.0: 0.40, 50.0: 0.35, 150.0: 0.20, 350.0: 0.05},
     },
     "french_2030_target": {
-        "residential": {7.4: 0.50, 11.0: 0.35, 22.0: 0.15},
+        "home":        {7.4: 0.50, 11.0: 0.35, 22.0: 0.15},
         "work":        {11.0: 0.30, 22.0: 0.50, 50.0: 0.20},
         "public":      {22.0: 0.20, 50.0: 0.35, 150.0: 0.30, 350.0: 0.15},
     },
@@ -180,7 +182,7 @@ def _annual_series(
 
     values = np.zeros(len(days) * 24)
     for i, day in enumerate(days):
-        key = (day.dayofweek, _season(day.month))
+        key = (day.day_of_week, _season(day.month))
         profile = profiles_mw.get(key)
         if profile is None:
             profile = (fallback or {}).get(key, np.zeros(24))
@@ -469,6 +471,20 @@ class OutputAggregator:
                 "charging_mode='by_location' requires 'location_type' in "
                 "gmm.stratify_by, but it is not present."
             )
+        if charging_mode == "by_location":
+            unmapped = sorted(
+                {str(_unpack_context(c, indices)[1][0]) for c in gmm.models_}
+                - {str(k) for k in location_power_map}
+            )
+            if unmapped:
+                warnings.warn(
+                    f"location_power_map has no charger-power mix for location type(s) "
+                    f"{unmapped} (it has {sorted(map(str, location_power_map))}): their "
+                    "sessions are charged at their mean power. Add the missing keys to "
+                    "the map to change that.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         profiles_kw: dict[tuple, np.ndarray] = defaultdict(lambda: np.zeros(24))
         loc_profiles_kw: dict[str, np.ndarray] = defaultdict(lambda: np.zeros(24))
@@ -548,7 +564,7 @@ class OutputAggregator:
         # One representative date per (day_of_week, season) present in the signal.
         representative_dates: dict[tuple, pd.Timestamp] = {}
         for day in signal.index.normalize().unique():
-            representative_dates.setdefault((day.dayofweek, _season(day.month)), day)
+            representative_dates.setdefault((day.day_of_week, _season(day.month)), day)
 
         smart_profiles_kw: dict[tuple, np.ndarray] = defaultdict(lambda: np.zeros(24))
 
