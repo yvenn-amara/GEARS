@@ -202,6 +202,7 @@ class SessionForecaster:
         self._daily_counts: pd.Series | None = None
         self._exog_train: np.ndarray | None = None
         self._predict_failure_warned = False
+        self._gap_warned = False
         self.is_fitted_: bool = False
 
     def fit(self, df: pd.DataFrame) -> SessionForecaster:
@@ -237,6 +238,7 @@ class SessionForecaster:
         self.std_daily_ = std if np.isfinite(std) else 0.0
         self._model = None
         self._predict_failure_warned = False
+        self._gap_warned = False
         self.method_ = self.method
 
         n = len(self._daily_counts)
@@ -406,6 +408,9 @@ class SessionForecaster:
             Number of stochastic scenarios (> 1 enables Monte-Carlo uncertainty).
         start_date : str or Timestamp, optional
             First forecasted date. Defaults to the day after the last training date.
+            With SARIMA each requested date gets the forecast of its own weekday, also
+            when it is later than that day (the days in between are forecast and
+            dropped).
         seed : int, optional
             Random seed for scenario noise.
 
@@ -421,6 +426,14 @@ class SessionForecaster:
         ValueError
             If ``horizon`` or ``n_scenarios`` is not an integer >= 1, or
             ``start_date`` is not a valid date.
+
+        Warns
+        -----
+        UserWarning
+            With SARIMA, once, when ``start_date`` is more than four weeks after the
+            training data (the uncertainty grows with the distance) or inside the
+            training period (a forecast cannot start in the past: the weekly pattern
+            and the level at the end of the data are reused for the same weekdays).
         """
         self._check_fitted()
         horizon = check_int(horizon, "horizon", minimum=1, meaning="number of days to forecast")
@@ -432,13 +445,61 @@ class SessionForecaster:
         start_date = self._resolve_start(start_date)
         dates = pd.date_range(start_date, periods=horizon, freq="D")
 
-        # Build holiday exog for the forecast period (same structure as training)
-        future_exog = self._build_holiday_exog(dates)
+        # SARIMA forecasts the days that follow the training data. When the requested
+        # window starts later, the days in between are forecast and dropped, so that
+        # each requested date gets the forecast of its own weekday (and holiday).
+        skip, step_dates = self._sarima_steps(dates)
+        future_exog = self._build_holiday_exog(step_dates)
 
         matrix = np.stack(
-            [self._forecast_one_scenario(horizon, rng, future_exog) for _ in range(n_scenarios)]
+            [
+                self._forecast_one_scenario(horizon, rng, future_exog, skip)
+                for _ in range(n_scenarios)
+            ]
         )
         return _make_forecast_df(dates, matrix)
+
+    def _sarima_steps(self, dates: pd.DatetimeIndex) -> tuple[int, pd.DatetimeIndex]:
+        """How many SARIMA steps to skip before the requested ``dates``.
+
+        Returns ``(skip, step_dates)``: ``skip`` days that follow the training data are
+        forecast and dropped; ``step_dates`` are the dates of all ``skip + len(dates)``
+        steps (used for the holiday dummy). Nothing is skipped when SARIMA is not the
+        method in use. A window that starts inside the training period cannot be
+        forecast as such: the weekly pattern and the level at the end of the data are
+        reused for the same weekdays, and a ``UserWarning`` says so.
+        """
+        if self.method_ != "sarima" or self._model is None:
+            return 0, dates
+        first = self._daily_counts.index[-1] + pd.Timedelta(days=1)
+        delta = (dates[0] - first).days
+        if delta >= 0:
+            skip = delta
+            if skip > 4 * self.seasonal_period and not self._gap_warned:
+                self._gap_warned = True
+                warnings.warn(
+                    f"The forecast starts {skip} days after the last day of the training "
+                    "data. SARIMA extrapolates the level and trend of the end of the data, "
+                    "and its uncertainty grows with the distance, which the simulated "
+                    "noise does not. Refit on recent data for a forecast you can rely on. "
+                    "(This warning is shown once.)",
+                    UserWarning,
+                    stacklevel=4,
+                )
+        else:
+            skip = delta % self.seasonal_period     # same weekday, first day after the data
+            if not self._gap_warned:
+                self._gap_warned = True
+                warnings.warn(
+                    f"start_date {dates[0].date()} is not after the last day of the training "
+                    f"data ({(first - pd.Timedelta(days=1)).date()}): a forecast cannot "
+                    "start in the past. The weekly pattern and the level at the end of the "
+                    "data are used for the same weekdays. (This warning is shown once.)",
+                    UserWarning,
+                    stacklevel=4,
+                )
+        lead = pd.date_range(first, periods=skip, freq="D")
+        return skip, lead.append(dates)
 
     def _check_fitted(self) -> None:
         """Raise ``NotFittedError`` if ``fit()`` has not been called."""
@@ -468,6 +529,7 @@ class SessionForecaster:
     def _forecast_one_scenario(
         self, horizon: int, rng: np.random.Generator,
         future_exog: np.ndarray | None = None,
+        skip: int = 0,
     ) -> np.ndarray:
         """Generate one stochastic forecast trajectory.
 
@@ -483,7 +545,11 @@ class SessionForecaster:
         rng : np.random.Generator
             Seeded random generator for noise draws.
         future_exog : np.ndarray or None
-            Holiday dummy for the forecast window, shape ``(horizon, 1)``.
+            Holiday dummy for the ``skip + horizon`` forecast steps, shape
+            ``(skip + horizon, 1)``.
+        skip : int
+            Days between the end of the training data and the first requested day: they
+            are forecast, then dropped.
 
         Returns
         -------
@@ -497,7 +563,13 @@ class SessionForecaster:
             return np.full(horizon, self.mean_daily_)
 
         try:
-            fc = self._point_forecast(horizon, future_exog)
+            fc = self._point_forecast(skip + horizon, future_exog)[skip:]
+            ceiling = SARIMA_DIVERGENCE_FACTOR * max(float(self._daily_counts.max()), 1.0)
+            if not np.isfinite(fc).all() or fc.max() > ceiling:     # below 0 is clipped to 0
+                raise FloatingPointError(
+                    f"the forecast diverges (up to {np.nanmax(fc):,.0f} sessions/day "
+                    f"against at most {int(self._daily_counts.max())} observed)"
+                )
         except Exception as e:  # noqa: BLE001 - any SARIMA failure falls back to the mean, announced below
             if not self._predict_failure_warned:
                 self._predict_failure_warned = True
