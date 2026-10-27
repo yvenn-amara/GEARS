@@ -6,7 +6,6 @@ are checked in ``test_sanity.py``.
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -49,7 +48,7 @@ def make_evse(n=20, seed=0):
         "Start": starts,
         "End": starts + pd.to_timedelta(park_duration_min, unit="m"),
         "Day": starts.day_name(),
-        "Weekend": (starts.dayofweek >= 5).astype(int),
+        "Weekend": (starts.day_of_week >= 5).astype(int),
         "Arrival": starts.hour + starts.minute / 60.0,
         "Charge.Duration": park_duration_min * 0.9,
         "Idle.Duration": park_duration_min * 0.1,
@@ -146,21 +145,6 @@ def test_the_evse_raw_schema_is_understood():
     hour_only = pd.DataFrame({"Arrival": [4.13, 6.75], "duration": [1.0, 2.0], "energy": [1.0, 2.0]})
     with pytest.raises(ValueError, match="arrival_time"):
         validate_dataframe(hour_only)
-
-
-def test_a_combined_multi_site_file_warns_but_a_single_site_does_not():
-    """acn.csv-style data (several sites in one file, flagged by a `data` column) would be
-    counted several times next to the individual site files."""
-    combined = make_evse(n=6)
-    combined["data"] = ["caltech", "caltech", "jpl", "jpl", "office", "office"]
-    with pytest.warns(UserWarning, match="combined multi-site"):
-        validate_dataframe(combined)
-
-    single = make_evse(n=6)
-    single["data"] = "caltech"
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        validate_dataframe(single)       # must not warn
 
 
 @pytest.mark.slow

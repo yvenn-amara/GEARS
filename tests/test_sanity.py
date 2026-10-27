@@ -498,7 +498,7 @@ def test_inv5_same_seed_same_result_different_seed_different_result(model):
 
     s0 = model.simulate_short_term(START, horizon=8, n_sessions=8, seed=0)
     s7 = model.simulate_short_term(START, horizon=1, n_sessions=8, seed=7)
-    assert (START + pd.Timedelta(days=7)).dayofweek == START.dayofweek
+    assert (START + pd.Timedelta(days=7)).day_of_week == START.day_of_week
     assert not np.allclose(day(s0, 7), day(s7, 0))
 
     # no seed: fresh randomness
@@ -600,6 +600,18 @@ def test_inv9_costs_are_recomputed_independently_and_smart_never_costs_more(opti
         sess, make_res_signal(start=START, periods=48 * 4, resolution_min=RES_MIN)
     )
     assert (res["cost_smart"] >= res["cost_plug"] - 1e-12).all()
+    # ... and what it gains is reported as a gain, not as a negative saving in euros
+    assert (res["savings_pct"].dropna() >= -1e-9).all() and res["savings_pct"].max() > 0
+    summary = SmartChargingOptimizer(signal_type="res").savings_summary(res)
+    assert set(summary) == {
+        "green_kwh_smart", "green_kwh_plug", "green_kwh_gain", "mean_gain_pct",
+        "n_sessions_optimised",
+    }
+    assert summary["green_kwh_gain"] > 0 and summary["mean_gain_pct"] > 0
+    assert summary["green_kwh_gain"] == pytest.approx(
+        summary["green_kwh_smart"] - summary["green_kwh_plug"], abs=0.02
+    )
+    assert all(type(v) in (float, int) for v in summary.values())      # not numpy scalars
 
 
 def test_inv9_hand_computed_schedules_including_partial_slots():
