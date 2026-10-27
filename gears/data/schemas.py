@@ -564,6 +564,11 @@ def validate_dataframe(
         If True, raise on any anomaly instead of dropping/warning.
     filter_failed : bool
         French data only: if True, drop sessions with ``succes_session != 't'``.
+    dayfirst : bool, optional
+        How dates written as numbers (``05/01/2024``) are read: ``True`` day/month/year,
+        ``False`` month/day/year. By default the order is read from the values (a first
+        number above 12 can only be a day); a column that uses both orders is an error,
+        and when no value settles it the dates are read month first, with a warning.
 
     Returns
     -------
@@ -603,7 +608,6 @@ def validate_dataframe(
 
     if _is_french_format(df):
         df = _preprocess_french(df, filter_failed=filter_failed)
-
 
     df = _drop_noise_columns(df)
     df = _resolve_aliases(df)

@@ -158,3 +158,77 @@ def test_the_real_datasets_load_when_they_are_present():
     for path in files:
         out = load_sessions(str(path), verbose=False)
         assert REQUIRED <= set(out.columns) and len(out) > 0, path.name
+
+
+# ── Dates written as numbers: day/month or month/day is read from the values ──
+
+def raw_with_dates(dates):
+    n = len(dates)
+    return pd.DataFrame({
+        "arrival_time": dates, "duration": [2.0] * n,
+        "energy": [10.0 + i for i in range(n)],               # distinct rows: no duplicate filter
+    })
+
+
+def test_day_first_dates_are_recognised_from_a_day_above_12():
+    """``13/01/2024`` can only be the 13th: the file is day/month/year, and 05/01/2024 is 5 January."""
+    raw = raw_with_dates(["05/01/2024 08:00", "13/01/2024 09:00", "20/02/2024 10:00"] * 10)
+
+    with warnings_as_errors():
+        df = validate_dataframe(raw)
+
+    assert sorted(df["arrival_time"].dt.month.unique()) == [1, 2]            # not 5 and 6
+    assert df["arrival_time"].min() == pd.Timestamp("2024-01-05 08:00")
+
+
+def test_month_first_dates_are_recognised_from_a_second_number_above_12():
+    raw = raw_with_dates(["01/05/2024 08:00", "01/13/2024 09:00"] * 10)
+
+    with warnings_as_errors():
+        df = validate_dataframe(raw)
+
+    assert df["arrival_time"].min() == pd.Timestamp("2024-01-05 08:00")
+    assert df["arrival_time"].max() == pd.Timestamp("2024-01-13 09:00")
+
+
+def test_dates_that_mix_both_orders_are_refused():
+    raw = raw_with_dates(["13/01/2024 08:00", "01/13/2024 09:00"] * 10)
+
+    with pytest.raises(ValueError, match="mix two orders.*13/01/2024.*01/13/2024"):
+        validate_dataframe(raw)
+
+
+def test_dates_no_value_can_settle_warn_and_dayfirst_decides():
+    raw = raw_with_dates(["05/01/2024 08:00", "06/02/2024 09:00"] * 10)
+
+    with pytest.warns(UserWarning, match="no value settles whether the day or the month"):
+        guessed = validate_dataframe(raw)
+    assert guessed["arrival_time"].min() == pd.Timestamp("2024-05-01 08:00")     # month first
+
+    with warnings_as_errors():                                   # told explicitly: no warning
+        day_first = validate_dataframe(raw, dayfirst=True)
+        month_first = validate_dataframe(raw, dayfirst=False)
+        via_loader = load_sessions(raw, dayfirst=True, verbose=False)
+    assert day_first["arrival_time"].min() == pd.Timestamp("2024-01-05 08:00")
+    assert month_first["arrival_time"].min() == pd.Timestamp("2024-05-01 08:00")
+    assert via_loader["arrival_time"].min() == day_first["arrival_time"].min()
+
+
+def test_iso_dates_and_real_timestamps_are_never_ambiguous():
+    with warnings_as_errors():
+        iso = validate_dataframe(raw_with_dates(["2024-01-05 08:00", "2024-02-06 09:00"] * 10))
+        real = validate_dataframe(make_generic())
+    assert iso["arrival_time"].min() == pd.Timestamp("2024-01-05 08:00")
+    assert len(real) == 100
+
+
+def warnings_as_errors():
+    import warnings
+
+    class _Raise(warnings.catch_warnings):
+        def __enter__(self):
+            super().__enter__()
+            warnings.simplefilter("error")
+            return self
+
+    return _Raise()

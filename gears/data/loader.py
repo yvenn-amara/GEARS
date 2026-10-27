@@ -35,6 +35,7 @@ def load_sessions(
     strict: bool = False,
     filter_failed: bool = True,
     verbose: bool = True,
+    dayfirst: bool | None = None,
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -55,9 +56,15 @@ def load_sessions(
         French data only: drop sessions with ``succes_session != 't'``.
     verbose : bool
         Log a short summary (``INFO``) on the console after loading.
+    dayfirst : bool, optional
+        How dates written as numbers (``05/01/2024``) are read: ``True`` day/month/year
+        (5 January), ``False`` month/day/year. By default the order is read from the
+        values (a first number above 12 is a day); when no value settles it a warning
+        says the dates are read month first. ISO dates (``2024-01-05``) are never ambiguous.
     **kwargs
         Extra keyword arguments forwarded to the underlying reader
-        (e.g. ``sep=';'`` for CSV files).
+        (e.g. ``sep=';'`` for CSV files; for a French spreadsheet export also
+        ``encoding='cp1252'`` and ``decimal=','``).
 
     Returns
     -------
@@ -69,6 +76,7 @@ def load_sessions(
     --------
     >>> df = load_sessions("data/sessions.parquet")
     >>> df = load_sessions("data/french_irve.csv", sep=";", verbose=False)
+    >>> df = load_sessions("export.csv", sep=";", decimal=",", encoding="cp1252", dayfirst=True)
     >>> df = load_sessions(raw_df, strict=True, verbose=False)
     """
     if isinstance(source, pd.DataFrame):
@@ -76,7 +84,7 @@ def load_sessions(
     else:
         raw = _dispatch_file(Path(source), **kwargs)
 
-    df = validate_dataframe(raw, strict=strict, filter_failed=filter_failed)
+    df = validate_dataframe(raw, strict=strict, filter_failed=filter_failed, dayfirst=dayfirst)
 
     with console_logging(verbose):
         if logger.isEnabledFor(logging.INFO):
