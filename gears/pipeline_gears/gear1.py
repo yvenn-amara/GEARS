@@ -205,7 +205,7 @@ class Gear1Backend:
                 verbose=verbose, **loader_kwargs
             )
 
-            logger.info("Fitting %s on %d sessions …", self.model_type.upper(), len(df))
+            logger.info("Fitting %s on %d sessions ...", self.model_type.upper(), len(df))
             self.gmm_ = EVSessionModel(
                 n_components=self.n_components,
                 max_components=self.max_components,
@@ -218,7 +218,7 @@ class Gear1Backend:
                 half_life_days=self.half_life_days,
             ).fit(df)
 
-            logger.info("Fitting session-count forecaster (%s) …", self.forecaster_method)
+            logger.info("Fitting session-count forecaster (%s) ...", self.forecaster_method)
             self.forecaster_ = SessionForecaster(
                 method=self.forecaster_method,
                 use_holidays=self.forecaster_use_holidays,
@@ -229,7 +229,7 @@ class Gear1Backend:
             self._build_simulators()
             self.is_fitted_ = True
 
-            logger.info("Fitting complete ✓")
+            logger.info("Fitting complete.")
             logger.info("%r", self.gmm_)
         return self
 
@@ -336,15 +336,15 @@ class Gear1Backend:
     def simulate_medium_term(
         self,
         years: float = 3,
-        annual_growth_rate: float = 0.15,
+        annual_growth_rate: float | None = None,
         start_date: str | pd.Timestamp | None = None,
         output: str = "daily_energy",
         weather_factor: dict[str, float] | None = None,
         growth_model: str = "linear",
         n_scenarios: int | None = None,
         charger_mix: dict[float, float] | None = None,
-        saturation_factor: float = 3.0,
         context: dict | None = None,
+        **growth_kwargs,
     ) -> pd.DataFrame:
         """Simulate aggregated EV demand over a multi-year horizon.
 
@@ -352,6 +352,12 @@ class Gear1Backend:
         :meth:`simulate_short_term` (e.g. ``{"location_type": "work",
         "department": "75"}``); the starting level is then the mean daily
         count of the matching fitted contexts.
+
+        ``annual_growth_rate`` (default 0.15) is the growth of the ``"linear"`` model;
+        the ``"s_curve"`` and ``"bass"`` models take their shape parameters as extra
+        keyword arguments (``saturation_factor``, ``midpoint_year``, ``steepness``;
+        ``market_potential_factor``, ``p``, ``q``), see
+        :meth:`gears.simulation.medium_term.MediumTermSimulator.simulate`.
 
         Raises
         ------
@@ -377,7 +383,7 @@ class Gear1Backend:
             output=output,
             weather_factor=weather_factor,
             context=context,
-            saturation_factor=saturation_factor,
+            **growth_kwargs,
         )
 
     # ------------------------------------------------------------------
@@ -435,7 +441,7 @@ class Gear1Backend:
         if not self.is_fitted_:
             lines.append("Status: NOT FITTED")
         else:
-            lines.append("Status     : fitted ✓")
+            lines.append("Status     : fitted")
             lines.append(f"GMM        : {self.gmm_}")
             lines.extend(self._context_coverage_lines())
             lines.append(f"Forecaster : {self.forecaster_}")

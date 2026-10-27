@@ -98,3 +98,56 @@ def test_a_multi_year_simulation_has_no_horizon_cap(gmm):
     result = sim.simulate(years=6, output="daily_energy", start_date="2025-01-01")
     # one row per day with at least one session (Poisson(3) leaves 5 % of days empty)
     assert 0.9 * round(365.25 * 6) < len(result) <= round(365.25 * 6)
+
+
+# ── Growth parameters, one row per day, sorted output ────────────────────────
+
+def test_a_growth_parameter_the_model_does_not_take_is_refused_and_the_valid_ones_listed(gmm):
+    sim = MediumTermSimulator(gmm, base_sessions_per_day=20, growth_model="s_curve", seed=0)
+    with pytest.raises(ValueError, match=r"Unknown growth parameter\(s\) \['saturation_facter'\].*saturation_factor"):
+        sim.simulate(years=0.1, start_date="2025-01-01", saturation_facter=9)
+
+    linear = MediumTermSimulator(gmm, base_sessions_per_day=20, growth_model="linear", seed=0)
+    with pytest.raises(ValueError, match=r"\['saturation_factor'\].*annual_growth_rate"):
+        linear.simulate(years=0.1, start_date="2025-01-01", saturation_factor=3.0)
+
+
+def test_the_growth_rate_of_the_linear_model_is_not_silently_dropped_by_the_others(gmm, recwarn):
+    kwargs = dict(years=0.2, start_date="2025-01-01", n_scenarios=1)
+    s_curve = MediumTermSimulator(gmm, base_sessions_per_day=20, growth_model="s_curve", seed=0)
+    with pytest.warns(UserWarning, match=r"annual_growth_rate=0.5 changes nothing.*saturation_factor"):
+        s_curve.simulate(annual_growth_rate=0.5, **kwargs)
+
+    recwarn.clear()
+    s_curve.simulate(**kwargs)                                  # not given: nothing to say
+    MediumTermSimulator(gmm, base_sessions_per_day=20, growth_model="linear", seed=0).simulate(
+        annual_growth_rate=0.5, **kwargs)
+    assert not [w for w in recwarn if "changes nothing" in str(w.message)]
+
+
+def test_the_shape_of_a_growth_model_can_be_chosen_through_the_facade(model):
+    kwargs = dict(years=1, start_date="2025-01-01", n_scenarios=1, output="daily_energy")
+    low = model.simulate_medium_term(growth_model="s_curve", saturation_factor=1.2, **kwargs)
+    high = model.simulate_medium_term(growth_model="s_curve", saturation_factor=6.0, **kwargs)
+    assert high["n_sessions"].sum() > 1.2 * low["n_sessions"].sum()
+
+    slow = model.simulate_medium_term(growth_model="bass", p=0.001, q=0.1, **kwargs)
+    fast = model.simulate_medium_term(growth_model="bass", p=0.05, q=0.9, **kwargs)
+    assert fast["n_sessions"].sum() != slow["n_sessions"].sum()
+
+    with pytest.raises(ValueError, match="Unknown growth parameter"):
+        model.simulate_medium_term(growth_model="bass", saturation_factor=3.0, **kwargs)
+
+
+def test_a_day_without_sessions_is_a_row_with_zero_and_the_rows_are_in_date_order(gmm):
+    sim = MediumTermSimulator(gmm, base_sessions_per_day=0.3, n_scenarios=2, seed=1)
+    daily = sim.simulate(years=0.1, start_date="2025-01-01")
+    n_days = len(daily["date"].unique())
+    assert len(daily) == 2 * n_days and n_days == round(365.25 * 0.1)      # one row per day and scenario
+    assert (daily["n_sessions"] == 0).any()
+    assert (daily.loc[daily["n_sessions"] == 0, "total_energy_kwh"] == 0).all()
+    assert daily.equals(daily.sort_values(["scenario", "date"], kind="stable").reset_index(drop=True))
+
+    hourly = MediumTermSimulator(gmm, base_sessions_per_day=30, n_scenarios=2, seed=1).simulate(
+        years=0.05, start_date="2025-01-01", output="hourly_energy")
+    assert hourly.equals(hourly.sort_values(["scenario", "date", "hour"], kind="stable").reset_index(drop=True))

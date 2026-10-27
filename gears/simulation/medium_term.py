@@ -60,6 +60,7 @@ are batched together, dramatically reducing Python overhead on long horizons.
 from __future__ import annotations
 
 import logging
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -343,7 +344,7 @@ class MediumTermSimulator:
     def simulate(
         self,
         years: float = 3,
-        annual_growth_rate: float = 0.15,
+        annual_growth_rate: float | None = None,
         start_date: str | pd.Timestamp | None = None,
         output: str = "daily_energy",
         weather_factor: dict[str, float] | None = None,
@@ -358,12 +359,13 @@ class MediumTermSimulator:
         ----------
         years : float
             Simulation horizon (any positive value, no upper limit).
-        annual_growth_rate : float
-            Annual growth rate, used only by the 'linear' growth model
-            (silently ignored by 's_curve'/'bass', which take their own
-            shape parameters — `saturation_factor`/`midpoint_year`/
-            `steepness` or `market_potential_factor`/`p`/`q` — via
-            `**growth_kwargs` below).
+        annual_growth_rate : float, optional
+            Annual growth rate of the 'linear' growth model (default 0.15). The
+            's_curve' and 'bass' models take their own shape parameters
+            (``saturation_factor``/``midpoint_year``/``steepness`` or
+            ``market_potential_factor``/``p``/``q``) through ``**growth_kwargs``
+            below; giving them an ``annual_growth_rate`` raises a ``UserWarning``
+            (it would change nothing).
         start_date : str or Timestamp, optional
             Start of the simulation. Defaults to today.
         output : str
@@ -383,13 +385,16 @@ class MediumTermSimulator:
             the mean daily count of the fitted contexts that match ``context``,
             not of all of them.
         **growth_kwargs
-            Extra keyword arguments forwarded to the growth profile function
-            (e.g. ``saturation_factor``, ``midpoint_year``, ``p``, ``q``).
+            Shape parameters of the growth profile function (e.g.
+            ``saturation_factor``, ``midpoint_year``, ``p``, ``q``). A name the
+            growth model does not take raises a ``ValueError`` listing the valid ones.
 
         Returns
         -------
         pd.DataFrame
-            Structure depends on *output*; see parameter description above.
+            Structure depends on *output*; see parameter description above. Rows
+            are sorted by scenario, then date (then hour); with ``'daily_energy'``
+            a day without any simulated session is a row with ``n_sessions = 0``.
 
         Raises
         ------
@@ -400,7 +405,13 @@ class MediumTermSimulator:
             finite number > 0, ``annual_growth_rate`` is not a finite number
             > -1, ``n_scenarios`` is not an integer >= 1, ``start_date`` is
             not a valid date, ``context`` is not a dict or has a key the session
-            model is not stratified by, or no fitted context matches it.
+            model is not stratified by, or no fitted context matches it, or a
+            ``growth_kwargs`` name is not a parameter of the growth model.
+
+        Warns
+        -----
+        UserWarning
+            ``annual_growth_rate`` given to a growth model other than 'linear'.
         """
         if output not in ("daily_energy", "hourly_energy", "sessions"):
             raise ValueError(
@@ -411,8 +422,17 @@ class MediumTermSimulator:
         self.gmm._resolve_context(context, None)          # refuses a bad or unknown key now
         base = self._base_for(fixed)
         years = check_float(years, "years", gt=0, meaning="simulation horizon in years")
+        if annual_growth_rate is not None and self.growth_model != "linear":
+            warnings.warn(
+                f"annual_growth_rate={annual_growth_rate} changes nothing with "
+                f"growth_model={self.growth_model!r}, which takes its own shape parameters "
+                f"({self._growth_parameters()}). Pass those instead.",
+                UserWarning,
+                stacklevel=2,
+            )
         annual_growth_rate = check_float(
-            annual_growth_rate, "annual_growth_rate", gt=-1,
+            0.15 if annual_growth_rate is None else annual_growth_rate,
+            "annual_growth_rate", gt=-1,
             meaning="0.15 = +15% of the starting level per year; -1 would reach zero within a year",
         )
         n_sc = check_int(
@@ -433,19 +453,19 @@ class MediumTermSimulator:
                 f"Available: {list(GROWTH_PROFILES)}"
             )
 
-        # Build kwargs for profile function (only pass valid ones)
-        import inspect
-        sig = inspect.signature(profile_fn)
-        valid_keys = set(sig.parameters) - {"base_sessions_per_day", "years", "start_date"}
-        filtered_kwargs = {
-            k: v for k, v in {
-                "annual_growth_rate": annual_growth_rate,
-                **growth_kwargs,
-            }.items()
-            if k in valid_keys
-        }
+        # Shape parameters of the growth profile: refuse names it does not take
+        valid_keys = self._growth_parameters(as_set=True)
+        unknown = sorted(set(growth_kwargs) - valid_keys)
+        if unknown:
+            raise ValueError(
+                f"Unknown growth parameter(s) {unknown} for growth_model="
+                f"{self.growth_model!r}. It takes: {sorted(valid_keys)}."
+            )
+        profile_kwargs = dict(growth_kwargs)
+        if "annual_growth_rate" in valid_keys:
+            profile_kwargs["annual_growth_rate"] = annual_growth_rate
 
-        growth = profile_fn(base, years, start_date=start, **filtered_kwargs)
+        growth = profile_fn(base, years, start_date=start, **profile_kwargs)
 
         seasonal_weights = {"winter": 1.0, "spring": 1.0, "summer": 1.0, "autumn": 1.0}
         if weather_factor:
@@ -469,8 +489,22 @@ class MediumTermSimulator:
 
         # sessions and hourly_energy return lists of DataFrames; daily_energy returns dicts
         if output in ("sessions", "hourly_energy"):
-            return pd.concat(results, ignore_index=True)
-        return pd.DataFrame(results)
+            frame = pd.concat(results, ignore_index=True)
+            order = ["scenario", "date"] + (["hour"] if output == "hourly_energy" else [])
+            return frame.sort_values(order, kind="stable").reset_index(drop=True)
+        return (
+            pd.DataFrame(results)
+            .sort_values(["scenario", "date"], kind="stable")
+            .reset_index(drop=True)
+        )
+
+    def _growth_parameters(self, as_set: bool = False):
+        """Names of the shape parameters of the growth model (``annual_growth_rate`` included)."""
+        import inspect
+
+        names = set(inspect.signature(GROWTH_PROFILES[self.growth_model]).parameters)
+        names -= {"base_sessions_per_day", "years", "start_date"}
+        return names if as_set else ", ".join(sorted(names))
 
     def _base_for(self, fixed: dict) -> float:
         """Starting sessions per day: the given one, or the mean over the contexts matching ``fixed``."""
@@ -539,13 +573,21 @@ class MediumTermSimulator:
             "date": growth.index,
             "expected_n": growth.values,
         })
-        plan["day_of_week"] = plan["date"].dt.dayofweek
+        plan["day_of_week"] = plan["date"].dt.day_of_week
         plan["month"] = plan["date"].dt.month
         plan["season"] = plan["month"].apply(_season)
         plan["w"] = plan["season"].map(seasonal_weights).fillna(1.0)
         plan["adjusted_n"] = plan["expected_n"] * plan["w"]
         # Poisson draw per day to introduce realistic day-to-day count variability
         plan["n_sessions"] = rng.poisson(np.maximum(0, plan["adjusted_n"].values))
+
+        if output == "daily_energy":
+            # a day without any session is a day with zero energy, not a missing day
+            for day in plan.loc[plan["n_sessions"] == 0, "date"]:
+                rows.append({
+                    "date": day.date(), "scenario": scenario_id, "n_sessions": 0,
+                    "total_energy_kwh": 0.0, "mean_duration_h": np.nan,
+                })
 
         # Group by context and batch-sample
         for (dow, season), group in plan.groupby(["day_of_week", "season"]):
