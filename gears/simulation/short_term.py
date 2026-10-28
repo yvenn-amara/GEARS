@@ -35,8 +35,6 @@ class ShortTermSimulator:
     charger_mix : dict, optional
         Power distribution ``{power_kw: proportion}``.  Proportions are
         normalised automatically.  Default: ``{7.4: 0.5, 22.0: 0.5}``.
-    resolution_min : int
-        Time resolution in minutes for load-curve output.
 
     Examples
     --------
@@ -49,11 +47,9 @@ class ShortTermSimulator:
         gmm: EVSessionModel,
         forecaster: SessionForecaster | None = None,
         charger_mix: dict[float, float] | None = None,
-        resolution_min: int = 30,
     ):
         self.gmm = gmm
         self.forecaster = forecaster
-        self.resolution_min = resolution_min
 
         self.charger_mix = dict(charger_mix) if charger_mix else {7.4: 0.5, 22.0: 0.5}
         total = sum(self.charger_mix.values())

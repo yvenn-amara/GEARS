@@ -10,6 +10,7 @@ or simply ``GEARSModel(...)`` since 1 is the default gear).
 from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -310,6 +311,14 @@ class Gear1Backend:
 
         if n_sessions is not None:
             n_sessions = check_int(n_sessions, "n_sessions", minimum=1, meaning="sessions per day")
+            if n_sc > 1 and n_scenarios is not None:
+                warnings.warn(
+                    f"n_scenarios={n_sc} is ignored when n_sessions is given: one scenario is "
+                    "simulated, without a 'scenario' column. Call once per scenario with a "
+                    "different seed, or leave n_sessions out to draw the daily counts from the forecaster.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             # One independent seed per day: consecutive seeds must not share days.
             day_seeds = np.random.default_rng(seed).integers(0, 2**31, size=horizon)
             frames = [
