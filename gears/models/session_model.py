@@ -29,8 +29,9 @@ A single ``EVSessionModel`` object covers all location types; the
 
 Pre-fitted GMMs
 ---------------
-The package ships with a single pre-fitted GMM bundle ``gmm_french.joblib``.
-Use ``gears.load_pretrained("french")`` to load it without raw data.
+A pre-fitted GMM bundle for the French charging network, ``gmm_french.joblib``, is
+published as a release asset (it is not inside the wheel). ``gears.load_pretrained("french")``
+downloads it on first use, checks its SHA-256 and caches it, so no raw data is needed.
 """
 
 from __future__ import annotations
@@ -327,27 +328,12 @@ class EVSessionModel:
     def __setstate__(self, state: dict) -> None:
         """Restore instance state from unpickling.
 
-        Older on-disk bundles (e.g. the committed ``gmm_french.joblib``,
-        pickled before Session 2 added recency-weighting support) don't have
-        the recency-related attributes below in their pickled ``__dict__``.
-        Without this, plain attribute access on those attributes elsewhere
-        in the class (``__repr__`` in particular: ``if self.recency:``)
-        raises ``AttributeError`` on load — surfaced by notebook 1's
-        ``load_pretrained()`` call. Backfilling with the same defaults ``__init__``
-        uses keeps old bundles loadable under the current code without
-        needing to refit and re-commit them.
-
-        ``model_type`` has the same problem: the two oldest release bundles
-        (``gmm_french.joblib``, ``gmm_french_sample.joblib``) were pickled
-        before that attribute existed at all (confirmed by inspecting their
-        unpickled ``__dict__`` directly — the three newer bundles,
-        ``gmm_french_holdout.joblib``, ``gmm_french_recency.joblib``, and
-        ``vae_french_sample.joblib``, all already have it). Surfaced by
-        Session 6's ``plot_marginals()`` fix, which reads ``self.model_type``
-        to pick GMM- vs VAE-consistent plot colors and raised
-        ``AttributeError`` on the old GMM bundles. Every bundle predating this
-        attribute is a GMM (the VAE path didn't exist yet), so ``"gmm"`` is
-        the correct backfill default — it's also ``__init__``'s own default.
+        A model saved by an earlier version lacks the attributes added since
+        (the recency settings, ``model_type``, the fallback bookkeeping), and
+        reading them later (``__repr__`` reads ``self.recency``) would raise
+        ``AttributeError``. They are backfilled here with the defaults
+        ``__init__`` uses, so such a model stays loadable. ``model_type`` falls
+        back to ``"gmm"``: the models saved before that attribute existed are all GMMs.
         """
         defaults = {
             "recency": None,
@@ -1083,10 +1069,8 @@ class EVSessionModel:
         self._check_fitted()
         synth = self.sample(n_samples, context=context, date=date)
 
-        # Consistent model-identity color pairing used throughout the notebooks:
-        # GMM = "#2E86AB" (blue), VAE = "#F4A261" (orange). Picking the color from
-        # self.model_type (rather than hardcoding blue) keeps GMM-vs-VAE comparison
-        # charts visually consistent regardless of which instance calls this method.
+        # One colour per model family (GMM blue, VAE orange), so that charts
+        # comparing the two stay consistent whichever instance draws them.
         is_vae = self.model_type == "vae"
         sim_color = "#F4A261" if is_vae else "#2E86AB"
         model_label = "VAE" if is_vae else "GMM"

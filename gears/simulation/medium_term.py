@@ -9,7 +9,7 @@ Growth profiles
 Three growth models are available (see module-level functions). All three
 are anchored so that ``growth(t=0) == base_sessions_per_day`` exactly — no
 discontinuity between "current observed fleet" and the simulated trajectory
-(see Session 6 fix note below).
+(see "Design notes" below).
 
 linear_growth_profile
     Genuinely linear year-on-year growth: ``base * (1 + rate * t)``. Best for
@@ -29,26 +29,21 @@ bass_diffusion_profile
     adopt independently, and *imitators* (q) who adopt after social contact.
     Typical EV parameters: p ≈ 0.03, q ≈ 0.38.
 
-Session 6 fix note
--------------------
-Two earlier profiles (`s_curve_linear_tail_profile`, `double_s_curve_profile`)
-were removed: with the base-anchoring and horizon-relative-timing fixes below
-applied to `s_curve_growth_profile`, both added extra hyperparameters without
-materially differentiated behaviour for this package's three canonical
-adoption scenarios (conservative/central/ambitious). Two bugs were fixed in the three remaining profiles, both found by
-tracing concrete numbers rather than assumed:
-(1) `s_curve_growth_profile` and `bass_diffusion_profile` did not actually
-start at `base_sessions_per_day` at t=0 (s_curve started at ~2-7% of the
-asymptote depending on parameters; bass started at exactly 0) — a real
-discontinuity when a scenario is meant to start "from the current observed
-fleet, not zero". Both are now rescaled so growth(0) == base exactly.
-(2) `s_curve_growth_profile`'s `midpoint_year`/`steepness` were fixed
-absolute constants independent of the `years` horizon, so with the old
-defaults the curve was 100% saturated by year 8 *regardless of whether a
-3-year or a 20-year simulation was requested* — the actual mechanism behind
-the "plateau" observed in notebook 3's long-term scenarios. Defaults are now
-`years / 2` and `6 / years` respectively, so the curve reaches ~95% of its
-asymptote at t=years for any requested horizon.
+Design notes
+------------
+Only three profiles are offered, one per canonical adoption scenario
+(conservative / central / ambitious); extra hyperparameters would not
+differentiate them. Each profile is built so that:
+
+- ``growth(t=0) == base_sessions_per_day`` exactly. A scenario starts from the
+  current observed fleet, not from zero: the logistic and Bass curves are
+  rescaled so that no jump appears between the observed baseline and the
+  simulated trajectory.
+- the logistic curve spans the requested horizon. ``midpoint_year`` and
+  ``steepness`` default to ``years / 2`` and ``6 / years``, so the curve
+  reaches about 95 % of its asymptote at ``t = years`` whether 3 or 20 years
+  are simulated (fixed constants would saturate it after the same number of
+  years whatever the horizon, giving a plateau in long scenarios).
 
 Simulation speed
 ----------------
@@ -84,11 +79,8 @@ def linear_growth_profile(
     """
     Daily session counts with constant year-on-year growth.
 
-    Genuinely linear in elapsed time: ``base * (1 + annual_growth_rate * t)``.
-    (An earlier version of this function computed compound/exponential growth,
-    ``base * (1 + rate) ** t``, despite its name — a real bug, not a design
-    choice: fixed in Session 6, traced by comparing
-    the two formulas' year-15 output directly.)
+    Linear in elapsed time: ``base * (1 + annual_growth_rate * t)``, not the
+    compound growth ``base * (1 + rate) ** t``.
 
     Parameters
     ----------
@@ -131,12 +123,11 @@ def s_curve_growth_profile(
 
     Rescaled so the curve is anchored exactly at ``base_sessions_per_day`` at
     t=0 and approaches ``base_sessions_per_day * saturation_factor`` as an
-    asymptote. (A raw logistic curve with the old default parameters was only
-    ~2.3% of its asymptote at t=0 regardless of `base_sessions_per_day` — a
-    real discontinuity, not a design choice, when a scenario is meant to
-    start "from the current observed fleet, not zero". Fixed in Session 6 by
-    subtracting the raw curve's own t=0 value and rescaling the remainder to
-    span exactly [base, base*saturation_factor].)
+    asymptote. A raw logistic curve starts at a few percent of its asymptote,
+    which would be a discontinuity when a scenario is meant to start "from the
+    current observed fleet, not zero": the raw curve's own t=0 value is
+    subtracted and the remainder is rescaled to span exactly
+    [base, base * saturation_factor].
 
     Parameters
     ----------
@@ -200,15 +191,11 @@ def bass_diffusion_profile(
 
     Anchored so the curve equals ``base_sessions_per_day`` exactly at t=0 and
     approaches ``base_sessions_per_day * market_potential_factor`` as an
-    asymptote. (The textbook Bass formulation models cumulative adopters of a
-    brand-new product diffusing from zero — appropriate when there truly are
-    no adopters yet, but wrong here: applied directly to
-    `base_sessions_per_day`, it made the simulated trajectory start at a
-    literal zero sessions/day, a hard discontinuity from whatever the real
-    current baseline is. Confirmed by tracing the raw output: t=0 was exactly
-    0 regardless of `base_sessions_per_day`. Fixed in Session 6 by treating
-    the Bass cumulative-adoption fraction F(t) as tracking growth *beyond*
-    the current base rather than adoption from scratch.)
+    asymptote. The textbook Bass formulation models the cumulative adopters
+    of a brand-new product diffusing from zero, which is wrong when there is
+    already a fleet: applied directly, the trajectory would start at zero
+    sessions per day. Here the cumulative-adoption fraction F(t) tracks the
+    growth *beyond* the current base instead of adoption from scratch.
 
     Parameters
     ----------
@@ -243,13 +230,8 @@ def bass_diffusion_profile(
     return pd.Series(N, index=dates, name="n_sessions_expected")
 
 
-# Growth profile registry
-# Reduced from 5 to 3 in Session 6 (see module docstring "Session 6 fix note"
-# for the justification: `s_curve_linear_tail_profile`
-# and `double_s_curve_profile` added extra hyperparameters without materially
-# differentiated behaviour once the base-anchoring and horizon-relative-timing
-# bugs in `s_curve_growth_profile` were fixed, and neither mapped to any of
-# this package's three canonical adoption scenarios).
+# Growth profile registry: one profile per canonical adoption scenario
+# (see the module docstring, "Design notes").
 GROWTH_PROFILES = {
     "linear": linear_growth_profile,
     "s_curve": s_curve_growth_profile,
@@ -295,11 +277,9 @@ class MediumTermSimulator:
     charger_mix : dict, optional
         Power distribution e.g. {7.4: 0.3, 22.0: 0.7} (auto-normalised).
     growth_model : str
-        One of: 'linear', 's_curve', 'bass'. Set at construction time (not a
-        `.simulate()` argument — passing `growth_model=` to `.simulate()` is
-        silently ignored, since it isn't a growth-profile-function parameter;
-        this was already true before Session 6 and the class-level example
-        below was previously wrong about it).
+        One of: 'linear', 's_curve', 'bass'. Set at construction time, not in
+        `.simulate()`, which only takes the parameters of the chosen profile
+        (anything else raises a ``ValueError``).
     n_scenarios : int
     seed : int
 

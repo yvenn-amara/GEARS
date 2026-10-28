@@ -1,47 +1,44 @@
 """
 Session-count forecasters for GEARS.
 
-Three forecasters with a unified interface:
+Four forecasters with a unified interface:
 
 1. **SessionForecaster** (SARIMA / probabilistic)
-   - SARIMA noise scale uses full training std (not 10%) for realistic 90% CI coverage.
    Fits on historical daily session counts using SARIMA (via pmdarima or
-   statsmodels) or a simple normal-distribution assumption.
+   statsmodels) or a simple normal-distribution assumption.  The noise added
+   to the SARIMA point forecast uses the full training standard deviation, so
+   that the 90 % interval has a realistic coverage.
 
-2. **TransformerForecaster** (PatchTST, optional)
-   State-of-the-art transformer for time-series (Nie et al., ICLR 2023).
-   Requires the ``[dl]`` optional extra::
-
-       pip install "gears-ev[dl]"
-
-   The package works fully without it — if PyTorch / neuralforecast are not
-   installed a clear ImportError is raised with installation instructions,
-   and all other GEARS functionality remains available.
-
-3. **PersistenceForecaster**
+2. **PersistenceForecaster**
    Naive baseline: forecast = value from the same weekday N weeks ago.
    Useful as a baseline comparison to quantify the value of SARIMA / transformer.
 
-4. **NHiTSForecaster** (NHiTS, optional)
-   NHiTS (Challu et al., AAAI 2023). Requires PyTorch and neuralforecast::
+3. **TransformerForecaster** (PatchTST, optional)
+   Transformer for time series (Nie et al., ICLR 2023). Requires the ``[dl]``
+   optional extra::
 
        pip install "gears-ev[dl]"
 
+   The package works fully without it: if PyTorch / neuralforecast are not
+   installed, a clear ImportError gives the installation instructions, and all
+   other GEARS functionality remains available.
+
+4. **NHiTSForecaster** (NHiTS, optional)
+   NHiTS (Challu et al., AAAI 2023), same ``[dl]`` extra.
+
    Implementation notes
    --------------------
-   - input_size default: ``2 * horizon`` (reduced from ``4 * horizon``),
-     additionally hard-capped at ``n_train // 2`` inside ``fit()``.  The
-     old default of 360 days for horizon=90 consumed ≥ 80 % of a typical
-     training set as context window, leaving too few gradient windows and
-     causing instability or memorisation of recent values.
-   - scaler_type="standard": NeuralForecast normalises y internally when
-     this is set.  Without it, raw session counts (0–200) produce erratic
-     gradients whose scale is ~100× larger than normalised targets.
-   - The public ``fit()`` method exposes ``input_size`` as a keyword
-     argument so callers can override without subclassing.
+   - ``input_size`` defaults to ``2 * horizon`` and is hard-capped at
+     ``n_train // 2`` inside ``fit()``: a longer context window leaves too few
+     training windows and makes the model unstable or prone to memorising the
+     most recent values.
+   - ``scaler_type="standard"``: NeuralForecast normalises ``y`` internally.
+     Without it, raw session counts (0-200) give erratic gradients.
+   - ``fit()`` exposes ``input_size`` as a keyword argument so callers can
+     override it without subclassing.
 
 All forecasters share the same ``fit(df)`` / ``predict(horizon, ...)`` interface
-so they can be swapped transparently in notebooks and pipeline code.
+so they can be swapped transparently in scripts and pipeline code.
 """
 
 from __future__ import annotations
@@ -583,10 +580,9 @@ class SessionForecaster:
                 )
             return np.full(horizon, self.mean_daily_)
 
-        # Use the full training std as noise scale so that the 90 % CI achieves
-        # ~87 % empirical coverage.  A small fraction (e.g. 0.1 × std) was used
-        # historically and produced only ~33 % coverage — a serious underestimate
-        # of real forecast uncertainty.
+        # The full training std is the noise scale: a small fraction of it
+        # (e.g. 0.1 x std) gives a 90 % interval that covers only about a third
+        # of the observations, a serious underestimate of the real uncertainty.
         noise_scale = max(self.std_daily_, 1.0)
         fc = fc + rng.normal(0, noise_scale, horizon)
         return np.maximum(0, fc)

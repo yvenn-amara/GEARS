@@ -310,7 +310,7 @@ def test_a_failed_download_is_retried_once_then_reported_with_the_way_out(
     with pytest.raises(PretrainedModelError) as excinfo:
         load_pretrained("test")
     message = str(excinfo.value)
-    assert len(calls) == 2                                       # two attempts, as in the plan
+    assert len(calls) == 2                                       # two attempts
     assert "no route to host" in message and release.as_uri() in message and "path=" in message
     assert list(cache.iterdir()) == []
 

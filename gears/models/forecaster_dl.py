@@ -273,10 +273,9 @@ class NHiTSForecaster:
     it will be evaluated against.  Fitting on multi-department data and
     evaluating against a single department produces ~N_dept× systematic bias.
 
-    Concretely:
-    - Notebook 2 (dept 92 evaluation): ``fc_nhits.fit(train_sarima)``
-    - Notebook 3 (national evaluation): ``fc_nhits.fit(train_focus_depts)``
-      Then convert predictions to energy via ``mean_energy_per_session``.
+    Concretely: to forecast one department, fit on that department's daily
+    counts; to forecast a national total, fit on the national counts. Then
+    convert the predicted counts to energy with ``mean_energy_per_session``.
 
     Parameters
     ----------
@@ -285,12 +284,10 @@ class NHiTSForecaster:
     input_size : int, optional
         Number of past days used as input context.
 
-        **Default: ``2 * horizon``** (reduced from ``4 * horizon``).
-        The old default of ``4 * horizon`` caused ``input_size=360`` for
-        horizon=90.  On a 450-day training set this meant 80 % of the data
-        was used as a single context window, leaving only 90 points to
-        compute the loss — effectively <1 full training epoch of gradient
-        signal, producing random-walk behaviour.
+        **Default: ``2 * horizon``.**  A longer context leaves too few
+        training windows: with ``4 * horizon`` and horizon=90, a 450-day
+        training set would spend 80 % of its data on a single context window,
+        and the model would behave like a random walk.
 
         The effective value is additionally hard-capped at ``n_train // 2``
         inside ``fit()`` to ensure at least ``n_train // 2`` usable
@@ -298,9 +295,8 @@ class NHiTSForecaster:
     max_steps : int
         Training gradient steps.
 
-        **Default: 200** (reduced from 300).  On small datasets
-        (â‰¤600 days), 300 steps combined with a large input_size caused
-        overfitting.  Use 500+ only when ``n_train â‰¥ 2000``.
+        **Default: 200.**  On small datasets (≤ 600 days), many steps combined
+        with a large ``input_size`` overfit.  Use 500+ only when ``n_train ≥ 2000``.
     n_stacks : int
         Number of stacked NHiTS blocks.
     scaler_type : str
@@ -317,9 +313,9 @@ class NHiTSForecaster:
         self,
         horizon: int = 14,
         input_size: int | None = None,
-        max_steps: int = 200,           # Reduced from 300: fewer steps prevent overfitting on small datasets
+        max_steps: int = 200,
         n_stacks: int = 3,
-        scaler_type: str = "standard",  # Explicitly set: normalisation is critical for raw count data (range 0–200)
+        scaler_type: str = "standard",
         random_state: int = 42,
     ):
         self.horizon = horizon
@@ -429,12 +425,12 @@ class NHiTSForecaster:
     def _build_nhits_model(self, h: int, input_size: int):
         """Build an NHiTS model, robust to neuralforecast API changes across versions.
 
-        ``n_stacks`` was removed in neuralforecast â‰¥ 2.0 (replaced by
+        ``n_stacks`` was removed in neuralforecast ≥ 2.0 (replaced by
         ``stack_types``).  We inspect the NHITS constructor at runtime so
         the code works on both the old and the new API without a hard version pin.
 
         ``scaler_type`` is forwarded to NeuralForecast when the installed
-        version supports it (â‰¥ 1.7).  Normalising the target series internally
+        version supports it (≥ 1.7).  Normalising the target series internally
         before gradient updates is critical: raw session counts (range 0–200)
         produce gradients ~100× larger than normalised targets, causing erratic
         training dynamics.
@@ -465,9 +461,9 @@ class NHiTSForecaster:
         if "n_stacks" in sig.parameters:
             kwargs["n_stacks"] = self.n_stacks          # old API (< 2.0)
         elif "stack_types" in sig.parameters:
-            kwargs["stack_types"] = ["identity"] * self.n_stacks  # new API (â‰¥ 2.0)
+            kwargs["stack_types"] = ["identity"] * self.n_stacks  # new API (≥ 2.0)
 
-        # Pass scaler_type only when the installed version supports it (â‰¥ 1.7)
+        # Pass scaler_type only when the installed version supports it (≥ 1.7)
         if "scaler_type" in sig.parameters:
             kwargs["scaler_type"] = self.scaler_type
 

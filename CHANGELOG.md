@@ -1,59 +1,50 @@
 # Changelog
 
-[Keep a Changelog](https://keepachangelog.com) format, [SemVer](https://semver.org) versions; 2.0.0 is the first public release.
+[Keep a Changelog](https://keepachangelog.com) format, [SemVer](https://semver.org) versions.
 
-## [Unreleased] — becomes 2.0.0
+## [Unreleased]
 
-### Breaking
-- Experiment code moved to the sandbox: `DepartmentForecaster`, `aggregate_by_department`, `build_panel`,
-  `crps_ensemble`, `PersistenceSessionSampler`, the benchmark and rolling-origin functions,
-  `sessions_in_last_n_occurrences`.
-- Pre-trained models: `ModelRegistry`, `NativeSessionModelRegistry`, `get_session_model`,
-  `GEARSModel.from_native_gmm` and the Hugging Face hub are replaced by `load_pretrained("french")`,
-  `GEARSModel.from_pretrained("french")` and `GEARSModel.from_session_model(...)`.
-- Command line reduced to `gears fit` and `gears simulate` (removed: `medium-term`, `smart-charge`,
-  `list-models`, `fit --gear`); `simulate` needs exactly one of `--model` / `--pretrained`.
-- Removed because unused: `EVSessionModel.plot_components`, `MediumTermSimulator.plot_energy_trajectory`,
-  `ShortTermSimulator.compute_load_curve`, `SmartChargingOptimizer.plot_load_curve`, and the plotting
-  functions `plot_arrival_distribution`, `plot_session_heatmap`, `plot_energy_distribution`, `plot_gmm_means`.
-- `NHiTSForecaster` and `TransformerForecaster` moved to `gears.models.forecaster_dl` (import from `gears.models`).
+## [2.0.0] — first public release
 
-### Changed
-- **`import gears` is lazy**: no `torch`, `neuralforecast`, `pmdarima`, `matplotlib` or `requests`, no
-  network, no disk access. The library logs instead of printing; `verbose=True` shows it on stderr.
-- Bad arguments raise a `ValueError` saying what was received and what is valid; unfitted objects raise
-  `NotFittedError`; `GEARSModel(gear=2..5)` is reserved (`NotImplementedError`), other values are refused.
-- SARIMA is always tried; if it cannot be fitted or diverges, a warning gives the reason and the forecaster
-  switches to `"probabilistic"` (`forecaster.method_` tells which one ran).
-- **Results differ from earlier versions**: the smart-charging optimiser no longer assumes a hidden 0.9
-  efficiency, allocates energy slot by slot and bills only the energy delivered (costs 20–25 % lower on
-  simulated data); `simulate_short_term(n_sessions=...)` seeds its days from `seed`, not `seed + day`.
-- `OutputAggregator` is about 40 % shorter with identical output; `gears.plotting` no longer warns about
-  converters; a simulation without a fitted forecaster (any pre-trained model) warns that each day gets 20 sessions.
-- Packaging: SPDX licence, version read from `gears.__version__`, project URLs; `[dev]` no longer installs `torch`
-  or `mypy` (`pip install -e ".[dev,vae]"` for the VAE tests). `LICENSE` names Électricité de France (2024-2026).
+GEARS simulates the charging sessions of electric vehicles, forecasts how many there will be per day, builds
+multi-year demand scenarios and schedules smart charging.
 
-### Added
-- `load_pretrained(model_id, path=..., cache_dir=...)`: SHA-256 checked before the file is opened,
-  `GEARS_HOME` and `GEARS_OFFLINE=1`, a local `path` for machines without internet, a warning when
-  scikit-learn differs from the training version.
-- Data checks in `load_sessions` and `fit`: fewer than 10 sessions refused; impossible rows dropped and
-  counted in one warning (`strict=True` raises); Wh / minutes heuristics; time zones dropped with a warning;
-  sparse contexts listed and served by the closest one; an unknown context warns once (`strict=True` raises).
-- `context=` on `simulate_short_term`, `simulate_medium_term` and both simulators, `gears simulate -c KEY=VALUE
-  --strict`: choose the site type and département of a model fitted per site (the French one), the dates giving
-  weekday and season; a key the model is not stratified by raises instead of being ignored.
-- `gears fit --stratify-by --max-components --max-samples-per-context --seed`; `gears._optional.require`
-  (a missing extra gives one `ImportError` naming `gears-ev[vae]` or `[dl]`).
-- `examples/` (four toy scripts, a notebook), a README whose code blocks are tested, a test suite with a coverage floor.
-- `SECURITY.md`, `CITATION.cff`, issue and pull-request templates, the logo; the README gives the source and licence
-  (Licence Ouverte 2.0) of the data the French model was fitted on.
+### Simulation and forecasting
+- `EVSessionModel`: one Gaussian mixture (or conditional VAE, `[vae]` extra) per context (site type,
+  département, weekday, season) over arrival time, duration and energy; sparse contexts are listed and served by
+  the closest one; `fit` accepts `n_components="auto"` (BIC) or an integer, optional recency weighting.
+- `GEARSModel`: `fit`, `simulate_short_term`, `simulate_medium_term`, `smart_charge`, `save` / `load`;
+  `context=` chooses the site type and département of a model fitted per site (the French one), the dates
+  giving weekday and season; a key the model is not stratified by raises instead of being ignored.
+- Session counts: SARIMA (falls back to a normal distribution with a warning that gives the reason;
+  `forecaster.method_` tells which one ran), `PersistenceForecaster`, and `NHiTSForecaster` /
+  `TransformerForecaster` (`[dl]` extra). A simulation without a fitted forecaster (any pre-trained model) warns
+  that each day gets 20 sessions.
+- Medium term: linear, S-curve and Bass growth profiles, all starting from the observed fleet;
+  `annual_growth_rate` for the linear one.
+- Smart charging: V1G price and renewable-share optimisation per slot, `savings_summary`.
 
-### Fixed
-- The checksum of the French model was that of an empty file, so every `load_pretrained` failed; a download
-  is verified before it enters the cache and leaves no temporary file when it fails.
-- `OutputAggregator.build_load_profiles` returned a year of zero load when `stratify_by` lacked
-  `day_of_week` or `season`; it now raises.
-- `linear_growth_profile` gave negative sessions for a negative rate; `n_scenarios=0` was replaced by the
-  default; a one-day history gave `NaN` counts.
-- Lower bounds: `pandas>=2.1` (JSON export fails on 2.0), `pmdarima>=2.0.4` (older ones no longer import).
+### Pre-trained French model
+- `load_pretrained("french")` / `GEARSModel.from_pretrained("french")` download the model from the
+  GitHub release, check its SHA-256 before opening the file and cache it (`GEARS_HOME`, `GEARS_OFFLINE=1`; a local
+  `path=` serves machines without internet). It needs NumPy 2 and warns when the scikit-learn major version differs
+  from the one it was trained with. The README gives the source and licence (Licence Ouverte 2.0) of the data.
+
+### Data
+- `load_sessions` and `fit` read CSV, Excel, Parquet, JSON and pickle, recognise common column names and units
+  (Wh / minutes), and refuse fewer than 10 sessions. Impossible rows are dropped and counted in one warning
+  (`strict=True` raises); time zones are dropped with a warning.
+- Dates written as numbers are read day-first or month-first from their values (`13/01/2024` can only be the
+  13th); a file where no value settles it warns, and `dayfirst=True/False` decides.
+
+### Command line and API conventions
+- `gears fit` and `gears simulate` (`--model` or `--pretrained`, `-c KEY=VALUE`, `--strict`).
+- `import gears` is lazy: no `torch`, `neuralforecast`, `pmdarima`, `matplotlib` or `requests`, no network, no
+  disk access. A missing extra raises one `ImportError` naming `gears-ev[vae]` or `[dl]`.
+- The library logs instead of printing (`verbose=True` shows it on stderr). Bad arguments raise a `ValueError`
+  saying what was received and what is valid; unfitted objects raise `NotFittedError`.
+
+### Project
+- MIT licence, `SECURITY.md`, `CITATION.cff`, issue and pull-request templates, four example scripts and a notebook,
+  a README whose code blocks are tested, a test suite with a coverage floor, CI on Python 3.10 to 3.13 including a
+  run with every dependency at its minimum version.

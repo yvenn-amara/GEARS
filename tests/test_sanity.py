@@ -1,14 +1,13 @@
 """
-Sanity checks, error messages and output invariants (S6).
+Sanity checks, error messages and output invariants.
 
-Part 1 has one test per row of the S6 table of the refonte plan: what happens with bad
-data, bad arguments, an unfitted model, an unknown context or a SARIMA that cannot be
-fitted. Each test checks the exception type **and** that the message tells the reader what
-to do, because that is what makes it actionable. A test covers several variants of a row in
-a loop; the assertion messages name the variant that failed.
+Part 1 has one test per situation a user can get wrong: bad data, bad arguments, an unfitted
+model, an unknown context, or a SARIMA that cannot be fitted. Each test checks the exception
+type **and** that the message tells the reader what to do, because that is what makes it
+actionable. A test covers several variants of a situation in a loop; the assertion messages
+name the variant that failed.
 
-Part 2 has one test per output invariant (the ten of the plan; the V1G optimiser, number 9,
-has four).
+Part 2 has one test per output invariant (the V1G optimiser has four).
 
 Everything uses small demo datasets and fixed seeds, so nothing here is flaky.
 """
@@ -64,7 +63,7 @@ def _signal(prices, start="2025-06-10 08:00"):
 
 
 # =============================================================================
-# Part 1 — the rows of the S6 table
+# Part 1 — what a user can get wrong
 # =============================================================================
 
 
@@ -435,7 +434,7 @@ def test_forecasters_cope_with_a_single_day_a_short_history_and_an_empty_dataset
 
 
 # =============================================================================
-# Part 2 — the ten output invariants
+# Part 2 — the output invariants
 # =============================================================================
 
 START = pd.Timestamp("2025-06-10")
