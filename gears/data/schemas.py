@@ -121,11 +121,8 @@ COLUMN_ALIASES: dict[str, list[str]] = {
     "power": [
         "power", "power_kw", "max_power", "rated_power", "charger_power",
     ],
-    "location_type": [
-        "location_type", "site_type", "charging_type", "type",
-        "location", "site",
-    ],
-    "user_id": ["user_id", "ev_id", "vehicle_id", "driver_id", "session_id"],
+    "location_type": ["location_type", "site_type"],
+    "user_id": ["user_id", "ev_id", "vehicle_id", "driver_id"],
     "department": [
         "department", "dept", "departement", "code_dept", "dept_code",
     ],
@@ -178,6 +175,10 @@ LOCATION_NORMALISATION: dict[str, str] = {
     "en_opu": "public", "coll": "public",
     "heavy": "heavy", "po_lo": "heavy", "poids_lourds": "heavy",
 }
+
+
+# What a missing or unfilled location_type looks like once turned into text: not worth a warning
+_NO_LOCATION = {"", "nan", "none", "unknown"}
 
 
 def _is_french_format(df: pd.DataFrame) -> bool:
@@ -696,14 +697,20 @@ def validate_dataframe(
     df["date"] = df["arrival_time"].dt.date
 
     if "location_type" in df.columns:
-        df["location_type"] = (
-            df["location_type"]
-            .astype(str)
-            .str.lower()
-            .str.strip()
-            .map(LOCATION_NORMALISATION)
-            .fillna("unknown")
-        )
+        raw = df["location_type"].astype(str).str.lower().str.strip()
+        mapped = raw.map(LOCATION_NORMALISATION)
+        unrecognised = raw[mapped.isna() & df["location_type"].notna() & ~raw.isin(_NO_LOCATION)]
+        if len(unrecognised):
+            values = ", ".join(repr(v) for v in unrecognised.value_counts().index[:5])
+            warnings.warn(
+                f"{len(unrecognised):,} sessions have a location_type that is not recognised "
+                f"({values}); they are labelled 'unknown'. The recognised values are work, home, "
+                "public and heavy, and the synonyms listed in LOCATION_NORMALISATION "
+                "(gears/data/schemas.py): rename yours, or the column is of no use as a context.",
+                UserWarning,
+                stacklevel=3,
+            )
+        df["location_type"] = mapped.fillna("unknown")
 
     if "department" in df.columns:
         df["department"] = df["department"].astype(str).str.strip()

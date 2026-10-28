@@ -149,8 +149,8 @@ Any model fitted per site takes `context` the same way (`model.gmm_.stratify_by`
   `GEARS_OFFLINE=1` forbids any download.
 - **Security**: model files are `joblib` pickles, which can run code when opened. GEARS checks the
   checksum of the official file; never open a model file whose source you do not trust.
-- `from_pretrained("french")` warns if your scikit-learn differs from the one the model was
-  trained with (`pip install scikit-learn==<that version>` reproduces it exactly).
+- **Versions**: the file was saved with NumPy 2, so NumPy 1.x cannot open it (`pip install -U "numpy>=2"`).
+  A scikit-learn of another major version than the training one (1.8) raises a warning.
 
 ## Forecasting, medium-term scenarios, smart charging
 

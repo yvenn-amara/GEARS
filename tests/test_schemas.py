@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gears.data.loader import load_sessions
+from gears.data.loader import load_sessions, make_demo_data
 from gears.data.schemas import summary_stats, validate_dataframe
 
 REQUIRED = {"arrival_time", "duration", "energy"}
@@ -158,6 +158,45 @@ def test_the_real_datasets_load_when_they_are_present():
     for path in files:
         out = load_sessions(str(path), verbose=False)
         assert REQUIRED <= set(out.columns) and len(out) > 0, path.name
+
+
+def test_make_demo_data_refuses_what_it_cannot_describe_instead_of_mislabelling_it():
+    with pytest.raises(ValueError, match=r"location_type='heavy'.*\['home', 'public', 'work'\]"):
+        make_demo_data(n=10, location_type="heavy")
+    with pytest.raises(ValueError, match="n must be >= 1"):
+        make_demo_data(n=-5)
+    with pytest.raises(ValueError, match="end_date='2023-01-01' is before start_date='2023-02-01'"):
+        make_demo_data(n=10, start_date="2023-02-01", end_date="2023-01-01")
+
+    home = make_demo_data(n=20, location_type=" Home ", seed=0)
+    assert home["location_type"].unique().tolist() == ["home"]
+    assert len(home) == 20
+    # the three kinds of site are really different (evening arrivals at home, midday in public)
+    assert home["hour"].mean() > make_demo_data(n=300, location_type="public", seed=0)["hour"].mean()
+
+
+def test_a_location_type_nobody_recognises_is_labelled_unknown_with_a_warning():
+    df = make_generic(60)
+    df["location_type"] = ["Office"] * 20 + ["CCS"] * 15 + ["Type2"] * 5 + [None] * 10 + ["home"] * 10
+
+    with pytest.warns(UserWarning, match=r"20 sessions have a location_type that is not recognised \('ccs', 'type2'\)"):
+        out = validate_dataframe(df)
+
+    assert out["location_type"].value_counts().to_dict() == {"work": 20, "unknown": 30, "home": 10}
+
+    with warnings_as_errors():                                  # recognised or missing: no warning
+        validate_dataframe(df.assign(location_type=["Office"] * 30 + [None] * 30))
+
+
+def test_a_column_called_type_or_session_id_is_not_mistaken_for_the_site_or_the_user():
+    df = make_generic(30)
+    df["type"] = "CCS"                          # a connector type, not a kind of site
+    df["session_id"] = range(30)                # one per session, not one per user
+
+    out = validate_dataframe(df)
+
+    assert "location_type" not in out.columns and "user_id" not in out.columns
+    assert out["type"].eq("CCS").all() and out["session_id"].nunique() == 30       # kept as they are
 
 
 # ── Dates written as numbers: day/month or month/day is read from the values ──
