@@ -4,4 +4,3 @@ include data/README.md
 recursive-include assets *.svg
 recursive-include examples *.py *.ipynb
 recursive-include tests *.py
-global-exclude *.py[cod] __pycache__ .DS_Store *.joblib

@@ -115,7 +115,7 @@ branch = true
 omit = ["gears/models/vae.py", "gears/models/forecaster_dl.py"]
 
 [tool.coverage.report]
-# Measured without torch: 92 % (branch coverage). The floor is the measure minus 2 points, so
+# Measured without torch: 92 % (branch coverage). The floor sits a few points below the measure, so
 # that noise does not break the build but a real drop does; raise it when coverage improves.
 fail_under = 89
 show_missing = true

@@ -481,12 +481,27 @@ class Gear1Backend:
             )
         return lines
 
+    def _settings(self) -> tuple:
+        """``(n_components, stratify_by, forecaster, model_type)`` of what this object holds.
+
+        A fitted or supplied session model decides them, not the constructor arguments: a
+        pre-trained model was fitted with other settings than the defaults of this object.
+        """
+        gmm, forecaster = self.gmm_, self.forecaster_
+        return (
+            gmm.n_components if gmm is not None else self.n_components,
+            list(gmm.stratify_by) if gmm is not None else self.stratify_by,
+            forecaster.method if forecaster is not None else self.forecaster_method,
+            gmm.model_type if gmm is not None else self.model_type,
+        )
+
     def __repr__(self) -> str:
         status = "fitted" if self.is_fitted_ else "not fitted"
+        n_components, stratify_by, forecaster, model_type = self._settings()
         return (
-            f"Gear1Backend(n_components={self.n_components!r}, "
-            f"stratify_by={self.stratify_by}, "
-            f"forecaster={self.forecaster_method!r}, "
-            f"model_type={self.model_type!r}, "
+            f"Gear1Backend(n_components={n_components!r}, "
+            f"stratify_by={stratify_by}, "
+            f"forecaster={forecaster!r}, "
+            f"model_type={model_type!r}, "
             f"status={status})"
         )
