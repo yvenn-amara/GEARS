@@ -16,7 +16,8 @@ multi-year demand scenarios and schedules smart charging.
 - `GEARSModel`: `fit`, `simulate_short_term`, `simulate_medium_term`, `smart_charge`, `save` / `load`;
   `context=` chooses the site type and département of a model fitted per site (the French one), the dates
   giving weekday and season; a key the model is not stratified by raises instead of being ignored.
-- Session counts: SARIMA (falls back to a normal distribution with a warning that gives the reason;
+- Session counts: SARIMA with a public-holiday regressor (`use_holidays`, on by default: a holiday is forecast like
+  the holidays of the history; falls back to a normal distribution with a warning that gives the reason;
   `forecaster.method_` tells which one ran), `PersistenceForecaster`, and `NHiTSForecaster` /
   `TransformerForecaster` (`[dl]` extra). A simulation without a fitted forecaster (any pre-trained model) warns
   that each day gets 20 sessions.

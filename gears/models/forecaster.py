@@ -155,8 +155,10 @@ class SessionForecaster:
     seasonal_period : int
         Seasonal period for SARIMA (7 = weekly, default).
     use_holidays : bool
-        If True, add a French bank-holiday dummy as an exogenous regressor
-        in SARIMA.  Requires the ``holidays`` package (installed by default).
+        If True, add a public-holiday dummy as an exogenous regressor in SARIMA, so that
+        a holiday is forecast like the holidays of the history. Requires the ``holidays``
+        package (installed by default). A history that contains no holiday is fitted
+        without the regressor.
     country : str
         ISO 3166-1 alpha-2 country code for the holiday calendar (default 'FR').
     max_p, max_q, max_P, max_Q : int
@@ -263,7 +265,13 @@ class SessionForecaster:
 
     def _try_fit_sarima(self) -> str | None:
         """Fit the SARIMA model; return ``None`` on success, else why it failed."""
-        self._exog_train = self._build_holiday_exog(self._daily_counts.index)
+        exog = self._build_holiday_exog(self._daily_counts.index)
+        if exog is not None and not (exog.any() and not exog.all()):
+            # A dummy that never changes in the history (no public holiday in it) tells
+            # nothing and only perturbs the fit: leave it out, for the forecasts as well.
+            logger.info("No public holiday in the history: SARIMA is fitted without the holiday regressor.")
+            exog = None
+        self._exog_train = exog
         try:
             import pmdarima as pm
         except Exception as e:  # noqa: BLE001 - a broken binary install raises more than ImportError
@@ -283,7 +291,7 @@ class SessionForecaster:
             else:
                 self._model = pm.auto_arima(
                     self._daily_counts.values,
-                    exogenous=self._exog_train,
+                    X=self._exog_train,
                     seasonal=True,
                     m=self.seasonal_period,
                     max_p=self.max_p,
@@ -311,7 +319,7 @@ class SessionForecaster:
         )
         try:
             fc = np.asarray(
-                self._point_forecast(horizon, self._build_holiday_exog(dates)), dtype=float
+                self._point_forecast(horizon, self._future_exog(dates)), dtype=float
             )
         except Exception as e:  # noqa: BLE001 - a model that cannot forecast has failed
             return f"it cannot forecast: {type(e).__name__}: {e}"
@@ -322,6 +330,10 @@ class SessionForecaster:
                 f"against at most {int(self._daily_counts.max())} observed"
             )
         return None
+
+    def _future_exog(self, dates: pd.DatetimeIndex) -> np.ndarray | None:
+        """Holiday dummy of the days to forecast, or None when the model was fitted without one."""
+        return self._build_holiday_exog(dates) if self._exog_train is not None else None
 
     def _build_holiday_exog(
         self,
@@ -446,7 +458,7 @@ class SessionForecaster:
         # window starts later, the days in between are forecast and dropped, so that
         # each requested date gets the forecast of its own weekday (and holiday).
         skip, step_dates = self._sarima_steps(dates)
-        future_exog = self._build_holiday_exog(step_dates)
+        future_exog = self._future_exog(step_dates)
 
         matrix = np.stack(
             [

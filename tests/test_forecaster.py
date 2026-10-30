@@ -123,6 +123,89 @@ def test_sarima_gives_one_non_negative_trajectory_per_scenario_from_the_start_da
     assert (pred["n_sessions"] >= 0).all()
 
 
+# ── SARIMA and public holidays ────────────────────────────────────────────────
+
+def make_holiday_sessions(start="2024-09-02", end="2025-04-13", weekday=40, weekend=3, holiday=4, seed=0):
+    """Daily sessions with a planted calendar: a normal weekday ~40, a weekend day ~3, a French holiday ~4."""
+    import holidays as hol
+
+    rng = np.random.default_rng(seed)
+    calendar = hol.country_holidays("FR")
+    rows = []
+    for day in pd.date_range(start, end):
+        level = holiday if day.date() in calendar else (weekend if day.day_of_week >= 5 else weekday)
+        for _ in range(max(int(rng.normal(level, 1)), 1)):
+            rows.append({
+                "arrival_time": day + pd.Timedelta(hours=float(rng.uniform(7, 21))),
+                "duration": 2.0,
+                "energy": 10.0,
+            })
+    return validate_dataframe(pd.DataFrame(rows))
+
+
+@pytest.fixture(scope="module")
+def holiday_history():
+    return make_holiday_sessions()
+
+
+def test_sarima_with_holidays_forecasts_the_quiet_holiday_it_learned(holiday_history):
+    # Monday 2025-04-21 is Easter Monday; the days around it are ordinary Mondays and weekdays
+    forecaster = SessionForecaster(method="sarima", use_holidays=True, country="FR").fit(holiday_history)
+    assert forecaster.method_ == "sarima", "the test needs SARIMA to fit; it would prove nothing"
+
+    means = mean_per_date(forecaster.predict(horizon=14, n_scenarios=300, seed=0, start_date="2025-04-14"))
+
+    assert means[pd.Timestamp("2025-04-21")] < 0.5 * means[pd.Timestamp("2025-04-14")], (
+        "the training data have ~4 sessions on public holidays and ~40 on other weekdays, "
+        f"so Easter Monday must be forecast far below an ordinary Monday:\n{means}"
+    )
+
+
+def test_sarima_without_holidays_does_not_see_the_holiday(holiday_history):
+    forecaster = SessionForecaster(method="sarima", use_holidays=False).fit(holiday_history)
+
+    means = mean_per_date(forecaster.predict(horizon=14, n_scenarios=300, seed=0, start_date="2025-04-14"))
+
+    assert means[pd.Timestamp("2025-04-21")] > 0.7 * means[pd.Timestamp("2025-04-14")], (
+        "without the holiday regressor, Easter Monday is an ordinary Monday: this is the control "
+        f"of the test above:\n{means}"
+    )
+
+
+def test_the_holiday_dummy_reaches_the_fitted_sarima_model(holiday_history):
+    with_holidays = SessionForecaster(method="sarima", use_holidays=True).fit(holiday_history)
+    without = SessionForecaster(method="sarima", use_holidays=False).fit(holiday_history)
+
+    assert "x1" in with_holidays._model.arima_res_.param_names, "the regressor was dropped when fitting"
+    assert "x1" not in without._model.arima_res_.param_names
+
+
+def test_the_statsmodels_fallback_learns_the_holiday_too(holiday_history, monkeypatch):
+    monkeypatch.setitem(sys.modules, "pmdarima", None)          # makes `import pmdarima` fail
+    with pytest.warns(UserWarning, match="pmdarima could not be imported"):
+        forecaster = SessionForecaster(method="sarima", use_holidays=True).fit(holiday_history)
+    assert forecaster.method_ == "sarima"
+
+    means = mean_per_date(forecaster.predict(horizon=14, n_scenarios=300, seed=0, start_date="2025-04-14"))
+
+    assert means[pd.Timestamp("2025-04-21")] < 0.5 * means[pd.Timestamp("2025-04-14")], means
+
+
+def test_a_history_without_any_holiday_is_fitted_without_the_regressor():
+    import warnings
+
+    # eight weeks, 2024-02-05 to 2024-03-31: no French public holiday in them
+    history = make_holiday_sessions(start="2024-02-05", end="2024-03-31")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        forecaster = SessionForecaster(method="sarima", use_holidays=True).fit(history)
+        forecast = forecaster.predict(horizon=7, n_scenarios=3, seed=0)
+
+    assert forecaster.method_ == "sarima" and forecaster._exog_train is None
+    assert "x1" not in forecaster._model.arima_res_.param_names
+    assert len(forecast) == 21
+
+
 # ── The interface shared by the forecasters ───────────────────────────────────
 
 @pytest.mark.parametrize("make_forecaster", [
