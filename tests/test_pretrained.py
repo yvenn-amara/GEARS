@@ -271,13 +271,24 @@ def test_offline_mode_uses_the_cache_and_otherwise_says_where_to_put_the_file(
     assert release.as_uri() in message and "path=" in message    # where to get it, how to use it
     assert not cache.exists()
 
-    for value in ("0", "", "true"):                              # only "1" forbids the download
+    for value in ("0", "", "false", "no"):                       # these leave the download on
         monkeypatch.setenv("GEARS_OFFLINE", value)
         assert isinstance(load_pretrained("test"), EVSessionModel), value
 
     monkeypatch.setenv("GEARS_OFFLINE", "1")                     # now it is cached
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: pytest.fail("network used"))
     assert isinstance(load_pretrained("test"), EVSessionModel)
+
+
+def test_offline_mode_is_switched_on_by_every_usual_spelling_of_yes(monkeypatch):
+    for value in ("1", "true", "TRUE", "True", "yes", "on", " 1 "):
+        monkeypatch.setenv("GEARS_OFFLINE", value)
+        assert pretrained._is_offline(), value
+    for value in ("0", "", "false", "no", "off", "nope"):
+        monkeypatch.setenv("GEARS_OFFLINE", value)
+        assert not pretrained._is_offline(), value
+    monkeypatch.delenv("GEARS_OFFLINE")
+    assert not pretrained._is_offline()
 
 
 def test_a_failed_download_is_retried_once_then_reported_with_the_way_out(
@@ -299,7 +310,7 @@ def test_a_failed_download_is_retried_once_then_reported_with_the_way_out(
     with pytest.raises(PretrainedModelError) as excinfo:
         load_pretrained("test")
     message = str(excinfo.value)
-    assert len(calls) == 2                                       # two attempts, as in the plan
+    assert len(calls) == 2                                       # two attempts
     assert "no route to host" in message and release.as_uri() in message and "path=" in message
     assert list(cache.iterdir()) == []
 
@@ -325,15 +336,19 @@ def test_a_model_remembers_the_versions_it_was_fitted_with_and_loads_silently_wi
     assert not [w for w in caught if "scikit-learn" in str(w.message)]
 
 
-def test_a_model_trained_with_another_scikit_learn_gives_one_clear_warning(
+def _pickled_as_by_scikit_learn(version, tmp_path, tiny_model, monkeypatch) -> Path:
+    bundle = tmp_path / f"as_by_{version}.joblib"
+    with monkeypatch.context() as m:
+        m.setattr(sklearn.base, "__version__", version)
+        joblib.dump(tiny_model, bundle)
+    return bundle
+
+
+def test_a_model_trained_with_another_major_scikit_learn_gives_one_clear_warning(
     tmp_path, tiny_model, monkeypatch
 ):
-    # pickled as if by scikit-learn 1.0.0 ...
-    old_bundle = tmp_path / "old.joblib"
-    with monkeypatch.context() as m:
-        m.setattr(sklearn.base, "__version__", "1.0.0")
-        joblib.dump(tiny_model, old_bundle)
-    monkeypatch.setattr(pretrained, "_CATALOGUE", _catalogue_for(old_bundle))
+    bundle = _pickled_as_by_scikit_learn("0.24.2", tmp_path, tiny_model, monkeypatch)
+    monkeypatch.setattr(pretrained, "_CATALOGUE", _catalogue_for(bundle))
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -342,7 +357,7 @@ def test_a_model_trained_with_another_scikit_learn_gives_one_clear_warning(
     ours = [w for w in caught if "was trained with scikit-learn" in str(w.message)]
     assert len(ours) == 1 and issubclass(ours[0].category, UserWarning)
     assert f"scikit-learn {sklearn.__version__} is installed" in str(ours[0].message)
-    assert "scikit-learn==1.0.0" in str(ours[0].message)
+    assert "scikit-learn==0.24.2" in str(ours[0].message)
     # scikit-learn's own per-estimator warnings are replaced by that single one
     assert not [w for w in caught if issubclass(w.category, InconsistentVersionWarning)]
 
@@ -356,3 +371,83 @@ def test_a_model_trained_with_another_scikit_learn_gives_one_clear_warning(
     monkeypatch.setattr(pretrained, "_CATALOGUE", _catalogue_for(recorded))
     with pytest.warns(UserWarning, match=r"trained with scikit-learn 0\.99\.0"):
         load_pretrained("test", cache_dir=tmp_path / "cache_meta")
+
+
+def test_a_model_trained_with_another_minor_scikit_learn_loads_without_any_warning(
+    tmp_path, tiny_model, monkeypatch, caplog
+):
+    """The French model gives the same simulation with scikit-learn 1.5 and 1.9: warning every
+    user whose minor version differs would only teach them to ignore warnings."""
+    bundle = _pickled_as_by_scikit_learn("1.0.0", tmp_path, tiny_model, monkeypatch)
+    monkeypatch.setattr(pretrained, "_CATALOGUE", _catalogue_for(bundle))
+
+    with caplog.at_level("INFO", logger="gears.pretrained"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")                      # any warning is a failure
+            assert isinstance(load_pretrained("test"), EVSessionModel)
+
+    assert "was trained with scikit-learn 1.0.0" in caplog.text    # still on record, at INFO
+
+
+# ---------------------------------------------------------------------------
+# What can go wrong on someone else's machine
+# ---------------------------------------------------------------------------
+
+def test_a_model_saved_with_numpy_2_says_so_when_numpy_1_cannot_read_it(release, monkeypatch):
+    def numpy_1_cannot_find_numpy_core(*args, **kwargs):
+        raise ModuleNotFoundError("No module named 'numpy._core'", name="numpy._core")
+
+    monkeypatch.setattr(joblib, "load", numpy_1_cannot_find_numpy_core)
+
+    with pytest.raises(PretrainedModelError, match=r"saved with NumPy 2.*numpy>=2") as excinfo:
+        load_pretrained("test")
+    assert "probably incompatible" not in str(excinfo.value)     # the specific advice, not the generic
+
+
+def test_a_cache_folder_that_cannot_be_written_is_not_reported_as_a_failed_download(
+    release, tmp_path, monkeypatch
+):
+    not_a_folder = tmp_path / "a_file"
+    not_a_folder.write_text("in the way")
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda *a, **k: pytest.fail("the download must not start")
+    )
+
+    with pytest.raises(PretrainedModelError) as excinfo:
+        load_pretrained("test", cache_dir=not_a_folder / "gears")
+
+    message = str(excinfo.value)
+    assert "cannot write to its model cache folder" in message and "GEARS_HOME" in message
+    assert "Could not download" not in message
+
+
+def test_an_account_without_a_home_folder_is_told_to_set_gears_home(release, monkeypatch):
+    monkeypatch.delenv("GEARS_HOME", raising=False)
+
+    def no_home():
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(Path, "home", staticmethod(no_home))
+
+    with pytest.raises(PretrainedModelError, match="no home folder.*GEARS_HOME"):
+        load_pretrained("test")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_the_cached_model_follows_the_umask_so_a_shared_cache_can_be_read_by_others(
+    release, cache
+):
+    previous = os.umask(0o022)
+    try:
+        load_pretrained("test")
+    finally:
+        os.umask(previous)
+
+    assert (cache / "test_model.joblib").stat().st_mode & 0o777 == 0o644      # not 0600
+    assert not list(cache.glob("*.part"))                                      # no temporary left
+
+
+def test_the_repository_that_serves_the_model_is_the_one_the_project_says_it_lives_in():
+    pyproject = (Path(gears.__file__).parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+    homepage = re.search(r'^Homepage = "https://github.com/([^"]+)"', pyproject, re.MULTILINE)
+    assert homepage and homepage.group(1) == pretrained.REPO

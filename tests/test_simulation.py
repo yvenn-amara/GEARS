@@ -6,6 +6,7 @@ checked on the facade in ``test_sanity.py``.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -58,3 +59,26 @@ def test_the_charger_mix_is_normalised_and_decides_the_power_levels(model):
     )
     assert set(mixed["power_kw"]) == {7.4, 22.0}
     assert (mixed["power_kw"] == 7.4).mean() == pytest.approx(0.5, abs=0.1)
+
+
+def test_a_slow_charger_caps_the_energy_at_power_times_duration(model):
+    """A charger cannot deliver more than its power over the session: the energy the model
+    draws is cut to ``power_kw * duration`` (the other tests never reach that limit)."""
+    date, n, seed = "2025-06-10", 300, 3
+    raw = model.gmm_.sample(
+        n_sessions=n, date=pd.Timestamp(date),
+        seed=int(np.random.default_rng(seed).integers(0, 2**31)),
+    )
+
+    slow = ShortTermSimulator(model.gmm_, charger_mix={0.5: 1.0}).simulate_single_day(
+        date, n_sessions=n, seed=seed
+    )
+    limit = 0.5 * raw["duration"].to_numpy()
+    assert (raw["energy"].to_numpy() > limit).sum() > 20, "the test needs sessions above the limit"
+    np.testing.assert_allclose(slow["energy"], np.minimum(raw["energy"], limit))
+    assert (slow["energy"] <= limit + 1e-9).all()
+
+    fast = ShortTermSimulator(model.gmm_, charger_mix={10_000.0: 1.0}).simulate_single_day(
+        date, n_sessions=n, seed=seed
+    )
+    np.testing.assert_allclose(fast["energy"], raw["energy"])        # never binds: untouched

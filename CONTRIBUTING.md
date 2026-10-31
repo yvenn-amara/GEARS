@@ -1,8 +1,7 @@
 # Contributing to GEARS
 
 Thank you for helping. This page is the short version: how to set up, how to check your work, what a
-pull request must contain, and how a finding from the (private) `GEARS_sandbox` repository comes back
-here.
+pull request must contain, and how a finding from an experiment comes back here.
 
 ## Set up
 
@@ -81,8 +80,7 @@ GEAR 1st is `Gear1Backend` (`gears/pipeline_gears/gear1.py`); 2nd to 5th are res
 in the dict raises `NotImplementedError`. To add one, write `gears/pipeline_gears/gearN.py`, register the class
 in the dict and test it. The facade forwards `*args, **kwargs`, so a gear is free to define its own `simulate_*`
 signatures; only `fit(data, ...)` is expected to take a DataFrame or a path first. No abstract base class is
-imposed, on purpose: the internals of the next gear are not known. The reasoning is in
-`docs/archive/PROPOSAL_GEAR_ARCHITECTURE.md` of the private `GEARS_sandbox`.
+imposed, on purpose: the internals of the next gear are not known.
 
 ## Pre-trained models
 
@@ -105,19 +103,17 @@ A security problem is not an issue: see [SECURITY.md](SECURITY.md). Otherwise op
 all of this): the GEARS version (`python -c "import gears; print(gears.__version__)"`), your Python version
 and OS, a minimal example that fails (`make_demo_data()` gives sessions to build it on), and the full traceback.
 
-## Reporting a bug found in the sandbox
+## Reporting a bug found by an experiment
 
-Experiments live in the private `GEARS_sandbox` repository, which depends on a pinned version of GEARS.
-When one of them finds a bug:
+Experiments (notebooks, new models, benchmarks on real data) live outside this repository, in a project that
+depends on a pinned version of GEARS. When one of them finds a bug:
 
 1. **Reproduce it here, as a failing test**: the smallest test on `make_demo_data()` or a few lines of
    data that fails (`@pytest.mark.xfail(strict=True)` is fine while the fix is pending). Do not paste
    real data.
-2. **Fix it** on a branch `fix/<short-name>` and open a pull request that links the sandbox entry
-   (`docs/FINDINGS.md`) and restates the finding in a few lines, since reviewers may not see the
-   sandbox. Add the line to `CHANGELOG.md`.
-3. **After the release** that contains the fix, bump the pinned GEARS version in the sandbox and mark the
-   entry as fixed.
+2. **Fix it** on a branch `fix/<short-name>` and open a pull request that restates the finding in a few
+   lines, since reviewers may not see the experiment. Add the line to `CHANGELOG.md`.
+3. **After the release** that contains the fix, bump the pinned GEARS version in the experiment project.
 
-An idea for an improvement is a GitHub issue labelled `enhancement`, with a link to the sandbox result.
-It enters GEARS only once it is shown to work in the sandbox, and with tests.
+An idea for an improvement is a GitHub issue labelled `enhancement`, with the evidence that it works. It enters
+GEARS with tests, once it is shown to work.

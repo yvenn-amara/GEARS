@@ -1,14 +1,13 @@
 """
-Sanity checks, error messages and output invariants (S6).
+Sanity checks, error messages and output invariants.
 
-Part 1 has one test per row of the S6 table of the refonte plan: what happens with bad
-data, bad arguments, an unfitted model, an unknown context or a SARIMA that cannot be
-fitted. Each test checks the exception type **and** that the message tells the reader what
-to do, because that is what makes it actionable. A test covers several variants of a row in
-a loop; the assertion messages name the variant that failed.
+Part 1 has one test per situation a user can get wrong: bad data, bad arguments, an unfitted
+model, an unknown context, or a SARIMA that cannot be fitted. Each test checks the exception
+type **and** that the message tells the reader what to do, because that is what makes it
+actionable. A test covers several variants of a situation in a loop; the assertion messages
+name the variant that failed.
 
-Part 2 has one test per output invariant (the ten of the plan; the V1G optimiser, number 9,
-has four).
+Part 2 has one test per output invariant (the V1G optimiser has four).
 
 Everything uses small demo datasets and fixed seeds, so nothing here is flaky.
 """
@@ -64,7 +63,7 @@ def _signal(prices, start="2025-06-10 08:00"):
 
 
 # =============================================================================
-# Part 1 — the rows of the S6 table
+# Part 1 — what a user can get wrong
 # =============================================================================
 
 
@@ -435,7 +434,7 @@ def test_forecasters_cope_with_a_single_day_a_short_history_and_an_empty_dataset
 
 
 # =============================================================================
-# Part 2 — the ten output invariants
+# Part 2 — the output invariants
 # =============================================================================
 
 START = pd.Timestamp("2025-06-10")
@@ -498,7 +497,7 @@ def test_inv5_same_seed_same_result_different_seed_different_result(model):
 
     s0 = model.simulate_short_term(START, horizon=8, n_sessions=8, seed=0)
     s7 = model.simulate_short_term(START, horizon=1, n_sessions=8, seed=7)
-    assert (START + pd.Timedelta(days=7)).dayofweek == START.dayofweek
+    assert (START + pd.Timedelta(days=7)).day_of_week == START.day_of_week
     assert not np.allclose(day(s0, 7), day(s7, 0))
 
     # no seed: fresh randomness
@@ -600,6 +599,18 @@ def test_inv9_costs_are_recomputed_independently_and_smart_never_costs_more(opti
         sess, make_res_signal(start=START, periods=48 * 4, resolution_min=RES_MIN)
     )
     assert (res["cost_smart"] >= res["cost_plug"] - 1e-12).all()
+    # ... and what it gains is reported as a gain, not as a negative saving in euros
+    assert (res["savings_pct"].dropna() >= -1e-9).all() and res["savings_pct"].max() > 0
+    summary = SmartChargingOptimizer(signal_type="res").savings_summary(res)
+    assert set(summary) == {
+        "green_kwh_smart", "green_kwh_plug", "green_kwh_gain", "mean_gain_pct",
+        "n_sessions_optimised",
+    }
+    assert summary["green_kwh_gain"] > 0 and summary["mean_gain_pct"] > 0
+    assert summary["green_kwh_gain"] == pytest.approx(
+        summary["green_kwh_smart"] - summary["green_kwh_plug"], abs=0.02
+    )
+    assert all(type(v) in (float, int) for v in summary.values())      # not numpy scalars
 
 
 def test_inv9_hand_computed_schedules_including_partial_slots():

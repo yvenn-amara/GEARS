@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 import pandas as pd
 import pytest
 from click.testing import CliRunner
@@ -113,3 +118,39 @@ def test_simulate_needs_exactly_one_model_and_a_known_pretrained_id(model_path):
 
     result = runner.invoke(main, ["simulate", "--pretrained", "atlantis", "--start", "2024-06-01"])
     assert result.exit_code == 1 and "Unknown model ID 'atlantis'" in result.output
+
+
+def test_the_command_line_prints_nothing_a_windows_console_cannot_encode(
+    sessions_csv, model_path, tmp_path
+):
+    """The default Windows console is cp1252: one arrow or ">=" sign in a message would crash a
+    command after its work is done. Run it for real with a strict cp1252 stdout and stderr."""
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "cp1252:strict",
+        "PYTHONPATH": str(Path(__file__).resolve().parent.parent),
+        "GEARS_HOME": str(tmp_path / "home"),
+    }
+
+    def run(*args):
+        return subprocess.run(
+            [sys.executable, "-m", "gears.cli", *args],
+            capture_output=True, env=env, cwd=tmp_path, timeout=300,
+        )
+
+    commands = {
+        "help": (["--help"], 0),
+        "fit help": (["fit", "--help"], 0),
+        "simulate help": (["simulate", "--help"], 0),
+        "fit (verbose)": (
+            ["fit", str(sessions_csv), "-o", str(tmp_path / "m.joblib"), "--n-components", "2"], 0),
+        "simulate": (
+            ["simulate", "-m", str(model_path), "--start", "2025-06-02", "--horizon", "2",
+             "--n-sessions", "5", "-o", str(tmp_path / "out.csv")], 0),
+        "an error": (["simulate", "-m", str(model_path), "--start", "2025-13-02"], 1),
+    }
+    for name, (args, expected_code) in commands.items():
+        done = run(*args)
+        assert done.returncode == expected_code, (name, done.stderr.decode("cp1252", "replace"))
+        assert b"UnicodeEncodeError" not in done.stderr and b"Traceback" not in done.stderr, name
+    assert len(pd.read_csv(tmp_path / "out.csv")) == 10

@@ -13,8 +13,9 @@ Environment variables
     Cache directory. Default: ``~/.cache/gears``. GEARS never writes inside
     its own package folder.
 ``GEARS_OFFLINE``
-    Set to ``1`` to forbid any network access. A model already in the cache is
-    still used; otherwise a :class:`PretrainedModelError` explains what to do.
+    Set to ``1`` (or ``true``, ``yes``, ``on``) to forbid any network access. A model
+    already in the cache is still used; otherwise a :class:`PretrainedModelError`
+    explains what to do.
 
 Machine without internet access
 -------------------------------
@@ -32,8 +33,8 @@ import hashlib
 import http.client
 import logging
 import os
+import secrets
 import shutil
-import tempfile
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -49,9 +50,9 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Where the model files are published. These two constants are the only place
-# that names the repository; they move to EDF-Lab/GEARS in step S12.
-REPO: Final = "yvenn-amara/GEARS"
+# Where the model files are published (a GitHub Release of the repository). These constants
+# are the only place that names the repository and the release.
+REPO: Final = "EDF-Lab/GEARS"
 RELEASE_TAG: Final = "models-v1"
 _RELEASE_URL: Final = f"https://github.com/{REPO}/releases/download/{RELEASE_TAG}"
 
@@ -86,11 +87,18 @@ def _get_cache_dir() -> Path:
     env_home = os.environ.get("GEARS_HOME")
     if env_home:
         return Path(env_home).expanduser()
-    return Path.home() / ".cache" / "gears"
+    try:
+        return Path.home() / ".cache" / "gears"
+    except RuntimeError as e:         # no HOME / user profile (a service account, a container)
+        raise PretrainedModelError(
+            "GEARS cannot tell where to keep the model: this account has no home folder. "
+            "Set the GEARS_HOME environment variable (or pass cache_dir=...) to a writable folder."
+        ) from e
 
 
 def _is_offline() -> bool:
-    return os.environ.get("GEARS_OFFLINE") == "1"
+    """``GEARS_OFFLINE`` set to 1, true, yes or on (any case)."""
+    return os.environ.get("GEARS_OFFLINE", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _sha256_of(file_path: Path) -> str:
@@ -132,18 +140,28 @@ def _download_file(
     Raises
     ------
     PretrainedModelError
-        If the downloaded bytes do not match ``expected_sha256``.
+        If the downloaded bytes do not match ``expected_sha256``, or the cache
+        folder cannot be written.
     OSError, http.client.HTTPException
         If the transfer fails on every attempt (URLError, HTTPError and
         timeouts are OSErrors).
     """
     import urllib.request
 
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=dest_path.parent, prefix=f"{dest_path.name}.", suffix=".part"
-    )
-    tmp_path = Path(tmp_name)
+    # Not tempfile.mkstemp: it creates the file readable by its owner only, which would make a
+    # cache shared between users (a cluster's GEARS_HOME) unreadable for everyone else.
+    tmp_path = dest_path.parent / f".{dest_path.name}.{os.getpid()}.{secrets.token_hex(4)}.part"
+    try:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(
+            tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666
+        )
+    except OSError as e:
+        raise PretrainedModelError(
+            f"GEARS cannot write to its model cache folder {dest_path.parent} "
+            f"({type(e).__name__}: {e}). Set GEARS_HOME (or pass cache_dir=...) to a folder you "
+            "can write to."
+        ) from e
     try:
         with os.fdopen(fd, "wb") as tmp:
             for attempt in range(1, retries + 1):
@@ -193,6 +211,14 @@ def _read_session_model(local_path: Path, model_id: str) -> tuple[EVSessionModel
         try:
             model = joblib.load(local_path)
         except Exception as e:  # the file passed the checksum: this is an environment problem
+            if isinstance(e, ModuleNotFoundError) and "numpy._core" in str(e):
+                import numpy
+
+                raise PretrainedModelError(
+                    f"Could not load model '{model_id}': it was saved with NumPy 2, and NumPy "
+                    f"{numpy.__version__} cannot read it. Upgrade with: pip install -U "
+                    "'numpy>=2' (scikit-learn, pandas and scipy then need recent versions too)."
+                ) from e
             raise PretrainedModelError(
                 f"Could not load model '{model_id}' from {local_path}: "
                 f"{type(e).__name__}: {e}. The file is the official one, so the installed "
@@ -229,7 +255,7 @@ def load_pretrained(
 
     The file is looked up in the cache (``cache_dir``, else ``$GEARS_HOME``,
     else ``~/.cache/gears``) and downloaded when missing, unless
-    ``GEARS_OFFLINE=1``. Its SHA-256 is always checked before it is unpickled
+    ``GEARS_OFFLINE`` is ``1``. Its SHA-256 is always checked before it is unpickled
     (a pickle can run arbitrary code), whether it comes from the cache, from
     ``path`` or from a download.
 
@@ -260,7 +286,8 @@ def load_pretrained(
     Warns
     -----
     UserWarning
-        If the installed scikit-learn differs from the one used for training.
+        If the installed scikit-learn has another major version than the one used for
+        training (a difference in the minor version is only logged at ``INFO``).
 
     Examples
     --------
@@ -309,14 +336,22 @@ def load_pretrained(
     import sklearn
 
     if trained_with and trained_with != sklearn.__version__:
-        warnings.warn(
-            f"Model '{model_id}' was trained with scikit-learn {trained_with}, but "
-            f"scikit-learn {sklearn.__version__} is installed. It may load with different "
-            f"results or fail later; to get exactly the original behaviour, install "
-            f"scikit-learn=={trained_with}.",
-            UserWarning,
-            stacklevel=2,
-        )
+        if trained_with.split(".")[0] != sklearn.__version__.split(".")[0]:
+            warnings.warn(
+                f"Model '{model_id}' was trained with scikit-learn {trained_with}, but "
+                f"scikit-learn {sklearn.__version__} is installed (another major version). It "
+                f"may load with different results or fail later; to get exactly the original "
+                f"behaviour, install scikit-learn=={trained_with}.",
+                UserWarning,
+                stacklevel=2,
+            )
+        else:
+            # Same major version: a Gaussian mixture is plain arrays, and the French model gives
+            # the same simulation with scikit-learn 1.5 and 1.9 (checked), so this is no warning.
+            logger.info(
+                "Model '%s' was trained with scikit-learn %s; %s is installed.",
+                model_id, trained_with, sklearn.__version__,
+            )
 
     logger.info("Loaded pre-trained model '%s' from %s.", model_id, local_path)
     return model

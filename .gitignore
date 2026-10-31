@@ -6,6 +6,13 @@ build/
 dist/
 .venv/
 
+# Editors, operating systems, notebooks
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.ipynb_checkpoints/
+
 # Tool caches and reports
 .pytest_cache/
 .ruff_cache/

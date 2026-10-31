@@ -121,11 +121,8 @@ COLUMN_ALIASES: dict[str, list[str]] = {
     "power": [
         "power", "power_kw", "max_power", "rated_power", "charger_power",
     ],
-    "location_type": [
-        "location_type", "site_type", "charging_type", "type",
-        "location", "site",
-    ],
-    "user_id": ["user_id", "ev_id", "vehicle_id", "driver_id", "session_id"],
+    "location_type": ["location_type", "site_type"],
+    "user_id": ["user_id", "ev_id", "vehicle_id", "driver_id"],
     "department": [
         "department", "dept", "departement", "code_dept", "dept_code",
     ],
@@ -134,7 +131,7 @@ COLUMN_ALIASES: dict[str, list[str]] = {
 # Raw column names that must NEVER resolve to a given canonical column, even
 # though a case/punctuation-normalized comparison would otherwise make them
 # look like a match. This is a *meaning* problem, not a normalization
-# problem — e.g. the EVSE-style datasets' ``Arrival`` column is a float
+# problem — e.g. some public datasets' ``Arrival`` column is a float
 # hour-of-day (e.g. 4.13), not a timestamp, even though its name looks like
 # a near-miss alias for ``arrival_time``. No amount of fuzzy matching should
 # paper over this; it is handled as an explicit, permanent exclusion.
@@ -169,46 +166,6 @@ MAX_ENERGY_KWH = 400.0
 SUSPECT_ENERGY_MEDIAN_KWH = 200.0   # above: probably Wh
 SUSPECT_DURATION_MEDIAN_H = 48.0    # above: probably minutes
 
-# Data-quality note: acn.csv (from the 11-dataset EVSE benchmark) is the
-# row-wise union of caltech.csv + jpl.csv + office.csv, distinguishable via
-# its extra ``data`` site-indicator column. Loading acn.csv alongside any of
-# those three individually and combining them will triple-count the
-# overlapping sessions — treat acn as a deliberate "combined-site" scenario,
-# not as a fourth independent dataset, unless that duplication is intended.
-# See ``_warn_if_combined_site_dataset`` for the runtime version of this note.
-_KNOWN_COMBINED_SITE_VALUES = {"caltech", "jpl", "office"}
-
-
-def _warn_if_combined_site_dataset(df: pd.DataFrame) -> None:
-    """
-    Emit a ``UserWarning`` if ``df`` looks like a combined multi-site export
-    (e.g. ``acn.csv`` = ``caltech.csv`` + ``jpl.csv`` + ``office.csv``
-    concatenated, distinguished by a ``data`` site-indicator column), so
-    nobody accidentally loads it alongside the individual site files and
-    double/triple-counts the overlapping sessions.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-
-    Returns
-    -------
-    None
-    """
-    normalized = {_normalize_key(c): c for c in df.columns}
-    site_col = normalized.get("data")
-    if site_col is None:
-        return
-    sites = set(df[site_col].dropna().astype(str).str.lower().unique())
-    if sites and sites.issubset(_KNOWN_COMBINED_SITE_VALUES) and len(sites) > 1:
-        warnings.warn(
-            f"This dataset looks like a combined multi-site export (site values: "
-            f"{sorted(sites)}) — e.g. acn.csv = caltech.csv + jpl.csv + office.csv "
-            "concatenated. Loading it alongside those individual site files in the "
-            "same analysis will double/triple-count overlapping sessions.",
-            UserWarning, stacklevel=3,
-        )
-
 LOCATION_NORMALISATION: dict[str, str] = {
     "work": "work", "workplace": "work", "bureau": "work", "office": "work",
     "en_pri": "work",
@@ -218,6 +175,10 @@ LOCATION_NORMALISATION: dict[str, str] = {
     "en_opu": "public", "coll": "public",
     "heavy": "heavy", "po_lo": "heavy", "poids_lourds": "heavy",
 }
+
+
+# What a missing or unfilled location_type looks like once turned into text: not worth a warning
+_NO_LOCATION = {"", "nan", "none", "unknown"}
 
 
 def _is_french_format(df: pd.DataFrame) -> bool:
@@ -259,7 +220,7 @@ def _preprocess_french(df: pd.DataFrame, *, filter_failed: bool = True) -> pd.Da
     """
     df = df.copy()
     rename = {k: v for k, v in FRENCH_COLUMN_MAP.items() if k in df.columns}
-    df.rename(columns=rename, inplace=True)
+    df = df.rename(columns=rename)
 
     if filter_failed and "_succes" in df.columns:
         before = len(df)
@@ -270,7 +231,7 @@ def _preprocess_french(df: pd.DataFrame, *, filter_failed: bool = True) -> pd.Da
                 f"Dropped {dropped:,}/{before:,} failed sessions (succes_session != 't').",
                 UserWarning, stacklevel=4,
             )
-        df.drop(columns=["_succes"], inplace=True)
+        df = df.drop(columns=["_succes"])
 
     # French IRVE: energie_delivree_wh is in Wh — convert to kWh.
     # This conversion only applies when the raw column is detected as French format
@@ -278,17 +239,17 @@ def _preprocess_french(df: pd.DataFrame, *, filter_failed: bool = True) -> pd.Da
     # in kWh, no conversion occurs. See _is_french_format() above.
     if "_energy_wh" in df.columns:
         df["energy"] = df["_energy_wh"] / 1000.0
-        df.drop(columns=["_energy_wh"], inplace=True)
+        df = df.drop(columns=["_energy_wh"])
 
     if "_duration_min" in df.columns:
         df["duration"] = df["_duration_min"] / 60.0
-        df.drop(columns=["_duration_min"], inplace=True)
+        df = df.drop(columns=["_duration_min"])
 
     if "_domaine_id" in df.columns:
         df["location_type"] = df["_domaine_id"].map(FRENCH_DOMAINE_MAP).fillna("unknown")
-        df.drop(columns=["_domaine_id"], inplace=True)
+        df = df.drop(columns=["_domaine_id"])
     if "_domaine_nom" in df.columns:
-        df.drop(columns=["_domaine_nom"], inplace=True)
+        df = df.drop(columns=["_domaine_nom"])
 
     if "department" in df.columns:
         df["department"] = df["department"].astype(str).str.strip()
@@ -375,7 +336,7 @@ def _resolve_aliases(df: pd.DataFrame) -> pd.DataFrame:
         col = _find_column(df, canonical)
         if col and col != canonical:
             rename_map[col] = canonical
-    df.rename(columns=rename_map, inplace=True)
+    df = df.rename(columns=rename_map)
     return df
 
 
@@ -461,12 +422,64 @@ def _wall_clock(value):
     return ts.tz_localize(None) if ts.tzinfo is not None else ts
 
 
-def _parse_arrival_time(column: pd.Series) -> tuple[pd.Series, bool]:
+# A date written as numbers with a separator: 05/01/2024, 5.1.24, 13-01-2024 ... (not ISO 2024-01-05)
+_NUMERIC_DATE = re.compile(r"^\s*(\d{1,2})[/.\-](\d{1,2})[/.\-]\d{2,4}(?!\d)")
+
+
+def _date_order(*columns: pd.Series) -> bool | None:
+    """Day first (``True``) or month first (``False``) in numeric dates such as 05/01/2024.
+
+    The order is read from the values themselves: a first number above 12 can only be a
+    day, a second one only a day in the other order. ``None`` when the columns hold no such
+    dates (ISO dates, real timestamps) or when they cannot settle it (every number is 12
+    or less).
+
+    Raises
+    ------
+    ValueError
+        If the dates use both orders (some first numbers and some second numbers above 12).
+    """
+    firsts, seconds = [], []
+    for column in columns:
+        if column.dtype.kind in "Mm" or pd.api.types.is_numeric_dtype(column):
+            continue
+        found = column.dropna().astype(str).str.extract(_NUMERIC_DATE)
+        found = found.dropna()
+        firsts.append(found[0].astype(int))
+        seconds.append(found[1].astype(int))
+    if not firsts:
+        return None
+    day_first = bool((pd.concat(firsts) > 12).any())
+    month_first = bool((pd.concat(seconds) > 12).any())
+    if day_first and month_first:
+        raise ValueError(
+            "The dates mix two orders: some read day/month/year (a first number above 12, "
+            "e.g. 13/01/2024) and others month/day/year (a second number above 12, e.g. "
+            "01/13/2024). Write them all in one order, preferably as 2024-01-13."
+        )
+    if day_first or month_first:
+        return day_first
+    return None
+
+
+def _has_ambiguous_dates(column: pd.Series) -> bool:
+    """True when the column holds numeric dates like 05/01/2024 (order unknown)."""
+    if column.dtype.kind in "Mm" or pd.api.types.is_numeric_dtype(column):
+        return False
+    return bool(column.dropna().astype(str).str.match(_NUMERIC_DATE).any())
+
+
+def _parse_arrival_time(
+    column: pd.Series, dayfirst: bool | None = None
+) -> tuple[pd.Series, bool]:
     """
     Parse ``arrival_time`` into naive local timestamps.
 
     Returns the parsed column and whether a time zone / UTC offset was dropped.
     Unreadable values become ``NaT`` (the quality filter then drops and counts them).
+    ``dayfirst`` says how numeric dates such as 05/01/2024 are read (``True``: 5 January);
+    ``None`` reads it from the values (see :func:`_date_order`), month first when they
+    cannot settle it.
 
     Raises
     ------
@@ -483,7 +496,7 @@ def _parse_arrival_time(column: pd.Series) -> tuple[pd.Series, bool]:
     if isinstance(column.dtype, pd.DatetimeTZDtype):
         return column.dt.tz_localize(None), True
     try:
-        parsed = pd.to_datetime(column, format="mixed", dayfirst=False, errors="coerce")
+        parsed = pd.to_datetime(column, format="mixed", dayfirst=bool(dayfirst), errors="coerce")
     except ValueError:
         # Several UTC offsets in one column (e.g. +01:00 and +02:00 across a DST change):
         # keep each clock reading, as the convention says.
@@ -535,6 +548,7 @@ def validate_dataframe(
     df: pd.DataFrame,
     strict: bool = False,
     filter_failed: bool = True,
+    dayfirst: bool | None = None,
 ) -> pd.DataFrame:
     """
     Validate and normalise a raw EV sessions DataFrame.
@@ -551,6 +565,11 @@ def validate_dataframe(
         If True, raise on any anomaly instead of dropping/warning.
     filter_failed : bool
         French data only: if True, drop sessions with ``succes_session != 't'``.
+    dayfirst : bool, optional
+        How dates written as numbers (``05/01/2024``) are read: ``True`` day/month/year,
+        ``False`` month/day/year. By default the order is read from the values (a first
+        number above 12 can only be a day); a column that uses both orders is an error,
+        and when no value settles it the dates are read month first, with a warning.
 
     Returns
     -------
@@ -591,15 +610,25 @@ def validate_dataframe(
     if _is_french_format(df):
         df = _preprocess_french(df, filter_failed=filter_failed)
 
-    _warn_if_combined_site_dataset(df)
-
     df = _drop_noise_columns(df)
     df = _resolve_aliases(df)
     df = _convert_minute_duration_columns(df)
 
+    if dayfirst is None and "arrival_time" in df.columns:
+        order_columns = [df["arrival_time"]] + ([df["end_time"]] if "end_time" in df.columns else [])
+        dayfirst = _date_order(*order_columns)
+        if dayfirst is None and any(_has_ambiguous_dates(c) for c in order_columns):
+            warnings.warn(
+                "The dates are written as numbers in which no value settles whether the "
+                "day or the month comes first (e.g. 05/01/2024): they are read month first. "
+                "If they are day/month/year, pass dayfirst=True; to silence this, pass "
+                "dayfirst=False or write dates as 2024-01-05.",
+                UserWarning, stacklevel=3,
+            )
+
     if "duration" not in df.columns and "end_time" in df.columns and "arrival_time" in df.columns:
-        at = pd.to_datetime(df["arrival_time"], format="mixed", dayfirst=False)
-        et = pd.to_datetime(df["end_time"], format="mixed", dayfirst=False)
+        at = pd.to_datetime(df["arrival_time"], format="mixed", dayfirst=bool(dayfirst))
+        et = pd.to_datetime(df["end_time"], format="mixed", dayfirst=bool(dayfirst))
         df["duration"] = (et - at).dt.total_seconds() / 3600.0
 
     missing = REQUIRED_COLS - set(df.columns)
@@ -612,7 +641,7 @@ def validate_dataframe(
             "filter applied before this call."
         )
 
-    df["arrival_time"], tz_dropped = _parse_arrival_time(df["arrival_time"])
+    df["arrival_time"], tz_dropped = _parse_arrival_time(df["arrival_time"], dayfirst)
     if tz_dropped:
         warnings.warn(
             "arrival_time carries a time zone or UTC offset. GEARS works with local "
@@ -661,21 +690,27 @@ def validate_dataframe(
         warnings.warn(msg, UserWarning, stacklevel=3)
 
     df["hour"] = df["arrival_time"].dt.hour + df["arrival_time"].dt.minute / 60.0
-    df["day_of_week"] = df["arrival_time"].dt.dayofweek   # 0=Monday, 6=Sunday
+    df["day_of_week"] = df["arrival_time"].dt.day_of_week   # 0=Monday, 6=Sunday
     df["month"] = df["arrival_time"].dt.month
     df["season"] = df["month"].apply(_season)
     df["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
     df["date"] = df["arrival_time"].dt.date
 
     if "location_type" in df.columns:
-        df["location_type"] = (
-            df["location_type"]
-            .astype(str)
-            .str.lower()
-            .str.strip()
-            .map(LOCATION_NORMALISATION)
-            .fillna("unknown")
-        )
+        raw = df["location_type"].astype(str).str.lower().str.strip()
+        mapped = raw.map(LOCATION_NORMALISATION)
+        unrecognised = raw[mapped.isna() & df["location_type"].notna() & ~raw.isin(_NO_LOCATION)]
+        if len(unrecognised):
+            values = ", ".join(repr(v) for v in unrecognised.value_counts().index[:5])
+            warnings.warn(
+                f"{len(unrecognised):,} sessions have a location_type that is not recognised "
+                f"({values}); they are labelled 'unknown'. The recognised values are work, home, "
+                "public and heavy, and the synonyms listed in LOCATION_NORMALISATION "
+                "(gears/data/schemas.py): rename yours, or the column is of no use as a context.",
+                UserWarning,
+                stacklevel=3,
+            )
+        df["location_type"] = mapped.fillna("unknown")
 
     if "department" in df.columns:
         df["department"] = df["department"].astype(str).str.strip()

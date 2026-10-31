@@ -6,14 +6,13 @@ are checked in ``test_sanity.py``.
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from gears.data.loader import load_sessions
+from gears.data.loader import load_sessions, make_demo_data
 from gears.data.schemas import summary_stats, validate_dataframe
 
 REQUIRED = {"arrival_time", "duration", "energy"}
@@ -49,7 +48,7 @@ def make_evse(n=20, seed=0):
         "Start": starts,
         "End": starts + pd.to_timedelta(park_duration_min, unit="m"),
         "Day": starts.day_name(),
-        "Weekend": (starts.dayofweek >= 5).astype(int),
+        "Weekend": (starts.day_of_week >= 5).astype(int),
         "Arrival": starts.hour + starts.minute / 60.0,
         "Charge.Duration": park_duration_min * 0.9,
         "Idle.Duration": park_duration_min * 0.1,
@@ -148,21 +147,6 @@ def test_the_evse_raw_schema_is_understood():
         validate_dataframe(hour_only)
 
 
-def test_a_combined_multi_site_file_warns_but_a_single_site_does_not():
-    """acn.csv-style data (several sites in one file, flagged by a `data` column) would be
-    counted several times next to the individual site files."""
-    combined = make_evse(n=6)
-    combined["data"] = ["caltech", "caltech", "jpl", "jpl", "office", "office"]
-    with pytest.warns(UserWarning, match="combined multi-site"):
-        validate_dataframe(combined)
-
-    single = make_evse(n=6)
-    single["data"] = "caltech"
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        validate_dataframe(single)       # must not warn
-
-
 @pytest.mark.slow
 def test_the_real_datasets_load_when_they_are_present():
     """The CSVs are not versioned (data/ only holds a README); run this on a checkout
@@ -174,3 +158,116 @@ def test_the_real_datasets_load_when_they_are_present():
     for path in files:
         out = load_sessions(str(path), verbose=False)
         assert REQUIRED <= set(out.columns) and len(out) > 0, path.name
+
+
+def test_make_demo_data_refuses_what_it_cannot_describe_instead_of_mislabelling_it():
+    with pytest.raises(ValueError, match=r"location_type='heavy'.*\['home', 'public', 'work'\]"):
+        make_demo_data(n=10, location_type="heavy")
+    with pytest.raises(ValueError, match="n must be >= 1"):
+        make_demo_data(n=-5)
+    with pytest.raises(ValueError, match="end_date='2023-01-01' is before start_date='2023-02-01'"):
+        make_demo_data(n=10, start_date="2023-02-01", end_date="2023-01-01")
+
+    home = make_demo_data(n=20, location_type=" Home ", seed=0)
+    assert home["location_type"].unique().tolist() == ["home"]
+    assert len(home) == 20
+    # the three kinds of site are really different (evening arrivals at home, midday in public)
+    assert home["hour"].mean() > make_demo_data(n=300, location_type="public", seed=0)["hour"].mean()
+
+
+def test_a_location_type_nobody_recognises_is_labelled_unknown_with_a_warning():
+    df = make_generic(60)
+    df["location_type"] = ["Office"] * 20 + ["CCS"] * 15 + ["Type2"] * 5 + [None] * 10 + ["home"] * 10
+
+    with pytest.warns(UserWarning, match=r"20 sessions have a location_type that is not recognised \('ccs', 'type2'\)"):
+        out = validate_dataframe(df)
+
+    assert out["location_type"].value_counts().to_dict() == {"work": 20, "unknown": 30, "home": 10}
+
+    with warnings_as_errors():                                  # recognised or missing: no warning
+        validate_dataframe(df.assign(location_type=["Office"] * 30 + [None] * 30))
+
+
+def test_a_column_called_type_or_session_id_is_not_mistaken_for_the_site_or_the_user():
+    df = make_generic(30)
+    df["type"] = "CCS"                          # a connector type, not a kind of site
+    df["session_id"] = range(30)                # one per session, not one per user
+
+    out = validate_dataframe(df)
+
+    assert "location_type" not in out.columns and "user_id" not in out.columns
+    assert out["type"].eq("CCS").all() and out["session_id"].nunique() == 30       # kept as they are
+
+
+# ── Dates written as numbers: day/month or month/day is read from the values ──
+
+def raw_with_dates(dates):
+    n = len(dates)
+    return pd.DataFrame({
+        "arrival_time": dates, "duration": [2.0] * n,
+        "energy": [10.0 + i for i in range(n)],               # distinct rows: no duplicate filter
+    })
+
+
+def test_day_first_dates_are_recognised_from_a_day_above_12():
+    """``13/01/2024`` can only be the 13th: the file is day/month/year, and 05/01/2024 is 5 January."""
+    raw = raw_with_dates(["05/01/2024 08:00", "13/01/2024 09:00", "20/02/2024 10:00"] * 10)
+
+    with warnings_as_errors():
+        df = validate_dataframe(raw)
+
+    assert sorted(df["arrival_time"].dt.month.unique()) == [1, 2]            # not 5 and 6
+    assert df["arrival_time"].min() == pd.Timestamp("2024-01-05 08:00")
+
+
+def test_month_first_dates_are_recognised_from_a_second_number_above_12():
+    raw = raw_with_dates(["01/05/2024 08:00", "01/13/2024 09:00"] * 10)
+
+    with warnings_as_errors():
+        df = validate_dataframe(raw)
+
+    assert df["arrival_time"].min() == pd.Timestamp("2024-01-05 08:00")
+    assert df["arrival_time"].max() == pd.Timestamp("2024-01-13 09:00")
+
+
+def test_dates_that_mix_both_orders_are_refused():
+    raw = raw_with_dates(["13/01/2024 08:00", "01/13/2024 09:00"] * 10)
+
+    with pytest.raises(ValueError, match="mix two orders.*13/01/2024.*01/13/2024"):
+        validate_dataframe(raw)
+
+
+def test_dates_no_value_can_settle_warn_and_dayfirst_decides():
+    raw = raw_with_dates(["05/01/2024 08:00", "06/02/2024 09:00"] * 10)
+
+    with pytest.warns(UserWarning, match="no value settles whether the day or the month"):
+        guessed = validate_dataframe(raw)
+    assert guessed["arrival_time"].min() == pd.Timestamp("2024-05-01 08:00")     # month first
+
+    with warnings_as_errors():                                   # told explicitly: no warning
+        day_first = validate_dataframe(raw, dayfirst=True)
+        month_first = validate_dataframe(raw, dayfirst=False)
+        via_loader = load_sessions(raw, dayfirst=True, verbose=False)
+    assert day_first["arrival_time"].min() == pd.Timestamp("2024-01-05 08:00")
+    assert month_first["arrival_time"].min() == pd.Timestamp("2024-05-01 08:00")
+    assert via_loader["arrival_time"].min() == day_first["arrival_time"].min()
+
+
+def test_iso_dates_and_real_timestamps_are_never_ambiguous():
+    with warnings_as_errors():
+        iso = validate_dataframe(raw_with_dates(["2024-01-05 08:00", "2024-02-06 09:00"] * 10))
+        real = validate_dataframe(make_generic())
+    assert iso["arrival_time"].min() == pd.Timestamp("2024-01-05 08:00")
+    assert len(real) == 100
+
+
+def warnings_as_errors():
+    import warnings
+
+    class _Raise(warnings.catch_warnings):
+        def __enter__(self):
+            super().__enter__()
+            warnings.simplefilter("error")
+            return self
+
+    return _Raise()

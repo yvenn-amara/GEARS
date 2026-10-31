@@ -21,7 +21,7 @@ import click
 @click.group()
 @click.version_option(package_name="gears-ev")
 def main():
-    """GEARS – Generating Electric Vehicle Recharging Sessions."""
+    """GEARS - Generating Electric vehicle recharging Sessions."""
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +33,8 @@ def main():
 @click.option("--output", "-o", default="gears_model.joblib", show_default=True,
               help="Path to save the fitted model.")
 @click.option("--n-components", default="auto", show_default=True,
-              help="Number of mixture components ('auto' or an integer).")
+              callback=lambda _ctx, _param, value: _parse_n_components(value),
+              help="Number of mixture components ('auto' or an integer >= 1).")
 @click.option("--max-components", default=10, show_default=True, type=int,
               help="Upper bound of the BIC search when --n-components is 'auto'.")
 @click.option("--stratify-by", default=None,
@@ -66,7 +67,7 @@ def fit(data_path, output, n_components, max_components, stratify_by,
     from gears.pipeline import GEARSModel
 
     model = GEARSModel(
-        n_components=int(n_components) if n_components.isdigit() else n_components,
+        n_components=n_components,
         max_components=max_components,
         stratify_by=_split_columns(stratify_by),
         max_samples_per_context=max_samples_per_context,
@@ -77,9 +78,12 @@ def fit(data_path, output, n_components, max_components, stratify_by,
         n_scenarios=scenarios,
         random_state=seed,
     )
-    model.fit(data_path, verbose=verbose)
+    try:
+        model.fit(data_path, verbose=verbose)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
     model.save(output)
-    click.echo(f"✓ Model saved to {output}")
+    click.echo(f"Model saved to {output}")
 
 
 # ---------------------------------------------------------------------------
@@ -131,8 +135,14 @@ def simulate(model, pretrained, start, horizon, scenarios, n_sessions, output, c
         )
     except ValueError as e:
         raise click.ClickException(str(e)) from e
-    m.export(sessions, output)
-    click.echo(f"✓ {len(sessions):,} sessions written to {output}")
+    # a file for people: timestamps to the second, numbers to 4 decimals
+    out = sessions.copy()
+    for column in out.select_dtypes(include="datetime").columns:
+        out[column] = out[column].dt.floor("s")
+    floats = out.select_dtypes(include="floating").columns
+    out[floats] = out[floats].round(4)
+    m.export(out, output)
+    click.echo(f"{len(sessions):,} sessions written to {output}")
 
 
 def _parse_context(items: tuple[str, ...], gmm) -> dict | None:
@@ -168,6 +178,15 @@ def _parse_context(items: tuple[str, ...], gmm) -> dict | None:
                 ) from None
         context[key] = value
     return context
+
+
+def _parse_n_components(value: str) -> int | str:
+    """'auto' stays a string; a whole number >= 1 becomes an int; anything else is refused."""
+    if value == "auto":
+        return value
+    if value.isdigit() and int(value) >= 1:
+        return int(value)
+    raise click.BadParameter(f"{value!r} is not 'auto' or a whole number >= 1.")
 
 
 def _split_columns(value: str | None) -> list[str] | None:

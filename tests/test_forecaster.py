@@ -34,6 +34,21 @@ def make_sessions(n=300, seed=0):
     }))
 
 
+def make_weekly_sessions(weeks=12, weekday=40, weekend=3, seed=0):
+    """From Monday 2024-01-01 to a Sunday: about 40 sessions on a weekday, 3 on a weekend day."""
+    rng = np.random.default_rng(seed)
+    rows = [
+        {
+            "arrival_time": day + pd.Timedelta(hours=float(rng.uniform(7, 21))),
+            "duration": 2.0,
+            "energy": 10.0,
+        }
+        for day in pd.date_range("2024-01-01", periods=7 * weeks)
+        for _ in range(max(int(rng.normal(weekend if day.day_of_week >= 5 else weekday, 2)), 1))
+    ]
+    return validate_dataframe(pd.DataFrame(rows))
+
+
 def make_gap_sessions(n_per_day=3, seed=42):
     """Three sessions a day from 2024-01-01 to 03-31, nothing until 04-15, then up to 06-30."""
     rng = np.random.default_rng(seed)
@@ -106,6 +121,89 @@ def test_sarima_gives_one_non_negative_trajectory_per_scenario_from_the_start_da
     assert len(pred) == 50 and pred["scenario"].nunique() == 10
     assert pd.Timestamp(pred["date"].min()) == pd.Timestamp("2025-01-01")
     assert (pred["n_sessions"] >= 0).all()
+
+
+# ── SARIMA and public holidays ────────────────────────────────────────────────
+
+def make_holiday_sessions(start="2024-09-02", end="2025-04-13", weekday=40, weekend=3, holiday=4, seed=0):
+    """Daily sessions with a planted calendar: a normal weekday ~40, a weekend day ~3, a French holiday ~4."""
+    import holidays as hol
+
+    rng = np.random.default_rng(seed)
+    calendar = hol.country_holidays("FR")
+    rows = []
+    for day in pd.date_range(start, end):
+        level = holiday if day.date() in calendar else (weekend if day.day_of_week >= 5 else weekday)
+        for _ in range(max(int(rng.normal(level, 1)), 1)):
+            rows.append({
+                "arrival_time": day + pd.Timedelta(hours=float(rng.uniform(7, 21))),
+                "duration": 2.0,
+                "energy": 10.0,
+            })
+    return validate_dataframe(pd.DataFrame(rows))
+
+
+@pytest.fixture(scope="module")
+def holiday_history():
+    return make_holiday_sessions()
+
+
+def test_sarima_with_holidays_forecasts_the_quiet_holiday_it_learned(holiday_history):
+    # Monday 2025-04-21 is Easter Monday; the days around it are ordinary Mondays and weekdays
+    forecaster = SessionForecaster(method="sarima", use_holidays=True, country="FR").fit(holiday_history)
+    assert forecaster.method_ == "sarima", "the test needs SARIMA to fit; it would prove nothing"
+
+    means = mean_per_date(forecaster.predict(horizon=14, n_scenarios=300, seed=0, start_date="2025-04-14"))
+
+    assert means[pd.Timestamp("2025-04-21")] < 0.5 * means[pd.Timestamp("2025-04-14")], (
+        "the training data have ~4 sessions on public holidays and ~40 on other weekdays, "
+        f"so Easter Monday must be forecast far below an ordinary Monday:\n{means}"
+    )
+
+
+def test_sarima_without_holidays_does_not_see_the_holiday(holiday_history):
+    forecaster = SessionForecaster(method="sarima", use_holidays=False).fit(holiday_history)
+
+    means = mean_per_date(forecaster.predict(horizon=14, n_scenarios=300, seed=0, start_date="2025-04-14"))
+
+    assert means[pd.Timestamp("2025-04-21")] > 0.7 * means[pd.Timestamp("2025-04-14")], (
+        "without the holiday regressor, Easter Monday is an ordinary Monday: this is the control "
+        f"of the test above:\n{means}"
+    )
+
+
+def test_the_holiday_dummy_reaches_the_fitted_sarima_model(holiday_history):
+    with_holidays = SessionForecaster(method="sarima", use_holidays=True).fit(holiday_history)
+    without = SessionForecaster(method="sarima", use_holidays=False).fit(holiday_history)
+
+    assert "x1" in with_holidays._model.arima_res_.param_names, "the regressor was dropped when fitting"
+    assert "x1" not in without._model.arima_res_.param_names
+
+
+def test_the_statsmodels_fallback_learns_the_holiday_too(holiday_history, monkeypatch):
+    monkeypatch.setitem(sys.modules, "pmdarima", None)          # makes `import pmdarima` fail
+    with pytest.warns(UserWarning, match="pmdarima could not be imported"):
+        forecaster = SessionForecaster(method="sarima", use_holidays=True).fit(holiday_history)
+    assert forecaster.method_ == "sarima"
+
+    means = mean_per_date(forecaster.predict(horizon=14, n_scenarios=300, seed=0, start_date="2025-04-14"))
+
+    assert means[pd.Timestamp("2025-04-21")] < 0.5 * means[pd.Timestamp("2025-04-14")], means
+
+
+def test_a_history_without_any_holiday_is_fitted_without_the_regressor():
+    import warnings
+
+    # eight weeks, 2024-02-05 to 2024-03-31: no French public holiday in them
+    history = make_holiday_sessions(start="2024-02-05", end="2024-03-31")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        forecaster = SessionForecaster(method="sarima", use_holidays=True).fit(history)
+        forecast = forecaster.predict(horizon=7, n_scenarios=3, seed=0)
+
+    assert forecaster.method_ == "sarima" and forecaster._exog_train is None
+    assert "x1" not in forecaster._model.arima_res_.param_names
+    assert len(forecast) == 21
 
 
 # ── The interface shared by the forecasters ───────────────────────────────────
@@ -190,3 +288,68 @@ def test_nhits_defaults_keep_the_context_window_short_and_the_series_scaled():
     assert NHiTSForecaster(horizon=30).input_size == 60
     assert NHiTSForecaster(horizon=14, input_size=20).input_size == 20
     assert NHiTSForecaster().scaler_type == "standard"
+
+
+# ---------------------------------------------------------------------------
+# SARIMA: a forecast that starts later than the day after the data keeps the weekdays
+# ---------------------------------------------------------------------------
+
+def mean_per_date(forecast):
+    return forecast.groupby("date")["n_sessions"].mean()
+
+
+@pytest.fixture(scope="module")
+def weekly_sarima():
+    """SARIMA fitted on 12 weeks that end on Sunday 2024-03-24: weekends are almost empty."""
+    forecaster = SessionForecaster(method="sarima").fit(make_weekly_sessions())
+    assert forecaster.method_ == "sarima", "the test needs SARIMA to fit; it would prove nothing"
+    return forecaster
+
+
+def test_sarima_gives_a_late_start_date_the_forecast_of_its_own_weekdays(weekly_sarima):
+    # starts on a Thursday, three days after the day that follows the data
+    late = mean_per_date(weekly_sarima.predict(horizon=7, n_scenarios=300, seed=0,
+                                               start_date="2024-03-28"))
+    weekend = late[late.index.day_of_week >= 5]
+    weekdays = late[late.index.day_of_week < 5]
+    assert list(late.index.day_name()[:3]) == ["Thursday", "Friday", "Saturday"]
+    assert weekend.max() < 0.25 * weekdays.min(), (
+        "Saturday and Sunday are the quiet days of the training data; a forecast shifted "
+        f"by the gap would put its quiet days elsewhere:\n{late}"
+    )
+    # same dates as seen from the day after the data: the same forecast, up to the noise
+    early = mean_per_date(weekly_sarima.predict(horizon=14, n_scenarios=300, seed=0))
+    both = late.index.intersection(early.index)
+    assert len(both) == 7
+    assert (late[both] - early[both]).abs().max() < 4
+
+
+def test_sarima_forecast_far_after_the_data_warns_once_and_keeps_the_weekdays(weekly_sarima):
+    forecaster = SessionForecaster(method="sarima").fit(make_weekly_sessions())
+    with pytest.warns(UserWarning, match=r"starts 98 days after the last day of the training data"):
+        far = forecaster.predict(horizon=7, n_scenarios=300, seed=1, start_date="2024-07-01")
+    assert far["date"].iloc[0].day_name() == "Monday"
+    means = mean_per_date(far)
+    # three months out the level has drifted a little: the weekend is still the quiet part
+    assert means[means.index.day_of_week >= 5].max() < 0.4 * means[means.index.day_of_week < 5].min()
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        forecaster.predict(horizon=7, n_scenarios=2, seed=1, start_date="2024-07-01")  # once
+
+
+def test_sarima_cannot_start_in_the_past_but_keeps_the_weekdays_and_says_so(weekly_sarima):
+    forecaster = SessionForecaster(method="sarima").fit(make_weekly_sessions())
+    with pytest.warns(UserWarning, match=r"not after the last day of the training data"):
+        past = forecaster.predict(horizon=7, n_scenarios=300, seed=2, start_date="2024-02-03")
+    means = mean_per_date(past)
+    assert past["date"].iloc[0].day_name() == "Saturday"
+    assert means[means.index.day_of_week >= 5].max() < 0.25 * means[means.index.day_of_week < 5].min()
+
+
+def test_the_default_start_is_the_day_after_the_data_and_triggers_no_warning(weekly_sarima):
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        forecast = weekly_sarima.predict(horizon=7, n_scenarios=2, seed=0)
+    assert forecast["date"].iloc[0] == pd.Timestamp("2024-03-25")

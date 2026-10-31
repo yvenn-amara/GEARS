@@ -1,47 +1,44 @@
 """
 Session-count forecasters for GEARS.
 
-Three forecasters with a unified interface:
+Four forecasters with a unified interface:
 
 1. **SessionForecaster** (SARIMA / probabilistic)
-   - SARIMA noise scale uses full training std (not 10%) for realistic 90% CI coverage.
    Fits on historical daily session counts using SARIMA (via pmdarima or
-   statsmodels) or a simple normal-distribution assumption.
+   statsmodels) or a simple normal-distribution assumption.  The noise added
+   to the SARIMA point forecast uses the full training standard deviation, so
+   that the 90 % interval has a realistic coverage.
 
-2. **TransformerForecaster** (PatchTST, optional)
-   State-of-the-art transformer for time-series (Nie et al., ICLR 2023).
-   Requires the ``[dl]`` optional extra::
-
-       pip install "gears-ev[dl]"
-
-   The package works fully without it — if PyTorch / neuralforecast are not
-   installed a clear ImportError is raised with installation instructions,
-   and all other GEARS functionality remains available.
-
-3. **PersistenceForecaster**
+2. **PersistenceForecaster**
    Naive baseline: forecast = value from the same weekday N weeks ago.
    Useful as a baseline comparison to quantify the value of SARIMA / transformer.
 
-4. **NHiTSForecaster** (NHiTS, optional)
-   NHiTS (Challu et al., AAAI 2023). Requires PyTorch and neuralforecast::
+3. **TransformerForecaster** (PatchTST, optional)
+   Transformer for time series (Nie et al., ICLR 2023). Requires the ``[dl]``
+   optional extra::
 
        pip install "gears-ev[dl]"
 
+   The package works fully without it: if PyTorch / neuralforecast are not
+   installed, a clear ImportError gives the installation instructions, and all
+   other GEARS functionality remains available.
+
+4. **NHiTSForecaster** (NHiTS, optional)
+   NHiTS (Challu et al., AAAI 2023), same ``[dl]`` extra.
+
    Implementation notes
    --------------------
-   - input_size default: ``2 * horizon`` (reduced from ``4 * horizon``),
-     additionally hard-capped at ``n_train // 2`` inside ``fit()``.  The
-     old default of 360 days for horizon=90 consumed ≥ 80 % of a typical
-     training set as context window, leaving too few gradient windows and
-     causing instability or memorisation of recent values.
-   - scaler_type="standard": NeuralForecast normalises y internally when
-     this is set.  Without it, raw session counts (0–200) produce erratic
-     gradients whose scale is ~100× larger than normalised targets.
-   - The public ``fit()`` method exposes ``input_size`` as a keyword
-     argument so callers can override without subclassing.
+   - ``input_size`` defaults to ``2 * horizon`` and is hard-capped at
+     ``n_train // 2`` inside ``fit()``: a longer context window leaves too few
+     training windows and makes the model unstable or prone to memorising the
+     most recent values.
+   - ``scaler_type="standard"``: NeuralForecast normalises ``y`` internally.
+     Without it, raw session counts (0-200) give erratic gradients.
+   - ``fit()`` exposes ``input_size`` as a keyword argument so callers can
+     override it without subclassing.
 
 All forecasters share the same ``fit(df)`` / ``predict(horizon, ...)`` interface
-so they can be swapped transparently in notebooks and pipeline code.
+so they can be swapped transparently in scripts and pipeline code.
 """
 
 from __future__ import annotations
@@ -158,8 +155,10 @@ class SessionForecaster:
     seasonal_period : int
         Seasonal period for SARIMA (7 = weekly, default).
     use_holidays : bool
-        If True, add a French bank-holiday dummy as an exogenous regressor
-        in SARIMA.  Requires the ``holidays`` package (installed by default).
+        If True, add a public-holiday dummy as an exogenous regressor in SARIMA, so that
+        a holiday is forecast like the holidays of the history. Requires the ``holidays``
+        package (installed by default). A history that contains no holiday is fitted
+        without the regressor.
     country : str
         ISO 3166-1 alpha-2 country code for the holiday calendar (default 'FR').
     max_p, max_q, max_P, max_Q : int
@@ -202,6 +201,7 @@ class SessionForecaster:
         self._daily_counts: pd.Series | None = None
         self._exog_train: np.ndarray | None = None
         self._predict_failure_warned = False
+        self._gap_warned = False
         self.is_fitted_: bool = False
 
     def fit(self, df: pd.DataFrame) -> SessionForecaster:
@@ -237,6 +237,7 @@ class SessionForecaster:
         self.std_daily_ = std if np.isfinite(std) else 0.0
         self._model = None
         self._predict_failure_warned = False
+        self._gap_warned = False
         self.method_ = self.method
 
         n = len(self._daily_counts)
@@ -264,7 +265,13 @@ class SessionForecaster:
 
     def _try_fit_sarima(self) -> str | None:
         """Fit the SARIMA model; return ``None`` on success, else why it failed."""
-        self._exog_train = self._build_holiday_exog(self._daily_counts.index)
+        exog = self._build_holiday_exog(self._daily_counts.index)
+        if exog is not None and not (exog.any() and not exog.all()):
+            # A dummy that never changes in the history (no public holiday in it) tells
+            # nothing and only perturbs the fit: leave it out, for the forecasts as well.
+            logger.info("No public holiday in the history: SARIMA is fitted without the holiday regressor.")
+            exog = None
+        self._exog_train = exog
         try:
             import pmdarima as pm
         except Exception as e:  # noqa: BLE001 - a broken binary install raises more than ImportError
@@ -284,7 +291,7 @@ class SessionForecaster:
             else:
                 self._model = pm.auto_arima(
                     self._daily_counts.values,
-                    exogenous=self._exog_train,
+                    X=self._exog_train,
                     seasonal=True,
                     m=self.seasonal_period,
                     max_p=self.max_p,
@@ -312,7 +319,7 @@ class SessionForecaster:
         )
         try:
             fc = np.asarray(
-                self._point_forecast(horizon, self._build_holiday_exog(dates)), dtype=float
+                self._point_forecast(horizon, self._future_exog(dates)), dtype=float
             )
         except Exception as e:  # noqa: BLE001 - a model that cannot forecast has failed
             return f"it cannot forecast: {type(e).__name__}: {e}"
@@ -323,6 +330,10 @@ class SessionForecaster:
                 f"against at most {int(self._daily_counts.max())} observed"
             )
         return None
+
+    def _future_exog(self, dates: pd.DatetimeIndex) -> np.ndarray | None:
+        """Holiday dummy of the days to forecast, or None when the model was fitted without one."""
+        return self._build_holiday_exog(dates) if self._exog_train is not None else None
 
     def _build_holiday_exog(
         self,
@@ -406,6 +417,9 @@ class SessionForecaster:
             Number of stochastic scenarios (> 1 enables Monte-Carlo uncertainty).
         start_date : str or Timestamp, optional
             First forecasted date. Defaults to the day after the last training date.
+            With SARIMA each requested date gets the forecast of its own weekday, also
+            when it is later than that day (the days in between are forecast and
+            dropped).
         seed : int, optional
             Random seed for scenario noise.
 
@@ -421,6 +435,14 @@ class SessionForecaster:
         ValueError
             If ``horizon`` or ``n_scenarios`` is not an integer >= 1, or
             ``start_date`` is not a valid date.
+
+        Warns
+        -----
+        UserWarning
+            With SARIMA, once, when ``start_date`` is more than four weeks after the
+            training data (the uncertainty grows with the distance) or inside the
+            training period (a forecast cannot start in the past: the weekly pattern
+            and the level at the end of the data are reused for the same weekdays).
         """
         self._check_fitted()
         horizon = check_int(horizon, "horizon", minimum=1, meaning="number of days to forecast")
@@ -432,13 +454,61 @@ class SessionForecaster:
         start_date = self._resolve_start(start_date)
         dates = pd.date_range(start_date, periods=horizon, freq="D")
 
-        # Build holiday exog for the forecast period (same structure as training)
-        future_exog = self._build_holiday_exog(dates)
+        # SARIMA forecasts the days that follow the training data. When the requested
+        # window starts later, the days in between are forecast and dropped, so that
+        # each requested date gets the forecast of its own weekday (and holiday).
+        skip, step_dates = self._sarima_steps(dates)
+        future_exog = self._future_exog(step_dates)
 
         matrix = np.stack(
-            [self._forecast_one_scenario(horizon, rng, future_exog) for _ in range(n_scenarios)]
+            [
+                self._forecast_one_scenario(horizon, rng, future_exog, skip)
+                for _ in range(n_scenarios)
+            ]
         )
         return _make_forecast_df(dates, matrix)
+
+    def _sarima_steps(self, dates: pd.DatetimeIndex) -> tuple[int, pd.DatetimeIndex]:
+        """How many SARIMA steps to skip before the requested ``dates``.
+
+        Returns ``(skip, step_dates)``: ``skip`` days that follow the training data are
+        forecast and dropped; ``step_dates`` are the dates of all ``skip + len(dates)``
+        steps (used for the holiday dummy). Nothing is skipped when SARIMA is not the
+        method in use. A window that starts inside the training period cannot be
+        forecast as such: the weekly pattern and the level at the end of the data are
+        reused for the same weekdays, and a ``UserWarning`` says so.
+        """
+        if self.method_ != "sarima" or self._model is None:
+            return 0, dates
+        first = self._daily_counts.index[-1] + pd.Timedelta(days=1)
+        delta = (dates[0] - first).days
+        if delta >= 0:
+            skip = delta
+            if skip > 4 * self.seasonal_period and not self._gap_warned:
+                self._gap_warned = True
+                warnings.warn(
+                    f"The forecast starts {skip} days after the last day of the training "
+                    "data. SARIMA extrapolates the level and trend of the end of the data, "
+                    "and its uncertainty grows with the distance, which the simulated "
+                    "noise does not. Refit on recent data for a forecast you can rely on. "
+                    "(This warning is shown once.)",
+                    UserWarning,
+                    stacklevel=4,
+                )
+        else:
+            skip = delta % self.seasonal_period     # same weekday, first day after the data
+            if not self._gap_warned:
+                self._gap_warned = True
+                warnings.warn(
+                    f"start_date {dates[0].date()} is not after the last day of the training "
+                    f"data ({(first - pd.Timedelta(days=1)).date()}): a forecast cannot "
+                    "start in the past. The weekly pattern and the level at the end of the "
+                    "data are used for the same weekdays. (This warning is shown once.)",
+                    UserWarning,
+                    stacklevel=4,
+                )
+        lead = pd.date_range(first, periods=skip, freq="D")
+        return skip, lead.append(dates)
 
     def _check_fitted(self) -> None:
         """Raise ``NotFittedError`` if ``fit()`` has not been called."""
@@ -468,6 +538,7 @@ class SessionForecaster:
     def _forecast_one_scenario(
         self, horizon: int, rng: np.random.Generator,
         future_exog: np.ndarray | None = None,
+        skip: int = 0,
     ) -> np.ndarray:
         """Generate one stochastic forecast trajectory.
 
@@ -483,7 +554,11 @@ class SessionForecaster:
         rng : np.random.Generator
             Seeded random generator for noise draws.
         future_exog : np.ndarray or None
-            Holiday dummy for the forecast window, shape ``(horizon, 1)``.
+            Holiday dummy for the ``skip + horizon`` forecast steps, shape
+            ``(skip + horizon, 1)``.
+        skip : int
+            Days between the end of the training data and the first requested day: they
+            are forecast, then dropped.
 
         Returns
         -------
@@ -497,7 +572,13 @@ class SessionForecaster:
             return np.full(horizon, self.mean_daily_)
 
         try:
-            fc = self._point_forecast(horizon, future_exog)
+            fc = self._point_forecast(skip + horizon, future_exog)[skip:]
+            ceiling = SARIMA_DIVERGENCE_FACTOR * max(float(self._daily_counts.max()), 1.0)
+            if not np.isfinite(fc).all() or fc.max() > ceiling:     # below 0 is clipped to 0
+                raise FloatingPointError(
+                    f"the forecast diverges (up to {np.nanmax(fc):,.0f} sessions/day "
+                    f"against at most {int(self._daily_counts.max())} observed)"
+                )
         except Exception as e:  # noqa: BLE001 - any SARIMA failure falls back to the mean, announced below
             if not self._predict_failure_warned:
                 self._predict_failure_warned = True
@@ -511,10 +592,9 @@ class SessionForecaster:
                 )
             return np.full(horizon, self.mean_daily_)
 
-        # Use the full training std as noise scale so that the 90 % CI achieves
-        # ~87 % empirical coverage.  A small fraction (e.g. 0.1 × std) was used
-        # historically and produced only ~33 % coverage — a serious underestimate
-        # of real forecast uncertainty.
+        # The full training std is the noise scale: a small fraction of it
+        # (e.g. 0.1 x std) gives a 90 % interval that covers only about a third
+        # of the observations, a serious underestimate of the real uncertainty.
         noise_scale = max(self.std_daily_, 1.0)
         fc = fc + rng.normal(0, noise_scale, horizon)
         return np.maximum(0, fc)

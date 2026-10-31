@@ -5,10 +5,11 @@ Implements a time-shiftable greedy scheduler: given a price (or RES)
 signal, each session is scheduled to charge at the cheapest available
 time slots within its connection window, subject to power constraints.
 
-This is a **V1G** (Vehicle-to-Grid, unidirectional) strategy — the
+This is a **V1G** (unidirectional smart charging) strategy — the
 charger can shift load in time but **cannot** feed energy back to the
-grid (no V2G).  The optimiser therefore only moves charging demand
-forward or backward within each vehicle's connection window.
+grid (that would be V2G, Vehicle-to-Grid).  The optimiser therefore only
+moves charging demand forward or backward within each vehicle's
+connection window.
 """
 
 from __future__ import annotations
@@ -137,9 +138,12 @@ class SmartChargingOptimizer:
             Original sessions with additional columns:
 
             - ``cost_smart`` (€): cost when charging in the best slots (for a
-              RES signal: green-weighted energy, higher is better).
-            - ``cost_plug`` (€): cost under plug-and-charge (first slots).
-            - ``savings_pct`` (%): relative saving vs. plug-and-charge.
+              RES signal: green-weighted energy in kWh, higher is better).
+            - ``cost_plug`` (€): cost under plug-and-charge (first slots) (for a
+              RES signal: green-weighted energy in kWh).
+            - ``savings_pct`` (%): relative saving vs. plug-and-charge (for a RES
+              signal: relative *gain* of green-weighted energy; positive is better
+              in both cases).
             - ``scheduled_start`` (``pd.Timestamp``): start of the first
               charging interval of the optimised plan (never before arrival).
             - ``scheduled_end`` (``pd.Timestamp``): end of the last charging
@@ -166,8 +170,7 @@ class SmartChargingOptimizer:
         # Remove any output columns left over from a prior optimise() call.
         _output_cols = ["cost_smart", "cost_plug", "savings_pct",
                         "scheduled_start", "scheduled_end", "energy_scheduled"]
-        sessions.drop(columns=[c for c in _output_cols if c in sessions.columns],
-                      inplace=True)
+        sessions = sessions.drop(columns=[c for c in _output_cols if c in sessions.columns])
 
         if not isinstance(signal.index, pd.DatetimeIndex):
             raise TypeError(
@@ -265,10 +268,15 @@ class SmartChargingOptimizer:
         mask = sessions["cost_plug"].notna() & (sessions["cost_plug"] > 0)
         sessions["savings_pct"] = np.nan
         sessions.loc[mask, "savings_pct"] = (
-            (sessions.loc[mask, "cost_plug"] - sessions.loc[mask, "cost_smart"])
+            self._improvement(sessions.loc[mask, "cost_plug"], sessions.loc[mask, "cost_smart"])
             / sessions.loc[mask, "cost_plug"] * 100
         )
         return sessions
+
+    def _improvement(self, plug, smart):
+        """What smart charging gains over plug-and-charge: a lower cost (price signal)
+        or a higher green-weighted energy (RES signal). Positive means better."""
+        return plug - smart if self.signal_type == "price" else smart - plug
 
     @staticmethod
     def _fill(order: np.ndarray, capacity: np.ndarray, needed: float) -> np.ndarray:
@@ -378,7 +386,7 @@ class SmartChargingOptimizer:
         Returns
         -------
         dict
-            Keys:
+            For a price signal, the keys are:
 
             - ``total_cost_smart_eur`` (float): total charging cost with V1G.
             - ``total_cost_plug_eur`` (float): total cost under plug-and-charge.
@@ -386,6 +394,11 @@ class SmartChargingOptimizer:
             - ``mean_savings_pct`` (float): average percentage saving per session.
             - ``n_sessions_optimised`` (int): sessions for which optimisation
               was possible (i.e. at least one feasible slot existed).
+
+            For a RES signal the costs are green-weighted energies, so the keys say
+            so: ``green_kwh_smart``, ``green_kwh_plug``, ``green_kwh_gain`` (more
+            renewable energy used), ``mean_gain_pct`` and ``n_sessions_optimised``.
+            All numbers are plain Python floats and ints.
 
         Examples
         --------
@@ -397,14 +410,22 @@ class SmartChargingOptimizer:
         valid = result[result["cost_plug"].notna()].copy()
         if valid.empty:
             return {}
+        smart, plug = float(valid["cost_smart"].sum()), float(valid["cost_plug"].sum())
+        mean_pct = round(float(valid["savings_pct"].mean()), 2)
+        if self.signal_type == "res":
+            return {
+                "green_kwh_smart": round(smart, 2),
+                "green_kwh_plug": round(plug, 2),
+                "green_kwh_gain": round(smart - plug, 2),
+                "mean_gain_pct": mean_pct,
+                "n_sessions_optimised": int(len(valid)),
+            }
         return {
-            "total_cost_smart_eur": round(valid["cost_smart"].sum(), 2),
-            "total_cost_plug_eur": round(valid["cost_plug"].sum(), 2),
-            "total_savings_eur": round(
-                (valid["cost_plug"] - valid["cost_smart"]).sum(), 2
-            ),
-            "mean_savings_pct": round(valid["savings_pct"].mean(), 2),
-            "n_sessions_optimised": len(valid),
+            "total_cost_smart_eur": round(smart, 2),
+            "total_cost_plug_eur": round(plug, 2),
+            "total_savings_eur": round(plug - smart, 2),
+            "mean_savings_pct": mean_pct,
+            "n_sessions_optimised": int(len(valid)),
         }
 
     # ------------------------------------------------------------------

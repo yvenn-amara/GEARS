@@ -9,7 +9,7 @@ Growth profiles
 Three growth models are available (see module-level functions). All three
 are anchored so that ``growth(t=0) == base_sessions_per_day`` exactly — no
 discontinuity between "current observed fleet" and the simulated trajectory
-(see Session 6 fix note below).
+(see "Design notes" below).
 
 linear_growth_profile
     Genuinely linear year-on-year growth: ``base * (1 + rate * t)``. Best for
@@ -29,26 +29,21 @@ bass_diffusion_profile
     adopt independently, and *imitators* (q) who adopt after social contact.
     Typical EV parameters: p ≈ 0.03, q ≈ 0.38.
 
-Session 6 fix note
--------------------
-Two earlier profiles (`s_curve_linear_tail_profile`, `double_s_curve_profile`)
-were removed: with the base-anchoring and horizon-relative-timing fixes below
-applied to `s_curve_growth_profile`, both added extra hyperparameters without
-materially differentiated behaviour for this package's three canonical
-adoption scenarios (conservative/central/ambitious). Two bugs were fixed in the three remaining profiles, both found by
-tracing concrete numbers rather than assumed:
-(1) `s_curve_growth_profile` and `bass_diffusion_profile` did not actually
-start at `base_sessions_per_day` at t=0 (s_curve started at ~2-7% of the
-asymptote depending on parameters; bass started at exactly 0) — a real
-discontinuity when a scenario is meant to start "from the current observed
-fleet, not zero". Both are now rescaled so growth(0) == base exactly.
-(2) `s_curve_growth_profile`'s `midpoint_year`/`steepness` were fixed
-absolute constants independent of the `years` horizon, so with the old
-defaults the curve was 100% saturated by year 8 *regardless of whether a
-3-year or a 20-year simulation was requested* — the actual mechanism behind
-the "plateau" observed in notebook 3's long-term scenarios. Defaults are now
-`years / 2` and `6 / years` respectively, so the curve reaches ~95% of its
-asymptote at t=years for any requested horizon.
+Design notes
+------------
+Only three profiles are offered, one per canonical adoption scenario
+(conservative / central / ambitious); extra hyperparameters would not
+differentiate them. Each profile is built so that:
+
+- ``growth(t=0) == base_sessions_per_day`` exactly. A scenario starts from the
+  current observed fleet, not from zero: the logistic and Bass curves are
+  rescaled so that no jump appears between the observed baseline and the
+  simulated trajectory.
+- the logistic curve spans the requested horizon. ``midpoint_year`` and
+  ``steepness`` default to ``years / 2`` and ``6 / years``, so the curve
+  reaches about 95 % of its asymptote at ``t = years`` whether 3 or 20 years
+  are simulated (fixed constants would saturate it after the same number of
+  years whatever the horizon, giving a plateau in long scenarios).
 
 Simulation speed
 ----------------
@@ -60,6 +55,7 @@ are batched together, dramatically reducing Python overhead on long horizons.
 from __future__ import annotations
 
 import logging
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -83,11 +79,8 @@ def linear_growth_profile(
     """
     Daily session counts with constant year-on-year growth.
 
-    Genuinely linear in elapsed time: ``base * (1 + annual_growth_rate * t)``.
-    (An earlier version of this function computed compound/exponential growth,
-    ``base * (1 + rate) ** t``, despite its name — a real bug, not a design
-    choice: fixed in Session 6, traced by comparing
-    the two formulas' year-15 output directly.)
+    Linear in elapsed time: ``base * (1 + annual_growth_rate * t)``, not the
+    compound growth ``base * (1 + rate) ** t``.
 
     Parameters
     ----------
@@ -130,12 +123,11 @@ def s_curve_growth_profile(
 
     Rescaled so the curve is anchored exactly at ``base_sessions_per_day`` at
     t=0 and approaches ``base_sessions_per_day * saturation_factor`` as an
-    asymptote. (A raw logistic curve with the old default parameters was only
-    ~2.3% of its asymptote at t=0 regardless of `base_sessions_per_day` — a
-    real discontinuity, not a design choice, when a scenario is meant to
-    start "from the current observed fleet, not zero". Fixed in Session 6 by
-    subtracting the raw curve's own t=0 value and rescaling the remainder to
-    span exactly [base, base*saturation_factor].)
+    asymptote. A raw logistic curve starts at a few percent of its asymptote,
+    which would be a discontinuity when a scenario is meant to start "from the
+    current observed fleet, not zero": the raw curve's own t=0 value is
+    subtracted and the remainder is rescaled to span exactly
+    [base, base * saturation_factor].
 
     Parameters
     ----------
@@ -199,15 +191,11 @@ def bass_diffusion_profile(
 
     Anchored so the curve equals ``base_sessions_per_day`` exactly at t=0 and
     approaches ``base_sessions_per_day * market_potential_factor`` as an
-    asymptote. (The textbook Bass formulation models cumulative adopters of a
-    brand-new product diffusing from zero — appropriate when there truly are
-    no adopters yet, but wrong here: applied directly to
-    `base_sessions_per_day`, it made the simulated trajectory start at a
-    literal zero sessions/day, a hard discontinuity from whatever the real
-    current baseline is. Confirmed by tracing the raw output: t=0 was exactly
-    0 regardless of `base_sessions_per_day`. Fixed in Session 6 by treating
-    the Bass cumulative-adoption fraction F(t) as tracking growth *beyond*
-    the current base rather than adoption from scratch.)
+    asymptote. The textbook Bass formulation models the cumulative adopters
+    of a brand-new product diffusing from zero, which is wrong when there is
+    already a fleet: applied directly, the trajectory would start at zero
+    sessions per day. Here the cumulative-adoption fraction F(t) tracks the
+    growth *beyond* the current base instead of adoption from scratch.
 
     Parameters
     ----------
@@ -242,13 +230,8 @@ def bass_diffusion_profile(
     return pd.Series(N, index=dates, name="n_sessions_expected")
 
 
-# Growth profile registry
-# Reduced from 5 to 3 in Session 6 (see module docstring "Session 6 fix note"
-# for the justification: `s_curve_linear_tail_profile`
-# and `double_s_curve_profile` added extra hyperparameters without materially
-# differentiated behaviour once the base-anchoring and horizon-relative-timing
-# bugs in `s_curve_growth_profile` were fixed, and neither mapped to any of
-# this package's three canonical adoption scenarios).
+# Growth profile registry: one profile per canonical adoption scenario
+# (see the module docstring, "Design notes").
 GROWTH_PROFILES = {
     "linear": linear_growth_profile,
     "s_curve": s_curve_growth_profile,
@@ -294,11 +277,9 @@ class MediumTermSimulator:
     charger_mix : dict, optional
         Power distribution e.g. {7.4: 0.3, 22.0: 0.7} (auto-normalised).
     growth_model : str
-        One of: 'linear', 's_curve', 'bass'. Set at construction time (not a
-        `.simulate()` argument — passing `growth_model=` to `.simulate()` is
-        silently ignored, since it isn't a growth-profile-function parameter;
-        this was already true before Session 6 and the class-level example
-        below was previously wrong about it).
+        One of: 'linear', 's_curve', 'bass'. Set at construction time, not in
+        `.simulate()`, which only takes the parameters of the chosen profile
+        (anything else raises a ``ValueError``).
     n_scenarios : int
     seed : int
 
@@ -343,7 +324,7 @@ class MediumTermSimulator:
     def simulate(
         self,
         years: float = 3,
-        annual_growth_rate: float = 0.15,
+        annual_growth_rate: float | None = None,
         start_date: str | pd.Timestamp | None = None,
         output: str = "daily_energy",
         weather_factor: dict[str, float] | None = None,
@@ -358,12 +339,13 @@ class MediumTermSimulator:
         ----------
         years : float
             Simulation horizon (any positive value, no upper limit).
-        annual_growth_rate : float
-            Annual growth rate, used only by the 'linear' growth model
-            (silently ignored by 's_curve'/'bass', which take their own
-            shape parameters — `saturation_factor`/`midpoint_year`/
-            `steepness` or `market_potential_factor`/`p`/`q` — via
-            `**growth_kwargs` below).
+        annual_growth_rate : float, optional
+            Annual growth rate of the 'linear' growth model (default 0.15). The
+            's_curve' and 'bass' models take their own shape parameters
+            (``saturation_factor``/``midpoint_year``/``steepness`` or
+            ``market_potential_factor``/``p``/``q``) through ``**growth_kwargs``
+            below; giving them an ``annual_growth_rate`` raises a ``UserWarning``
+            (it would change nothing).
         start_date : str or Timestamp, optional
             Start of the simulation. Defaults to today.
         output : str
@@ -383,13 +365,16 @@ class MediumTermSimulator:
             the mean daily count of the fitted contexts that match ``context``,
             not of all of them.
         **growth_kwargs
-            Extra keyword arguments forwarded to the growth profile function
-            (e.g. ``saturation_factor``, ``midpoint_year``, ``p``, ``q``).
+            Shape parameters of the growth profile function (e.g.
+            ``saturation_factor``, ``midpoint_year``, ``p``, ``q``). A name the
+            growth model does not take raises a ``ValueError`` listing the valid ones.
 
         Returns
         -------
         pd.DataFrame
-            Structure depends on *output*; see parameter description above.
+            Structure depends on *output*; see parameter description above. Rows
+            are sorted by scenario, then date (then hour); with ``'daily_energy'``
+            a day without any simulated session is a row with ``n_sessions = 0``.
 
         Raises
         ------
@@ -400,7 +385,13 @@ class MediumTermSimulator:
             finite number > 0, ``annual_growth_rate`` is not a finite number
             > -1, ``n_scenarios`` is not an integer >= 1, ``start_date`` is
             not a valid date, ``context`` is not a dict or has a key the session
-            model is not stratified by, or no fitted context matches it.
+            model is not stratified by, or no fitted context matches it, or a
+            ``growth_kwargs`` name is not a parameter of the growth model.
+
+        Warns
+        -----
+        UserWarning
+            ``annual_growth_rate`` given to a growth model other than 'linear'.
         """
         if output not in ("daily_energy", "hourly_energy", "sessions"):
             raise ValueError(
@@ -411,8 +402,17 @@ class MediumTermSimulator:
         self.gmm._resolve_context(context, None)          # refuses a bad or unknown key now
         base = self._base_for(fixed)
         years = check_float(years, "years", gt=0, meaning="simulation horizon in years")
+        if annual_growth_rate is not None and self.growth_model != "linear":
+            warnings.warn(
+                f"annual_growth_rate={annual_growth_rate} changes nothing with "
+                f"growth_model={self.growth_model!r}, which takes its own shape parameters "
+                f"({self._growth_parameters()}). Pass those instead.",
+                UserWarning,
+                stacklevel=2,
+            )
         annual_growth_rate = check_float(
-            annual_growth_rate, "annual_growth_rate", gt=-1,
+            0.15 if annual_growth_rate is None else annual_growth_rate,
+            "annual_growth_rate", gt=-1,
             meaning="0.15 = +15% of the starting level per year; -1 would reach zero within a year",
         )
         n_sc = check_int(
@@ -433,19 +433,19 @@ class MediumTermSimulator:
                 f"Available: {list(GROWTH_PROFILES)}"
             )
 
-        # Build kwargs for profile function (only pass valid ones)
-        import inspect
-        sig = inspect.signature(profile_fn)
-        valid_keys = set(sig.parameters) - {"base_sessions_per_day", "years", "start_date"}
-        filtered_kwargs = {
-            k: v for k, v in {
-                "annual_growth_rate": annual_growth_rate,
-                **growth_kwargs,
-            }.items()
-            if k in valid_keys
-        }
+        # Shape parameters of the growth profile: refuse names it does not take
+        valid_keys = self._growth_parameters(as_set=True)
+        unknown = sorted(set(growth_kwargs) - valid_keys)
+        if unknown:
+            raise ValueError(
+                f"Unknown growth parameter(s) {unknown} for growth_model="
+                f"{self.growth_model!r}. It takes: {sorted(valid_keys)}."
+            )
+        profile_kwargs = dict(growth_kwargs)
+        if "annual_growth_rate" in valid_keys:
+            profile_kwargs["annual_growth_rate"] = annual_growth_rate
 
-        growth = profile_fn(base, years, start_date=start, **filtered_kwargs)
+        growth = profile_fn(base, years, start_date=start, **profile_kwargs)
 
         seasonal_weights = {"winter": 1.0, "spring": 1.0, "summer": 1.0, "autumn": 1.0}
         if weather_factor:
@@ -469,8 +469,22 @@ class MediumTermSimulator:
 
         # sessions and hourly_energy return lists of DataFrames; daily_energy returns dicts
         if output in ("sessions", "hourly_energy"):
-            return pd.concat(results, ignore_index=True)
-        return pd.DataFrame(results)
+            frame = pd.concat(results, ignore_index=True)
+            order = ["scenario", "date"] + (["hour"] if output == "hourly_energy" else [])
+            return frame.sort_values(order, kind="stable").reset_index(drop=True)
+        return (
+            pd.DataFrame(results)
+            .sort_values(["scenario", "date"], kind="stable")
+            .reset_index(drop=True)
+        )
+
+    def _growth_parameters(self, as_set: bool = False):
+        """Names of the shape parameters of the growth model (``annual_growth_rate`` included)."""
+        import inspect
+
+        names = set(inspect.signature(GROWTH_PROFILES[self.growth_model]).parameters)
+        names -= {"base_sessions_per_day", "years", "start_date"}
+        return names if as_set else ", ".join(sorted(names))
 
     def _base_for(self, fixed: dict) -> float:
         """Starting sessions per day: the given one, or the mean over the contexts matching ``fixed``."""
@@ -539,13 +553,21 @@ class MediumTermSimulator:
             "date": growth.index,
             "expected_n": growth.values,
         })
-        plan["day_of_week"] = plan["date"].dt.dayofweek
+        plan["day_of_week"] = plan["date"].dt.day_of_week
         plan["month"] = plan["date"].dt.month
         plan["season"] = plan["month"].apply(_season)
         plan["w"] = plan["season"].map(seasonal_weights).fillna(1.0)
         plan["adjusted_n"] = plan["expected_n"] * plan["w"]
         # Poisson draw per day to introduce realistic day-to-day count variability
         plan["n_sessions"] = rng.poisson(np.maximum(0, plan["adjusted_n"].values))
+
+        if output == "daily_energy":
+            # a day without any session is a day with zero energy, not a missing day
+            for day in plan.loc[plan["n_sessions"] == 0, "date"]:
+                rows.append({
+                    "date": day.date(), "scenario": scenario_id, "n_sessions": 0,
+                    "total_energy_kwh": 0.0, "mean_duration_h": np.nan,
+                })
 
         # Group by context and batch-sample
         for (dow, season), group in plan.groupby(["day_of_week", "season"]):

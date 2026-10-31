@@ -316,10 +316,11 @@ class GEARSModel:
 
     def __repr__(self) -> str:
         status = "fitted" if self._backend.is_fitted_ else "not fitted"
+        n_components, stratify_by, forecaster, _ = self._backend._settings()
         return (
             f"GEARSModel(gear={self.gear}, "
-            f"n_components={self._backend.n_components!r}, "
-            f"stratify_by={self._backend.stratify_by}, "
-            f"forecaster={self._backend.forecaster_method!r}, "
+            f"n_components={n_components!r}, "
+            f"stratify_by={stratify_by}, "
+            f"forecaster={forecaster!r}, "
             f"status={status})"
         )

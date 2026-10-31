@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from gears._logging import console_logging
+from gears._validation import as_naive_timestamp, check_int
 from gears.data.schemas import summary_stats, validate_dataframe
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ def load_sessions(
     strict: bool = False,
     filter_failed: bool = True,
     verbose: bool = True,
+    dayfirst: bool | None = None,
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -55,9 +57,15 @@ def load_sessions(
         French data only: drop sessions with ``succes_session != 't'``.
     verbose : bool
         Log a short summary (``INFO``) on the console after loading.
+    dayfirst : bool, optional
+        How dates written as numbers (``05/01/2024``) are read: ``True`` day/month/year
+        (5 January), ``False`` month/day/year. By default the order is read from the
+        values (a first number above 12 is a day); when no value settles it a warning
+        says the dates are read month first. ISO dates (``2024-01-05``) are never ambiguous.
     **kwargs
         Extra keyword arguments forwarded to the underlying reader
-        (e.g. ``sep=';'`` for CSV files).
+        (e.g. ``sep=';'`` for CSV files; for a French spreadsheet export also
+        ``encoding='cp1252'`` and ``decimal=','``).
 
     Returns
     -------
@@ -69,6 +77,7 @@ def load_sessions(
     --------
     >>> df = load_sessions("data/sessions.parquet")
     >>> df = load_sessions("data/french_irve.csv", sep=";", verbose=False)
+    >>> df = load_sessions("export.csv", sep=";", decimal=",", encoding="cp1252", dayfirst=True)
     >>> df = load_sessions(raw_df, strict=True, verbose=False)
     """
     if isinstance(source, pd.DataFrame):
@@ -76,7 +85,7 @@ def load_sessions(
     else:
         raw = _dispatch_file(Path(source), **kwargs)
 
-    df = validate_dataframe(raw, strict=strict, filter_failed=filter_failed)
+    df = validate_dataframe(raw, strict=strict, filter_failed=filter_failed, dayfirst=dayfirst)
 
     with console_logging(verbose):
         if logger.isEnabledFor(logging.INFO):
@@ -186,6 +195,12 @@ def make_demo_data(
         Validated sessions DataFrame (same schema as :func:`load_sessions`
         output), with ``n`` rows and canonical columns.
 
+    Raises
+    ------
+    ValueError
+        If ``n`` is not an integer >= 1, ``location_type`` is not one of the
+        three above, or ``end_date`` is before ``start_date``.
+
     Examples
     --------
     >>> df = make_demo_data(n=500, location_type="home", seed=0)
@@ -194,9 +209,14 @@ def make_demo_data(
     >>> df["location_type"].unique()
     array(['home'], dtype=object)
     """
+    n = check_int(n, "n", minimum=1)
+    first = as_naive_timestamp(start_date, "start_date")
+    last = as_naive_timestamp(end_date, "end_date")
+    if last < first:
+        raise ValueError(f"end_date={end_date!r} is before start_date={start_date!r}.")
     rng = np.random.default_rng(seed)
 
-    dates = pd.date_range(start_date, end_date, freq="D")
+    dates = pd.date_range(first.normalize(), last.normalize(), freq="D")
     arrival_dates = rng.choice(dates, size=n)
 
     params: dict[str, dict] = {
@@ -213,7 +233,13 @@ def make_demo_data(
                    "dur_mu": 1.5, "dur_sigma": 1.0,
                    "energy_mu": 12.0, "energy_sigma": 7.0},
     }
-    p = params.get(location_type, params["work"])
+    if not isinstance(location_type, str) or location_type.strip().lower() not in params:
+        raise ValueError(
+            f"location_type={location_type!r} is not one of {sorted(params)}: "
+            "the demo data only describes these three kinds of site."
+        )
+    location_type = location_type.strip().lower()
+    p = params[location_type]
 
     weights = p["hour_weights"]
     components = rng.choice(len(weights), size=n, p=weights)

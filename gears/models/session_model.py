@@ -29,8 +29,9 @@ A single ``EVSessionModel`` object covers all location types; the
 
 Pre-fitted GMMs
 ---------------
-The package ships with a single pre-fitted GMM bundle ``gmm_french.joblib``.
-Use ``gears.load_pretrained("french")`` to load it without raw data.
+A pre-fitted GMM bundle for the French charging network, ``gmm_french.joblib``, is
+published as a release asset (it is not inside the wheel). ``gears.load_pretrained("french")``
+downloads it on first use, checks its SHA-256 and caches it, so no raw data is needed.
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ def _library_versions() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 def _add_context(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure context columns (day_of_week, season, is_weekend) are present.
+    """Ensure the derived columns (day_of_week, season, is_weekend, hour, date) are present.
 
     Parameters
     ----------
@@ -98,12 +99,17 @@ def _add_context(df: pd.DataFrame) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Copy of *df* with ``day_of_week``, ``season``, and ``is_weekend``
-        columns added when absent.
+        Copy of *df* with ``day_of_week``, ``season``, ``is_weekend``, ``hour`` (arrival
+        time as a decimal hour) and ``date`` columns added when absent, so that a plain
+        DataFrame with ``arrival_time``, ``duration`` and ``energy`` can be fitted.
     """
     df = df.copy()
+    if "hour" not in df.columns:
+        df["hour"] = df["arrival_time"].dt.hour + df["arrival_time"].dt.minute / 60.0
+    if "date" not in df.columns:
+        df["date"] = df["arrival_time"].dt.date
     if "day_of_week" not in df.columns:
-        df["day_of_week"] = df["arrival_time"].dt.dayofweek
+        df["day_of_week"] = df["arrival_time"].dt.day_of_week
     if "season" not in df.columns:
         df["season"] = df["arrival_time"].dt.month.apply(_season)
     if "is_weekend" not in df.columns:
@@ -322,27 +328,12 @@ class EVSessionModel:
     def __setstate__(self, state: dict) -> None:
         """Restore instance state from unpickling.
 
-        Older on-disk bundles (e.g. the committed ``gmm_french.joblib``,
-        pickled before Session 2 added recency-weighting support) don't have
-        the recency-related attributes below in their pickled ``__dict__``.
-        Without this, plain attribute access on those attributes elsewhere
-        in the class (``__repr__`` in particular: ``if self.recency:``)
-        raises ``AttributeError`` on load — surfaced by notebook 1's
-        ``load_pretrained()`` call. Backfilling with the same defaults ``__init__``
-        uses keeps old bundles loadable under the current code without
-        needing to refit and re-commit them.
-
-        ``model_type`` has the same problem: the two oldest release bundles
-        (``gmm_french.joblib``, ``gmm_french_sample.joblib``) were pickled
-        before that attribute existed at all (confirmed by inspecting their
-        unpickled ``__dict__`` directly — the three newer bundles,
-        ``gmm_french_holdout.joblib``, ``gmm_french_recency.joblib``, and
-        ``vae_french_sample.joblib``, all already have it). Surfaced by
-        Session 6's ``plot_marginals()`` fix, which reads ``self.model_type``
-        to pick GMM- vs VAE-consistent plot colors and raised
-        ``AttributeError`` on the old GMM bundles. Every bundle predating this
-        attribute is a GMM (the VAE path didn't exist yet), so ``"gmm"`` is
-        the correct backfill default — it's also ``__init__``'s own default.
+        A model saved by an earlier version lacks the attributes added since
+        (the recency settings, ``model_type``, the fallback bookkeeping), and
+        reading them later (``__repr__`` reads ``self.recency``) would raise
+        ``AttributeError``. They are backfilled here with the defaults
+        ``__init__`` uses, so such a model stays loadable. ``model_type`` falls
+        back to ``"gmm"``: the models saved before that attribute existed are all GMMs.
         """
         defaults = {
             "recency": None,
@@ -364,6 +355,17 @@ class EVSessionModel:
     # ------------------------------------------------------------------
     # Fitting
     # ------------------------------------------------------------------
+
+    def _check_n_components(self) -> None:
+        """``n_components`` is 'auto' or an integer >= 1: refuse anything else before fitting."""
+        n = self.n_components
+        if isinstance(n, str) and n == "auto":
+            return
+        if isinstance(n, bool) or not isinstance(n, (int, np.integer)) or n < 1:
+            raise ValueError(
+                f"n_components must be 'auto' (choose the number of mixture components "
+                f"by BIC) or an integer >= 1, got {n!r}."
+            )
 
     def fit(
         self,
@@ -395,6 +397,7 @@ class EVSessionModel:
                 "gears.load_sessions(...) (or validate_dataframe), which also converts "
                 "units and parses dates."
             )
+        self._check_n_components()
         n_total = len(df)
         if n_total < MIN_SESSIONS_TOTAL:
             raise ValueError(
@@ -422,7 +425,7 @@ class EVSessionModel:
             cutoff = df["_arrival_dt"].max() - pd.DateOffset(months=self.recent_months)
             n_before = len(df)
             df = df[df["_arrival_dt"] >= cutoff].reset_index(drop=True)
-            df.drop(columns=["_arrival_dt"], inplace=True)
+            df = df.drop(columns=["_arrival_dt"])
             logger.info(
                 "recent_months=%d: kept %d/%d sessions.",
                 self.recent_months, len(df), n_before,
@@ -519,19 +522,15 @@ class EVSessionModel:
             # subsumes plain subsampling.
             #
             # IMPORTANT: capture the *true* underlying volume (n_true,
-            # n_days_true) before resampling. The resample cap exists purely
-            # to keep the GMM *fit* tractable and recency-weighted; it must
-            # not distort the sessions-per-day *rate* used downstream by
-            # simulation (aggregator.py / medium_term). At long history
-            # windows a 40k-session pool can be capped to 5000 for fitting --
-            # if n_sessions_per_day_ were computed from that capped count
-            # instead of the true pool, it would silently undercount daily
-            # volume by ~8x for exactly the high-volume contexts this
-            # feature targets.
-            n_days_true, n_true = None, None
+            # n_days_true) before any resampling or subsampling. Those caps
+            # exist purely to keep the GMM *fit* tractable; they must not
+            # distort the sessions-per-day *rate* used downstream by
+            # simulation (aggregator.py / medium_term). A 40k-session pool
+            # capped to 5000 for fitting would otherwise undercount the daily
+            # volume ~8x, for exactly the high-volume contexts the caps target.
+            n_true = n
+            n_days_true = group_df["date"].nunique() if "date" in group_df.columns else 1
             if reference_date is not None:
-                n_days_true = group_df["date"].nunique() if "date" in group_df.columns else 1
-                n_true = n
                 group_df, n = self._recency_resample(group_df, ctx_tuple, reference_date)
             # Optional stratified subsampling (unweighted)
             elif self.max_samples_per_context is not None and n > self.max_samples_per_context:
@@ -544,8 +543,7 @@ class EVSessionModel:
                 # Defer fitting; just collect groups
                 retained_groups.append((ctx_tuple, group_df))
                 # Still track counts (needed by aggregator / medium_term)
-                n_days = group_df["date"].nunique() if "date" in group_df.columns else 1
-                self.n_sessions_per_day_[ctx_tuple] = n / max(n_days, 1)
+                self.n_sessions_per_day_[ctx_tuple] = n_true / max(n_days_true, 1)
                 self.context_counts_[ctx_tuple] = n
                 continue
 
@@ -556,13 +554,8 @@ class EVSessionModel:
 
             self.models_[ctx_tuple] = gmm
 
-            if n_true is not None:
-                # recency path: true pre-resample volume, not the capped
-                # training-sample size used for X above.
-                self.n_sessions_per_day_[ctx_tuple] = n_true / max(n_days_true, 1)
-            else:
-                n_days = group_df["date"].nunique() if "date" in group_df.columns else 1
-                self.n_sessions_per_day_[ctx_tuple] = n / max(n_days, 1)
+            # the true volume, not the (possibly capped) training sample used for X above
+            self.n_sessions_per_day_[ctx_tuple] = n_true / max(n_days_true, 1)
             self.context_counts_[ctx_tuple] = n
 
             logger.debug(
@@ -1076,10 +1069,8 @@ class EVSessionModel:
         self._check_fitted()
         synth = self.sample(n_samples, context=context, date=date)
 
-        # Consistent model-identity color pairing used throughout the notebooks:
-        # GMM = "#2E86AB" (blue), VAE = "#F4A261" (orange). Picking the color from
-        # self.model_type (rather than hardcoding blue) keeps GMM-vs-VAE comparison
-        # charts visually consistent regardless of which instance calls this method.
+        # One colour per model family (GMM blue, VAE orange), so that charts
+        # comparing the two stay consistent whichever instance draws them.
         is_vae = self.model_type == "vae"
         sim_color = "#F4A261" if is_vae else "#2E86AB"
         model_label = "VAE" if is_vae else "GMM"
@@ -1126,9 +1117,9 @@ class EVSessionModel:
         """The part of the context that a date determines, for the keys this model uses."""
         derived: dict = {}
         if "day_of_week" in self.stratify_by:
-            derived["day_of_week"] = date.dayofweek
+            derived["day_of_week"] = date.day_of_week
         if "is_weekend" in self.stratify_by:
-            derived["is_weekend"] = int(date.dayofweek >= 5)
+            derived["is_weekend"] = int(date.day_of_week >= 5)
         if "season" in self.stratify_by:
             derived["season"] = _season(date.month)
         return derived

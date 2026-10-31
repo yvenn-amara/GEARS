@@ -15,7 +15,7 @@ One row per charging session, with the columns below
 | `duration` | **required** | session duration in hours (> 0) |
 | `energy` | **required** | energy delivered in kWh (≥ 0) |
 | `power` | optional | charger power in kW |
-| `location_type` | optional | one of `work`, `home`, `public`, `heavy` |
+| `location_type` | optional | `work`, `home`, `public` or `heavy` (synonyms such as `office` or `residential` are recognised; any other value becomes `unknown`, with a warning) |
 | `user_id` | optional | anonymised user identifier |
 | `department` | optional | INSEE department code (French data only) |
 
@@ -32,6 +32,10 @@ export is detected automatically and converted (Wh → kWh, minutes → hours).
   offset is dropped and the clock reading kept (`08:00+02:00` becomes `08:00`), **not
   converted**, and a warning says so. If your timestamps are in UTC, convert them first
   (`df["arrival_time"].dt.tz_convert("Europe/Paris")`).
+- **Dates written as numbers.** `2024-01-05` is never ambiguous. For `05/01/2024` GEARS reads the order
+  from the values (`13/01/2024` can only be day/month/year, `01/13/2024` month/day/year); a file that
+  mixes both is refused, and when no value settles it the dates are read month first, with a warning.
+  Say it yourself with `load_sessions(..., dayfirst=True)` (5 January) or `dayfirst=False`.
 - **Units.** Hours and kWh. A median energy above 200 or a median duration above 48 triggers a
   warning ("probably Wh", "probably minutes").
 - **Filters.** Rows with `duration <= 0`, a negative or missing `energy`, `duration >= 168` h,
@@ -49,6 +53,10 @@ from gears import GEARSModel, load_sessions
 sessions = load_sessions("data/my_sessions.csv")   # pass sep=";" etc. to the reader if needed
 model = GEARSModel().fit(sessions)
 ```
+
+A spreadsheet export from a French locale (`;` separator, decimal comma, Windows accents) needs
+`load_sessions("data/export.csv", sep=";", decimal=",", encoding="cp1252", dayfirst=True)`: these
+options go to the reader (`sep`, `decimal`, `encoding`) or to the date parser (`dayfirst`).
 
 No data of your own? `gears.make_demo_data()` generates synthetic sessions, and
 `GEARSModel.from_pretrained("french")` loads the pre-trained French model.

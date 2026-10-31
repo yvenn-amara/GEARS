@@ -97,7 +97,15 @@ markers = [
     "dl: needs torch and neuralforecast (pip install 'gears-ev[dl]'); heavy, run on demand or weekly",
     "slow: heavy, or needs files that are not in the repository (e.g. the real CSVs of data/); excluded from the default run",
 ]
-filterwarnings = ["ignore::UserWarning", "ignore::FutureWarning"]
+# GEARS warns on purpose (UserWarning), and the tests check those messages where it matters. What must
+# not appear is a deprecation raised from GEARS's own code (a pandas or NumPy call that a later release removes):
+# it is an error here, so it is fixed before users see it. Later entries take precedence over earlier ones.
+filterwarnings = [
+    "ignore::UserWarning",
+    "ignore::FutureWarning",
+    "error::DeprecationWarning:gears",
+    "error::FutureWarning:gears",
+]
 
 [tool.coverage.run]
 source = ["gears"]
@@ -107,7 +115,7 @@ branch = true
 omit = ["gears/models/vae.py", "gears/models/forecaster_dl.py"]
 
 [tool.coverage.report]
-# Measured without torch: 91 % (branch coverage). The floor is the measure minus 2 points, so
+# Measured without torch: 92 % (branch coverage). The floor sits a few points below the measure, so
 # that noise does not break the build but a real drop does; raise it when coverage improves.
 fail_under = 89
 show_missing = true

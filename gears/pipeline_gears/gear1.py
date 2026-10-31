@@ -10,6 +10,7 @@ or simply ``GEARSModel(...)`` since 1 is the default gear).
 from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -205,7 +206,7 @@ class Gear1Backend:
                 verbose=verbose, **loader_kwargs
             )
 
-            logger.info("Fitting %s on %d sessions …", self.model_type.upper(), len(df))
+            logger.info("Fitting %s on %d sessions ...", self.model_type.upper(), len(df))
             self.gmm_ = EVSessionModel(
                 n_components=self.n_components,
                 max_components=self.max_components,
@@ -218,7 +219,7 @@ class Gear1Backend:
                 half_life_days=self.half_life_days,
             ).fit(df)
 
-            logger.info("Fitting session-count forecaster (%s) …", self.forecaster_method)
+            logger.info("Fitting session-count forecaster (%s) ...", self.forecaster_method)
             self.forecaster_ = SessionForecaster(
                 method=self.forecaster_method,
                 use_holidays=self.forecaster_use_holidays,
@@ -229,7 +230,7 @@ class Gear1Backend:
             self._build_simulators()
             self.is_fitted_ = True
 
-            logger.info("Fitting complete ✓")
+            logger.info("Fitting complete.")
             logger.info("%r", self.gmm_)
         return self
 
@@ -310,6 +311,14 @@ class Gear1Backend:
 
         if n_sessions is not None:
             n_sessions = check_int(n_sessions, "n_sessions", minimum=1, meaning="sessions per day")
+            if n_sc > 1 and n_scenarios is not None:
+                warnings.warn(
+                    f"n_scenarios={n_sc} is ignored when n_sessions is given: one scenario is "
+                    "simulated, without a 'scenario' column. Call once per scenario with a "
+                    "different seed, or leave n_sessions out to draw the daily counts from the forecaster.",
+                    UserWarning,
+                    stacklevel=2,
+                )
             # One independent seed per day: consecutive seeds must not share days.
             day_seeds = np.random.default_rng(seed).integers(0, 2**31, size=horizon)
             frames = [
@@ -336,15 +345,15 @@ class Gear1Backend:
     def simulate_medium_term(
         self,
         years: float = 3,
-        annual_growth_rate: float = 0.15,
+        annual_growth_rate: float | None = None,
         start_date: str | pd.Timestamp | None = None,
         output: str = "daily_energy",
         weather_factor: dict[str, float] | None = None,
         growth_model: str = "linear",
         n_scenarios: int | None = None,
         charger_mix: dict[float, float] | None = None,
-        saturation_factor: float = 3.0,
         context: dict | None = None,
+        **growth_kwargs,
     ) -> pd.DataFrame:
         """Simulate aggregated EV demand over a multi-year horizon.
 
@@ -352,6 +361,12 @@ class Gear1Backend:
         :meth:`simulate_short_term` (e.g. ``{"location_type": "work",
         "department": "75"}``); the starting level is then the mean daily
         count of the matching fitted contexts.
+
+        ``annual_growth_rate`` (default 0.15) is the growth of the ``"linear"`` model;
+        the ``"s_curve"`` and ``"bass"`` models take their shape parameters as extra
+        keyword arguments (``saturation_factor``, ``midpoint_year``, ``steepness``;
+        ``market_potential_factor``, ``p``, ``q``), see
+        :meth:`gears.simulation.medium_term.MediumTermSimulator.simulate`.
 
         Raises
         ------
@@ -377,7 +392,7 @@ class Gear1Backend:
             output=output,
             weather_factor=weather_factor,
             context=context,
-            saturation_factor=saturation_factor,
+            **growth_kwargs,
         )
 
     # ------------------------------------------------------------------
@@ -435,7 +450,7 @@ class Gear1Backend:
         if not self.is_fitted_:
             lines.append("Status: NOT FITTED")
         else:
-            lines.append("Status     : fitted ✓")
+            lines.append("Status     : fitted")
             lines.append(f"GMM        : {self.gmm_}")
             lines.extend(self._context_coverage_lines())
             lines.append(f"Forecaster : {self.forecaster_}")
@@ -466,12 +481,27 @@ class Gear1Backend:
             )
         return lines
 
+    def _settings(self) -> tuple:
+        """``(n_components, stratify_by, forecaster, model_type)`` of what this object holds.
+
+        A fitted or supplied session model decides them, not the constructor arguments: a
+        pre-trained model was fitted with other settings than the defaults of this object.
+        """
+        gmm, forecaster = self.gmm_, self.forecaster_
+        return (
+            gmm.n_components if gmm is not None else self.n_components,
+            list(gmm.stratify_by) if gmm is not None else self.stratify_by,
+            forecaster.method if forecaster is not None else self.forecaster_method,
+            gmm.model_type if gmm is not None else self.model_type,
+        )
+
     def __repr__(self) -> str:
         status = "fitted" if self.is_fitted_ else "not fitted"
+        n_components, stratify_by, forecaster, model_type = self._settings()
         return (
-            f"Gear1Backend(n_components={self.n_components!r}, "
-            f"stratify_by={self.stratify_by}, "
-            f"forecaster={self.forecaster_method!r}, "
-            f"model_type={self.model_type!r}, "
+            f"Gear1Backend(n_components={n_components!r}, "
+            f"stratify_by={stratify_by}, "
+            f"forecaster={forecaster!r}, "
+            f"model_type={model_type!r}, "
             f"status={status})"
         )

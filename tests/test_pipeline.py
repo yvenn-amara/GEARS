@@ -35,6 +35,19 @@ def test_a_fitted_model_simulates_aggregates_optimises_and_exports(model, tmp_pa
     assert len(pd.read_csv(tmp_path / "sessions.csv")) == len(sessions)
 
 
+def test_asking_for_several_scenarios_with_a_fixed_session_count_says_that_only_one_is_made(model):
+    with pytest.warns(UserWarning, match=r"n_scenarios=3 is ignored when n_sessions is given"):
+        out = model.simulate_short_term("2025-06-02", horizon=2, n_scenarios=3, n_sessions=5, seed=0)
+    assert len(out) == 10 and "scenario" not in out.columns
+
+    import warnings
+
+    with warnings.catch_warnings():                      # one scenario asked, or none asked: no warning
+        warnings.simplefilter("error")
+        model.simulate_short_term("2025-06-02", horizon=2, n_scenarios=1, n_sessions=5, seed=0)
+        model.simulate_short_term("2025-06-02", horizon=2, n_sessions=5, seed=0)
+
+
 def test_the_summary_tells_whether_the_model_is_fitted(model):
     assert "NOT FITTED" in GEARSModel(n_components=3).summary()
     summary = model.summary()
@@ -48,6 +61,21 @@ def test_a_model_can_be_built_from_a_fitted_session_model():
 
     assert model.is_fitted_ and model.gmm_ is gmm
     assert len(model.simulate_short_term("2025-06-01", horizon=2, n_scenarios=2)) > 0
+
+
+def test_a_model_built_from_a_session_model_describes_that_model_not_the_defaults():
+    gmm = EVSessionModel(
+        n_components=2, stratify_by=["location_type", "day_of_week"]
+    ).fit(make_demo_data(n=600, location_type="work", seed=0))
+
+    model = GEARSModel.from_session_model(gmm)
+
+    assert repr(model) == (
+        "GEARSModel(gear=1, n_components=2, stratify_by=['location_type', 'day_of_week'], "
+        "forecaster='probabilistic', status=fitted)"
+    )
+    assert "stratify_by=['location_type', 'day_of_week']" in repr(model._backend)
+    assert "n_components='auto'" in repr(GEARSModel())        # nothing held yet: the arguments
 
 
 def test_gear_1_is_the_default_gears_2_to_5_are_reserved_and_other_values_are_refused():
